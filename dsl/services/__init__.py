@@ -1,0 +1,21 @@
+"""DSL 业务逻辑服务模块.
+
+包含所有核心业务逻辑实现：
+- log_service: 日志 CRUD 和状态管理
+- task_service: 任务生命周期管理
+- media_service: 图片存储和缩略图生成
+- chronicle_service: 编年史渲染和导出
+- ai_vision_service: (Phase 2) AI 图片分析
+"""
+
+from dsl.services.log_service import LogService
+from dsl.services.task_service import TaskService
+from dsl.services.media_service import MediaService
+from dsl.services.chronicle_service import ChronicleService
+
+__all__ = [
+    "LogService",
+    "TaskService",
+    "MediaService",
+    "ChronicleService",
+]
