@@ -80,6 +80,13 @@ export const taskApi = {
       body: JSON.stringify({ lifecycle_status: status }),
     }),
 
+  /** 更新任务内容 */
+  update: (id: string, data: { task_title: string }) =>
+    fetchApi<Task>(`/tasks/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
   /** 获取任务详情 */
   get: (id: string) => fetchApi<Task>(`/tasks/${id}`),
 };
@@ -122,12 +129,45 @@ export const logApi = {
 /** Media API */
 export const mediaApi = {
   /** 上传图片 */
-  uploadImage: async (file: File, textContent = ""): Promise<DevLog> => {
+  uploadImage: async (
+    file: File,
+    textContent = "",
+    taskId?: string
+  ): Promise<DevLog> => {
     const formData = new FormData();
     formData.append("uploaded_image_file", file);
     formData.append("text_content", textContent);
+    if (taskId) {
+      formData.append("task_id", taskId);
+    }
 
     const response = await fetch(`${API_BASE}/media/upload`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+  },
+
+  /** 上传附件 */
+  uploadAttachment: async (
+    file: File,
+    textContent = "",
+    taskId?: string
+  ): Promise<DevLog> => {
+    const formData = new FormData();
+    formData.append("uploaded_file", file);
+    formData.append("text_content", textContent);
+    if (taskId) {
+      formData.append("task_id", taskId);
+    }
+
+    const response = await fetch(`${API_BASE}/media/upload-attachment`, {
       method: "POST",
       body: formData,
     });

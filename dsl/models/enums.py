@@ -31,11 +31,13 @@ class TaskLifecycleStatus(str, Enum):
         OPEN: 任务开启中
         CLOSED: 任务已关闭
         PENDING: 任务暂停/等待中
+        DELETED: 任务已删除（保留历史）
     """
 
     OPEN = "OPEN"
     CLOSED = "CLOSED"
     PENDING = "PENDING"
+    DELETED = "DELETED"
 
 
 class AIProcessingStatus(str, Enum):

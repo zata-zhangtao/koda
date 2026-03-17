@@ -19,6 +19,14 @@ dev:
     uv sync --all-extras
     uv run pre-commit install
 
+# Preview MkDocs locally
+docs-serve:
+    uv run mkdocs serve
+
+# Build MkDocs site in strict mode
+docs-build:
+    uv run mkdocs build --strict
+
 # Run the main application
 run:
     uv run python main.py

@@ -3,10 +3,11 @@
 此模块提供 SQLAlchemy 数据库连接和会话管理功能。
 """
 
-from typing import Generator
+from typing import Any, Generator
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from utils.settings import config
 from utils.logger import logger
@@ -22,7 +23,7 @@ if DATABASE_URL.startswith("mysql://"):
     DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://")
 
 
-def create_database_engine(**kwargs):
+def create_database_engine(**kwargs: Any) -> Engine:
     """创建数据库引擎
 
     Args:
@@ -35,10 +36,18 @@ def create_database_engine(**kwargs):
         >>> engine = create_database_engine(echo=True)
         >>> engine = create_database_engine(pool_size=10)
     """
-    default_kwargs = {
-        "poolclass": StaticPool,
+    default_kwargs: dict[str, Any] = {
         "echo": False,  # 设置为 True 可以看到 SQL 语句，便于调试
     }
+
+    # SQLite 需要 check_same_thread=False 以支持多线程并发请求
+    # 使用 NullPool 避免多请求共享同一连接导致的 cursor 冲突
+    if DATABASE_URL.startswith("sqlite"):
+        default_kwargs["connect_args"] = {"check_same_thread": False}
+        default_kwargs["poolclass"] = NullPool
+    else:
+        default_kwargs["poolclass"] = StaticPool
+
     default_kwargs.update(kwargs)
 
     return create_engine(DATABASE_URL, **default_kwargs)
@@ -51,7 +60,7 @@ engine = create_database_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def create_tables(base=None):
+def create_tables(base: Any = None) -> None:
     """创建所有表
 
     Args:
@@ -91,7 +100,7 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def init_database(base=None):
+def init_database(base: Any = None) -> None:
     """初始化数据库
 
     创建所有表结构

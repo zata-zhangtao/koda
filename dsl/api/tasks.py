@@ -13,6 +13,7 @@ from dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskResponseSchema,
     TaskStatusUpdateSchema,
+    TaskUpdateSchema,
 )
 from dsl.services.task_service import TaskService
 from utils.database import get_db
@@ -107,6 +108,35 @@ def update_task_status(
         HTTPException: 当任务不存在时返回 404
     """
     task = TaskService.update_task_status(db_session, task_id, status_update)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+    task.log_count = len(task.dev_logs)
+    return task
+
+
+@router.patch("/{task_id}", response_model=TaskResponseSchema)
+def update_task(
+    task_id: str,
+    task_update_schema: TaskUpdateSchema,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """更新任务内容.
+
+    Args:
+        task_id: 任务 ID
+        task_update_schema: 任务更新数据
+        db_session: 数据库会话
+
+    Returns:
+        Task: 更新后的任务
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404
+    """
+    task = TaskService.update_task_title(db_session, task_id, task_update_schema)
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

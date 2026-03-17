@@ -17,6 +17,7 @@ export enum TaskLifecycleStatus {
   OPEN = "OPEN",
   CLOSED = "CLOSED",
   PENDING = "PENDING",
+  DELETED = "DELETED",
 }
 
 /** AI 处理状态 */

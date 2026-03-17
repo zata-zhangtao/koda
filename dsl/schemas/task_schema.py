@@ -39,6 +39,20 @@ class TaskStatusUpdateSchema(BaseModel):
     )
 
 
+class TaskUpdateSchema(BaseModel):
+    """更新 Task 内容的请求模式.
+
+    Attributes:
+        task_title: 更新后的任务标题
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+    task_title: str = Field(
+        ..., min_length=1, max_length=200, description="更新后的任务标题"
+    )
+
+
 class TaskResponseSchema(BaseModel):
     """Task 响应模式.
 

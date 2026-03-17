@@ -3,7 +3,7 @@
  * 显示 RunAccount 信息、任务列表和待校正队列
  */
 
-import { DevLogStateTag, type RunAccount, type Task } from "../types";
+import type { RunAccount, Task } from "../types";
 
 interface SidebarProps {
   runAccount: RunAccount | null;

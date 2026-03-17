@@ -3,6 +3,7 @@
 提供图片上传、缩略图生成和文件服务功能.
 """
 
+import mimetypes
 from pathlib import Path
 from typing import Annotated
 
@@ -50,6 +51,7 @@ def _get_current_run_account_id(db_session: Session) -> str:
 async def upload_image(
     uploaded_image_file: UploadFile,
     text_content: str = "",
+    task_id: str | None = None,
     db_session: Annotated[Session, Depends(get_db)] = None,
 ) -> DevLog:
     """上传图片并创建日志.
@@ -60,6 +62,7 @@ async def upload_image(
     Args:
         uploaded_image_file: 上传的图片文件
         text_content: 关联的文本内容（可选）
+        task_id: 关联的任务 ID（可选）
         db_session: 数据库会话
 
     Returns:
@@ -81,6 +84,7 @@ async def upload_image(
             text_content=text_content,
             media_original_image_path=original_path,
             media_thumbnail_path=thumbnail_path,
+            task_id=task_id,
             # Phase 2: 启用 AI 处理
             # ai_processing_status=AIProcessingStatus.PENDING,
         )
@@ -108,19 +112,77 @@ async def upload_image(
         ) from error
 
 
+@router.post("/upload-attachment", response_model=DevLogResponseSchema)
+async def upload_attachment(
+    uploaded_file: UploadFile,
+    text_content: str = "",
+    task_id: str | None = None,
+    db_session: Annotated[Session, Depends(get_db)] = None,
+) -> DevLog:
+    """上传附件并创建日志.
+
+    Args:
+        uploaded_file: 上传的附件
+        text_content: 关联的文本内容（可选）
+        task_id: 关联的任务 ID（可选）
+        db_session: 数据库会话
+
+    Returns:
+        DevLog: 新创建的日志
+
+    Raises:
+        HTTPException: 当上传失败时返回错误
+    """
+    run_account_id = _get_current_run_account_id(db_session)
+
+    try:
+        attachment_path = await MediaService.save_attachment(uploaded_file)
+        attachment_filename = Path(attachment_path).name
+        attachment_markdown_line = (
+            f"[Attachment: {uploaded_file.filename or attachment_filename}]"
+            f"(/api/media/{attachment_filename})"
+        )
+        merged_text_content = "\n\n".join(
+            filter(None, [text_content.strip(), attachment_markdown_line])
+        )
+
+        from dsl.schemas.dev_log_schema import DevLogCreateSchema
+
+        log_create = DevLogCreateSchema(
+            text_content=merged_text_content,
+            task_id=task_id,
+        )
+
+        new_log = LogService.create_log(db_session, log_create, run_account_id)
+        new_log.task_title = new_log.task.task_title if new_log.task else ""
+        logger.info(f"Created attachment log: {new_log.id[:8]}...")
+        return new_log
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        logger.error(f"Failed to upload attachment: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process attachment: {error}",
+        ) from error
+
+
 @router.get("/{filename}")
 def get_image(
     filename: str,
     thumbnail: bool = False,
 ) -> FileResponse:
-    """获取图片文件.
+    """获取媒体文件.
 
     Args:
         filename: 文件名
         thumbnail: 是否返回缩略图
 
     Returns:
-        FileResponse: 图片文件响应
+        FileResponse: 媒体文件响应
 
     Raises:
         HTTPException: 当文件不存在时返回 404
@@ -133,14 +195,8 @@ def get_image(
             detail=f"Image {filename} not found",
         )
 
-    # 根据文件扩展名确定 media_type
-    media_type = "image/png"
-    if file_path.suffix.lower() in (".jpg", ".jpeg"):
-        media_type = "image/jpeg"
-    elif file_path.suffix.lower() == ".gif":
-        media_type = "image/gif"
-    elif file_path.suffix.lower() == ".webp":
-        media_type = "image/webp"
+    guessed_media_type, _ = mimetypes.guess_type(file_path.name)
+    media_type = guessed_media_type or "application/octet-stream"
 
     return FileResponse(
         path=file_path,

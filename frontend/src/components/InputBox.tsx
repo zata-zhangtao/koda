@@ -9,7 +9,6 @@ import { mediaApi } from "../api/client";
 
 interface InputBoxProps {
   onSubmit: (text: string) => void;
-  onImageUpload: (file: File, text: string) => void;
   activeTask: Task | null;
 }
 
@@ -20,7 +19,7 @@ const STATE_BUTTONS = [
   { tag: DevLogStateTag.TRANSFERRED, icon: "⏭️", label: "Transfer", shortcut: "/transfer" },
 ];
 
-export function InputBox({ onSubmit, onImageUpload, activeTask }: InputBoxProps) {
+export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
   const [inputText, setInputText] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [pastedImage, setPastedImage] = useState<File | null>(null);

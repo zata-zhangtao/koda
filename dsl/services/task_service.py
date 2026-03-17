@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from dsl.models.enums import TaskLifecycleStatus
 from dsl.models.task import Task
-from dsl.schemas.task_schema import TaskCreateSchema, TaskStatusUpdateSchema
+from dsl.schemas.task_schema import (
+    TaskCreateSchema,
+    TaskStatusUpdateSchema,
+    TaskUpdateSchema,
+)
 from utils.logger import logger
 
 
@@ -116,6 +120,33 @@ class TaskService:
         db_session.refresh(task)
 
         logger.info(f"Updated Task {task_id[:8]}... status to {task.lifecycle_status.value}")
+        return task
+
+    @staticmethod
+    def update_task_title(
+        db_session: Session,
+        task_id: str,
+        task_update_schema: TaskUpdateSchema,
+    ) -> Task | None:
+        """更新任务标题.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+            task_update_schema: 更新后的任务数据
+
+        Returns:
+            Task | None: 更新后的任务对象或 None
+        """
+        task = TaskService.get_task_by_id(db_session, task_id)
+        if not task:
+            return None
+
+        task.task_title = task_update_schema.task_title
+        db_session.commit()
+        db_session.refresh(task)
+
+        logger.info(f"Updated Task {task_id[:8]}... title to {task.task_title}")
         return task
 
     @staticmethod

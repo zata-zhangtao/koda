@@ -53,6 +53,20 @@ class MediaService:
         return f"{uuid.uuid4()}{file_extension}"
 
     @staticmethod
+    def generate_unique_attachment_filename(original_filename: str) -> str:
+        """生成附件文件名.
+
+        Args:
+            original_filename: 原始文件名
+
+        Returns:
+            str: 生成的唯一附件文件名
+        """
+        file_extension = Path(original_filename).suffix.lower()
+        sanitized_extension = file_extension[:20] if file_extension else ""
+        return f"{uuid.uuid4()}{sanitized_extension}"
+
+    @staticmethod
     def create_thumbnail(image: Image.Image, max_width: int = 300) -> Image.Image:
         """创建缩略图.
 
@@ -131,6 +145,46 @@ class MediaService:
         except Exception as error:
             logger.error(f"Failed to process image: {error}")
             raise ValueError(f"Failed to process image: {error}") from error
+
+    @staticmethod
+    async def save_attachment(upload_file: UploadFile) -> str:
+        """保存上传的附件.
+
+        Args:
+            upload_file: FastAPI 上传文件对象
+
+        Returns:
+            str: 附件相对路径
+
+        Raises:
+            ValueError: 当文件为空或处理失败时
+        """
+        MediaService.ensure_media_directories()
+
+        unique_filename = MediaService.generate_unique_attachment_filename(
+            upload_file.filename or "attachment"
+        )
+        media_path = Path(config.MEDIA_STORAGE_PATH)
+        attachment_path = media_path / "original" / unique_filename
+
+        try:
+            file_content = await upload_file.read()
+
+            if not file_content:
+                raise ValueError("Uploaded file is empty")
+
+            if len(file_content) > MediaService.MAX_FILE_SIZE:
+                raise ValueError(
+                    f"File too large. Max size: {MediaService.MAX_FILE_SIZE / 1024 / 1024}MB"
+                )
+
+            attachment_path.write_bytes(file_content)
+            logger.info(f"Saved attachment: {unique_filename}")
+
+            return str(attachment_path.relative_to(config.BASE_DIR))
+        except Exception as error:
+            logger.error(f"Failed to save attachment: {error}")
+            raise ValueError(f"Failed to save attachment: {error}") from error
 
     @staticmethod
     def get_image_path(filename: str, is_thumbnail: bool = False) -> Path | None:
