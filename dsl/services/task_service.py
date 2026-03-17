@@ -170,6 +170,97 @@ class TaskService:
         return task_obj
 
     @staticmethod
+    def start_task(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """启动任务：创建 git worktree（若关联了 Project）并进入 PRD_GENERATING 阶段.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 更新后的任务对象，若任务不存在则返回 None
+
+        Raises:
+            ValueError: 任务不在 BACKLOG 阶段，或 worktree 创建失败
+        """
+        import subprocess
+        from pathlib import Path
+
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.workflow_stage != WorkflowStage.BACKLOG:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot start from stage "
+                f"'{task_obj.workflow_stage.value}'. Only backlog tasks can be started."
+            )
+
+        task_obj.workflow_stage = WorkflowStage.PRD_GENERATING
+        task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+
+        # 若关联了 Project，立即创建 git worktree
+        if task_obj.project_id and not task_obj.worktree_path:
+            from dsl.models.project import Project
+
+            project_obj = db_session.query(Project).filter(
+                Project.id == task_obj.project_id
+            ).first()
+
+            if project_obj:
+                repo_path_obj = Path(project_obj.repo_path)
+                task_short_id_str = task_id[:8]
+                branch_name_str = f"task/{task_short_id_str}"
+                worktree_path_str = str(
+                    repo_path_obj.parent / f"{repo_path_obj.name}-wt-{task_short_id_str}"
+                )
+
+                # 优先查找项目内的 worktree 创建脚本
+                worktree_script_candidates = [
+                    repo_path_obj / "scripts" / "new-worktree.sh",
+                    repo_path_obj / "scripts" / "create-worktree.sh",
+                    repo_path_obj / "new-worktree.sh",
+                ]
+                worktree_script_path = next(
+                    (p for p in worktree_script_candidates if p.exists()), None
+                )
+
+                try:
+                    if worktree_script_path:
+                        subprocess.run(
+                            [str(worktree_script_path), worktree_path_str, branch_name_str],
+                            cwd=str(repo_path_obj),
+                            check=True,
+                            capture_output=True,
+                        )
+                    else:
+                        subprocess.run(
+                            ["git", "worktree", "add", worktree_path_str, "-b", branch_name_str],
+                            cwd=str(repo_path_obj),
+                            check=True,
+                            capture_output=True,
+                        )
+                    task_obj.worktree_path = worktree_path_str
+                    logger.info(
+                        f"Task {task_id[:8]}... worktree created: {worktree_path_str} "
+                        f"(branch: {branch_name_str})"
+                    )
+                except subprocess.CalledProcessError as git_error:
+                    stderr_text = git_error.stderr.decode("utf-8", errors="replace").strip()
+                    raise ValueError(
+                        f"创建 git worktree 失败：{stderr_text}"
+                    ) from git_error
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(f"Task {task_id[:8]}... started → prd_generating")
+        return task_obj
+
+    @staticmethod
     def execute_task(
         db_session: Session,
         task_id: str,
@@ -211,21 +302,6 @@ class TaskService:
 
         task_obj.workflow_stage = WorkflowStage.IMPLEMENTATION_IN_PROGRESS
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
-
-        # 若关联了 Project，预计算 worktree_path（让 codex 去创建）
-        if task_obj.project_id and not task_obj.worktree_path:
-            from dsl.models.project import Project
-
-            project_obj = db_session.query(Project).filter(
-                Project.id == task_obj.project_id
-            ).first()
-            if project_obj:
-                repo_path_obj = Path(project_obj.repo_path)
-                task_short_id_str = task_id[:8]
-                computed_worktree_path_str = str(
-                    repo_path_obj.parent / f"{repo_path_obj.name}-wt-{task_short_id_str}"
-                )
-                task_obj.worktree_path = computed_worktree_path_str
 
         db_session.commit()
         db_session.refresh(task_obj)

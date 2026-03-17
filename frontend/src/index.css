@@ -565,82 +565,139 @@ img {
   min-width: 0;
 }
 
-.devflow-timeline {
-  position: relative;
+/* ── Conversation turn cards ── */
+
+.devflow-conversation {
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  padding-left: 22px;
+  gap: 12px;
 }
 
-.devflow-timeline::before {
-  content: "";
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  left: 5px;
-  width: 1px;
-  background: var(--devflow-line-strong);
+/* Human turn */
+.devflow-turn-card--human {
+  background: var(--devflow-surface);
+  border: 1px solid var(--devflow-line);
+  border-left: 3px solid var(--devflow-emerald);
+  border-radius: var(--devflow-radius-md);
+  padding: 14px 16px;
+  box-shadow: var(--devflow-shadow-soft);
 }
 
-.devflow-timeline-item {
-  position: relative;
-}
-
-.devflow-timeline-item__dot {
-  position: absolute;
-  top: 6px;
-  left: -22px;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--devflow-bg);
-  border-radius: 50%;
-  background: #a8a29e;
-}
-
-.devflow-timeline-item__dot--ai_log {
-  background: var(--devflow-blue);
-}
-
-.devflow-timeline-item__dot--human_review {
-  background: var(--devflow-emerald);
-}
-
-.devflow-timeline-item__dot--system_event {
-  background: #a8a29e;
-}
-
-.devflow-timeline-item__content {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.devflow-timeline-item__meta {
+.devflow-turn-card__human-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+  margin-bottom: 10px;
 }
 
-.devflow-timeline-item__author {
+.devflow-turn-card__author {
   font-size: 0.64rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.devflow-timeline-item__time {
+.devflow-turn-card__time {
   font-size: 0.68rem;
   color: #a8a29e;
-  font-family: "SFMono-Regular", "SFMono-Regular", ui-monospace, Menlo, Consolas,
-    monospace;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-.devflow-timeline-item__markdown {
+.devflow-turn-card__human-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* AI turn */
+.devflow-turn-card--ai {
+  background: var(--devflow-surface-alt);
+  border: 1px solid var(--devflow-line);
+  border-left: 3px solid var(--devflow-blue);
+  border-radius: var(--devflow-radius-md);
+  box-shadow: var(--devflow-shadow-soft);
+  overflow: hidden;
+}
+
+.devflow-turn-card__ai-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.devflow-turn-card__ai-header:hover {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.devflow-turn-card__count {
+  font-size: 0.64rem;
+  color: #a8a29e;
+  margin-left: auto;
+}
+
+.devflow-turn-card__chevron {
+  color: #a8a29e;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.devflow-turn-card__chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Scrollable AI body */
+.devflow-turn-card__ai-body {
+  max-height: 360px;
+  overflow-y: auto;
+  border-top: 1px solid var(--devflow-line);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--devflow-line-strong) transparent;
+}
+
+.devflow-turn-card__ai-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.devflow-turn-card__ai-body::-webkit-scrollbar-thumb {
+  background: var(--devflow-line-strong);
+  border-radius: 99px;
+}
+
+.devflow-turn-card__ai-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--devflow-line);
+}
+
+.devflow-turn-card__ai-entry:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.devflow-turn-card__entry-time {
+  font-size: 0.62rem;
+  color: #c2bdb8;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.devflow-turn-card__entry-content {
   color: #44403c;
 }
 
+/* keep image styles */
 .devflow-timeline-item__image-link {
   max-width: 360px;
 }
@@ -1303,6 +1360,46 @@ img {
   .devflow-feedback__attachment {
     align-items: flex-start;
   }
+}
+
+/* ── Execution banner ──────────────────────────────────────── */
+
+.devflow-execution-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: #166534;
+  margin-bottom: 12px;
+}
+
+.devflow-execution-banner__terminal-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 9px;
+  background: rgba(22, 101, 52, 0.08);
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #166534;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.devflow-execution-banner__terminal-btn:hover {
+  background: rgba(22, 101, 52, 0.15);
+}
+
+.devflow-execution-banner__terminal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Project panel ─────────────────────────────────────────── */

@@ -89,6 +89,12 @@ export const taskApi = {
       body: JSON.stringify({ workflow_stage: workflowStage }),
     }),
 
+  /** 启动任务：创建 worktree 并进入 PRD_GENERATING（「开始任务」按钮） */
+  start: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/start`, {
+      method: "POST",
+    }),
+
   /** 触发任务进入执行阶段（「开始执行」按钮） */
   execute: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/execute`, {
@@ -105,9 +111,19 @@ export const taskApi = {
   /** 获取任务详情 */
   get: (id: string) => fetchApi<Task>(`/tasks/${id}`),
 
+  /** 读取 worktree 中的 PRD 文件内容 */
+  getPrdFile: (id: string) =>
+    fetchApi<{ content: string | null; path: string | null }>(`/tasks/${id}/prd-file`),
+
   /** 使用 trae-cn 打开 worktree 目录 */
   openInTrae: (id: string) =>
     fetchApi<{ opened: string }>(`/tasks/${id}/open-in-trae`, {
+      method: "POST",
+    }),
+
+  /** 打开 Terminal.app 实时查看 codex 输出 */
+  openTerminal: (id: string) =>
+    fetchApi<{ log_file: string }>(`/tasks/${id}/open-terminal`, {
       method: "POST",
     }),
 };

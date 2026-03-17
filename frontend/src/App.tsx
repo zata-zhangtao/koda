@@ -28,6 +28,15 @@ import {
 type RequirementStage = WorkflowStage;
 
 type TimelineKind = "ai_log" | "human_review" | "system_event";
+type ConversationTurnKind = "human" | "ai";
+
+interface ConversationTurn {
+  turnId: string;
+  kind: ConversationTurnKind;
+  authorName: string;
+  timeLabel: string;
+  items: TimelineViewModel[];
+}
 type WorkspaceView = "active" | "completed" | "changes";
 type AttachmentKind = "image" | "file";
 
@@ -69,6 +78,7 @@ type MutationName =
   | "complete"
   | "delete"
   | "open_trae"
+  | "open_terminal"
   | null;
 
 const GUEST_USER_LABEL = "Guest User";
@@ -98,7 +108,9 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
+  const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
+  const [expandedTurnIdSet, setExpandedTurnIdSet] = useState<Set<string>>(new Set());
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
@@ -159,6 +171,9 @@ function App() {
   const selectedTaskStage = selectedTask
     ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
     : null;
+  const conversationTurnList = groupTimelineIntoConversationTurns(selectedTimelineItemList);
+  const lastAiTurnId =
+    [...conversationTurnList].reverse().find((t) => t.kind === "ai")?.turnId ?? null;
   const selectedTaskDocumentMarkdown = selectedTask
     ? buildTaskDocumentMarkdown(
         selectedTask,
@@ -180,7 +195,7 @@ function App() {
   const hasFeedbackPayload =
     Boolean(feedbackInputText.trim()) || feedbackAttachmentDraft !== null;
 
-  // 自动轮询：当选中任务处于 codex 执行中的阶段时，每 3 秒刷新一次
+  // 自动轮询：codex 实际运行的阶段（PRD 生成 + 编码执行等）
   const activeExecutionStageSet = new Set<WorkflowStage>([
     WorkflowStage.PRD_GENERATING,
     WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
@@ -197,7 +212,7 @@ function App() {
     }
     const pollingIntervalId = window.setInterval(() => {
       void loadDashboardData(true);
-    }, 3000);
+    }, 1000);
     return () => {
       window.clearInterval(pollingIntervalId);
     };
@@ -228,7 +243,42 @@ function App() {
     setFeedbackAttachmentDraft(null);
     setSuccessMessage(null);
     setErrorMessage(null);
+    setPrdFileContent(null);
+    setExpandedTurnIdSet(new Set());
   }, [workspaceView, selectedTaskId]);
+
+  // 自动展开最新 AI 消息卡片
+  useEffect(() => {
+    if (!lastAiTurnId) return;
+    setExpandedTurnIdSet((prev) => {
+      if (prev.has(lastAiTurnId)) return prev;
+      const next = new Set(prev);
+      next.add(lastAiTurnId);
+      return next;
+    });
+  }, [lastAiTurnId]);
+
+  // 当选中任务有 worktree 时，轮询 PRD 文件内容
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    const task = taskList.find((t) => t.id === selectedTaskId);
+    if (!task?.worktree_path) return;
+
+    const loadPrd = () => {
+      taskApi
+        .getPrdFile(selectedTaskId)
+        .then((result) => {
+          if (result.content) {
+            setPrdFileContent(result.content);
+          }
+        })
+        .catch(() => {});
+    };
+
+    loadPrd();
+    const prdPollId = window.setInterval(loadPrd, 2000);
+    return () => window.clearInterval(prdPollId);
+  }, [selectedTaskId, taskList]);
 
   async function loadDashboardData(silent = false): Promise<void> {
     if (!silent) {
@@ -345,17 +395,21 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStage(taskItem.id, WorkflowStage.PRD_GENERATING);
+      const startedTask = await taskApi.start(taskItem.id);
+      const worktreeMsg = startedTask.worktree_path
+        ? `Worktree 已创建：\`${startedTask.worktree_path}\`\n\nAI 正在生成 PRD，请稍候...`
+        : "AI 正在生成 PRD，请稍候...";
       await logApi.create({
         task_id: taskItem.id,
-        text_content:
-          "任务已启动，AI 正在准备 PRD 大纲和实现路径。",
+        text_content: worktreeMsg,
         state_tag: DevLogStateTag.OPTIMIZATION,
       });
       await loadDashboardData(true);
     } catch (startError) {
       console.error(startError);
-      setErrorMessage("Failed to start task.");
+      setErrorMessage(
+        startError instanceof Error ? startError.message : "Failed to start task."
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -477,6 +531,21 @@ function App() {
     } catch (openError) {
       console.error(openError);
       setErrorMessage("无法打开 Trae。");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleOpenTerminal(taskItem: Task): Promise<void> {
+    setActiveMutationName("open_terminal");
+    setErrorMessage(null);
+    try {
+      await taskApi.openTerminal(taskItem.id);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage(
+        err instanceof Error ? err.message : "无法打开终端，请确认任务已启动。"
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -1113,6 +1182,21 @@ function App() {
                         </ActionButton>
                       ) : null}
 
+                      {/* ── PRD 撰写中: 确认 PRD ── */}
+                      {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                        <ActionButton
+                          variant="secondary"
+                          busy={activeMutationName === "confirm"}
+                          onClick={() => {
+                            void handleConfirmPrd(selectedTask);
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>确认 PRD</span>
+                        </ActionButton>
+                      ) : null}
+
                       {/* ── PRD 待确认: 确认 PRD + 开始执行 ── */}
                       {selectedTaskStage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
@@ -1182,24 +1266,33 @@ function App() {
                         </>
                       ) : null}
 
-                      {/* ── Trae 打开：worktree 优先，无 worktree 则打开项目根 ── */}
-                      {selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
-                      (selectedTask.worktree_path || selectedTask.project_id) ? (
+                      {/* ── 打开项目根目录（有关联项目时始终显示） ── */}
+                      {selectedTask.project_id &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
                         <ActionButton
                           variant="outline"
                           busy={activeMutationName === "open_trae"}
                           onClick={() => {
-                            if (selectedTask.worktree_path) {
-                              void handleOpenInTrae(selectedTask);
-                            } else {
-                              void handleOpenProjectInTrae(selectedTask.project_id!);
-                            }
+                            void handleOpenProjectInTrae(selectedTask.project_id!);
                           }}
                         >
                           <CodeIcon className="devflow-icon devflow-icon--small" />
-                          <span>
-                            {selectedTask.worktree_path ? "用 Trae 打开 Worktree" : "用 Trae 打开项目"}
-                          </span>
+                          <span>打开项目</span>
+                        </ActionButton>
+                      ) : null}
+
+                      {/* ── 打开 Worktree（执行后才显示） ── */}
+                      {selectedTask.worktree_path &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                        <ActionButton
+                          variant="outline"
+                          busy={activeMutationName === "open_trae"}
+                          onClick={() => {
+                            void handleOpenInTrae(selectedTask);
+                          }}
+                        >
+                          <CodeIcon className="devflow-icon devflow-icon--small" />
+                          <span>打开 Worktree</span>
                         </ActionButton>
                       ) : null}
 
@@ -1296,8 +1389,29 @@ function App() {
                         <span>Timeline</span>
                       </h3>
 
-                      <div className="devflow-timeline">
-                        {selectedTimelineItemList.length === 0 ? (
+                      <div className="devflow-conversation">
+                        {isSelectedTaskInActiveExecution ? (
+                          <div className="devflow-execution-banner">
+                            <span className="devflow-footer__pulse" />
+                            <span>
+                              {selectedTaskStage === WorkflowStage.PRD_GENERATING
+                                ? "AI 正在生成 PRD，请稍候..."
+                                : "AI 正在执行编码，输出实时显示在下方..."}
+                            </span>
+                            <button
+                              type="button"
+                              className="devflow-execution-banner__terminal-btn"
+                              title="在终端中实时查看 codex 输出"
+                              disabled={activeMutationName === "open_terminal"}
+                              onClick={() => { void handleOpenTerminal(selectedTask); }}
+                            >
+                              <TerminalIcon className="devflow-icon devflow-icon--tiny" />
+                              <span>打开终端</span>
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {conversationTurnList.length === 0 ? (
                           <div className="devflow-empty-card devflow-empty-card--detail">
                             <p className="devflow-empty-card__text">
                               Timeline will appear here after task activity begins.
@@ -1305,65 +1419,118 @@ function App() {
                           </div>
                         ) : null}
 
-                        {selectedTimelineItemList.map((timelineViewModel) => {
-                          const timelineImageUrl =
-                            mapMediaPathToPublicUrl(
-                              timelineViewModel.log.media_original_image_path
-                            ) ||
-                            mapMediaPathToPublicUrl(
-                              timelineViewModel.log.media_thumbnail_path
-                            );
-
-                          return (
-                            <article
-                              key={timelineViewModel.log.id}
-                              className="devflow-timeline-item"
-                            >
-                              <div
-                                className={joinClassNames(
-                                  "devflow-timeline-item__dot",
-                                  `devflow-timeline-item__dot--${timelineViewModel.kind}`
-                                )}
-                              />
-
-                              <div className="devflow-timeline-item__content">
-                                <div className="devflow-timeline-item__meta">
-                                  {timelineViewModel.kind === "ai_log" ? (
-                                    <RobotIcon className="devflow-icon devflow-icon--tiny devflow-icon--ai" />
-                                  ) : (
-                                    <UserIcon className="devflow-icon devflow-icon--tiny devflow-icon--human" />
-                                  )}
-                                  <span className="devflow-timeline-item__author">
-                                    {timelineViewModel.authorName}
-                                  </span>
-                                  <span className="devflow-timeline-item__time">
-                                    {timelineViewModel.timeLabel}
-                                  </span>
+                        {conversationTurnList.map((turn) => {
+                          if (turn.kind === "human") {
+                            return (
+                              <div key={turn.turnId} className="devflow-turn-card devflow-turn-card--human">
+                                <div className="devflow-turn-card__human-header">
+                                  <UserIcon className="devflow-icon devflow-icon--tiny devflow-icon--human" />
+                                  <span className="devflow-turn-card__author">{turn.authorName}</span>
+                                  <span className="devflow-turn-card__time">{turn.timeLabel}</span>
                                 </div>
-
-                                <div className="devflow-markdown devflow-timeline-item__markdown">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                    {timelineViewModel.log.text_content ||
-                                      "No message content provided."}
-                                  </ReactMarkdown>
-                                </div>
-
-                                {timelineImageUrl ? (
-                                  <a
-                                    className="devflow-timeline-item__image-link"
-                                    href={timelineImageUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    <img
-                                      className="devflow-timeline-item__image"
-                                      src={timelineImageUrl}
-                                      alt="Timeline attachment"
-                                    />
-                                  </a>
-                                ) : null}
+                                {turn.items.map((item) => {
+                                  const imgUrl =
+                                    mapMediaPathToPublicUrl(item.log.media_original_image_path) ||
+                                    mapMediaPathToPublicUrl(item.log.media_thumbnail_path);
+                                  return (
+                                    <div key={item.log.id} className="devflow-turn-card__human-body">
+                                      <div className="devflow-markdown">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {item.log.text_content || ""}
+                                        </ReactMarkdown>
+                                      </div>
+                                      {imgUrl ? (
+                                        <a
+                                          className="devflow-timeline-item__image-link"
+                                          href={imgUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          <img
+                                            className="devflow-timeline-item__image"
+                                            src={imgUrl}
+                                            alt="Attachment"
+                                          />
+                                        </a>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            </article>
+                            );
+                          }
+
+                          // AI turn card
+                          const isExpanded = expandedTurnIdSet.has(turn.turnId);
+                          return (
+                            <div
+                              key={turn.turnId}
+                              className={joinClassNames(
+                                "devflow-turn-card devflow-turn-card--ai",
+                                isExpanded && "devflow-turn-card--expanded"
+                              )}
+                            >
+                              <button
+                                type="button"
+                                className="devflow-turn-card__ai-header"
+                                onClick={() => {
+                                  setExpandedTurnIdSet((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(turn.turnId)) {
+                                      next.delete(turn.turnId);
+                                    } else {
+                                      next.add(turn.turnId);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <RobotIcon className="devflow-icon devflow-icon--tiny devflow-icon--ai" />
+                                <span className="devflow-turn-card__author">{turn.authorName}</span>
+                                <span className="devflow-turn-card__time">{turn.timeLabel}</span>
+                                <span className="devflow-turn-card__count">{turn.items.length} 条输出</span>
+                                <ChevronRightIcon
+                                  className={joinClassNames(
+                                    "devflow-icon devflow-icon--tiny devflow-turn-card__chevron",
+                                    isExpanded && "devflow-turn-card__chevron--open"
+                                  )}
+                                />
+                              </button>
+
+                              {isExpanded ? (
+                                <div className="devflow-turn-card__ai-body">
+                                  {turn.items.map((item) => {
+                                    const imgUrl =
+                                      mapMediaPathToPublicUrl(item.log.media_original_image_path) ||
+                                      mapMediaPathToPublicUrl(item.log.media_thumbnail_path);
+                                    return (
+                                      <div key={item.log.id} className="devflow-turn-card__ai-entry">
+                                        <span className="devflow-turn-card__entry-time">{item.timeLabel}</span>
+                                        <div className="devflow-markdown devflow-turn-card__entry-content">
+                                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {item.log.text_content || ""}
+                                          </ReactMarkdown>
+                                        </div>
+                                        {imgUrl ? (
+                                          <a
+                                            className="devflow-timeline-item__image-link"
+                                            href={imgUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            <img
+                                              className="devflow-timeline-item__image"
+                                              src={imgUrl}
+                                              alt="Attachment"
+                                            />
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>
@@ -1376,11 +1543,24 @@ function App() {
                       </h3>
 
                       <CardSurface className="devflow-document-card">
-                        <div className="devflow-markdown devflow-markdown--document">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {selectedTaskDocumentMarkdown}
-                          </ReactMarkdown>
-                        </div>
+                        {prdFileContent ? (
+                          <div className="devflow-markdown devflow-markdown--document">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {prdFileContent}
+                            </ReactMarkdown>
+                          </div>
+                        ) : selectedTaskStage === WorkflowStage.PRD_GENERATING ? (
+                          <div className="devflow-execution-banner">
+                            <span className="devflow-footer__pulse" />
+                            <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
+                          </div>
+                        ) : (
+                          <div className="devflow-markdown devflow-markdown--document">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {selectedTaskDocumentMarkdown}
+                            </ReactMarkdown>
+                          </div>
+                        )}
                       </CardSurface>
                     </div>
                   </div>
@@ -1598,6 +1778,37 @@ function buildTimelineViewModel(
     authorName: deriveTimelineAuthorName(timelineKind, currentRunAccount),
     timeLabel: formatHourMinute(devLogItem.created_at),
   };
+}
+
+function groupTimelineIntoConversationTurns(
+  timelineItems: TimelineViewModel[]
+): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+
+  for (const item of timelineItems) {
+    // 只有 state_tag === NONE 的 human_review 才是真正的用户输入
+    // 系统自动写入的状态消息（state_tag = FIXED/OPTIMIZATION/BUG 等）归入 AI 侧
+    const turnKind: ConversationTurnKind =
+      item.kind === "human_review" && item.log.state_tag === DevLogStateTag.NONE
+        ? "human"
+        : "ai";
+    const lastTurn = turns[turns.length - 1];
+
+    // Consecutive AI logs are merged into a single AI turn
+    if (lastTurn && lastTurn.kind === "ai" && turnKind === "ai") {
+      lastTurn.items.push(item);
+    } else {
+      turns.push({
+        turnId: item.log.id,
+        kind: turnKind,
+        authorName: item.authorName,
+        timeLabel: item.timeLabel,
+        items: [item],
+      });
+    }
+  }
+
+  return turns;
 }
 
 function buildDevLogsByTaskId(devLogList: DevLog[]): Record<string, DevLog[]> {
@@ -2317,6 +2528,29 @@ function RocketIcon({ className }: SVGProps<SVGSVGElement>) {
         strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TerminalIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <polyline
+        points="4 17 10 11 4 5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <line
+        x1="12"
+        y1="19"
+        x2="20"
+        y2="19"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
       />
     </svg>
   );

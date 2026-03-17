@@ -16,7 +16,7 @@ from dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.codex_runner import run_codex_task
+from dsl.services.codex_runner import get_task_log_path, run_codex_prd, run_codex_task
 from dsl.services.task_service import TaskService
 from utils.database import get_db
 from utils.settings import config
@@ -153,6 +153,80 @@ def update_task_stage(
     return updated_task
 
 
+@router.post("/{task_id}/start", response_model=TaskResponseSchema)
+def start_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """启动任务：创建 git worktree 并进入 PRD_GENERATING 阶段.
+
+    仅允许从 backlog 阶段触发。若任务关联了 Project，将立即在项目仓库中创建
+    git worktree（分支名：task/<task_id[:8]>）。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已更新为 prd_generating 的任务对象
+
+    Raises:
+        HTTPException: 任务不存在（404）、阶段不合法（422）或 worktree 创建失败（422）
+    """
+    try:
+        started_task = TaskService.start_task(db_session, task_id)
+    except ValueError as start_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(start_error),
+        ) from start_error
+
+    if not started_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    # 收集快照（session 关闭前读取）
+    dev_log_text_snapshot_list: list[str] = [
+        dev_log_item.text_content for dev_log_item in started_task.dev_logs
+    ]
+    task_title_snapshot_str: str = started_task.task_title
+    run_account_id_snapshot_str: str = started_task.run_account_id
+    worktree_path_snapshot_str: str | None = started_task.worktree_path
+
+    # 确定 codex 工作目录（worktree > project repo > koda 自身）
+    from pathlib import Path as _Path
+
+    effective_work_dir_path = config.BASE_DIR
+    if worktree_path_snapshot_str:
+        wt_dir = _Path(worktree_path_snapshot_str)
+        if wt_dir.exists():
+            effective_work_dir_path = wt_dir
+    elif started_task.project_id:
+        from dsl.models.project import Project
+
+        project_obj = db_session.query(Project).filter(
+            Project.id == started_task.project_id
+        ).first()
+        if project_obj:
+            effective_work_dir_path = _Path(project_obj.repo_path)
+
+    # 在后台让 codex 生成 PRD，完成后自动推进至 prd_waiting_confirmation
+    background_tasks.add_task(
+        run_codex_prd,
+        task_id_str=task_id,
+        run_account_id_str=run_account_id_snapshot_str,
+        task_title_str=task_title_snapshot_str,
+        dev_log_text_list=dev_log_text_snapshot_list,
+        work_dir_path=effective_work_dir_path,
+        worktree_path_str=worktree_path_snapshot_str,
+    )
+
+    started_task.log_count = len(started_task.dev_logs)
+    return started_task
+
+
 @router.post("/{task_id}/execute", response_model=TaskResponseSchema)
 def execute_task(
     task_id: str,
@@ -202,17 +276,21 @@ def execute_task(
     run_account_id_snapshot_str: str = executed_task.run_account_id
     worktree_path_snapshot_str: str | None = executed_task.worktree_path
 
-    # 决定 codex 工作目录：优先使用关联项目的 repo_path
+    # 决定 codex 工作目录：优先使用已创建的 worktree，其次项目根，最后 Koda 自身目录
+    from pathlib import Path as _Path
+
     effective_work_dir_path = config.BASE_DIR
-    if executed_task.project_id:
+    if executed_task.worktree_path:
+        worktree_dir = _Path(executed_task.worktree_path)
+        if worktree_dir.exists():
+            effective_work_dir_path = worktree_dir
+    elif executed_task.project_id:
         from dsl.models.project import Project
 
         project_obj = db_session.query(Project).filter(
             Project.id == executed_task.project_id
         ).first()
         if project_obj:
-            from pathlib import Path as _Path
-
             effective_work_dir_path = _Path(project_obj.repo_path)
 
     # 在后台异步运行 codex exec（FastAPI BackgroundTasks 原生支持 async 函数）
@@ -228,6 +306,50 @@ def execute_task(
 
     executed_task.log_count = len(executed_task.dev_logs)
     return executed_task
+
+
+@router.get("/{task_id}/prd-file")
+def get_task_prd_file(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """读取任务 worktree 中最新的 PRD 文件内容.
+
+    在 worktree 的 tasks/ 目录下查找最新的 *-prd-*.md 文件。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict: {"content": str, "path": str} 或 {"content": null, "path": null}
+    """
+    import glob as _glob
+    from pathlib import Path as _Path
+
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj or not task_obj.worktree_path:
+        return {"content": None, "path": None}
+
+    worktree_dir = _Path(task_obj.worktree_path)
+    if not worktree_dir.exists():
+        return {"content": None, "path": None}
+
+    # 查找 tasks/*-prd-*.md，取最新的
+    prd_file_candidates = sorted(
+        _glob.glob(str(worktree_dir / "tasks" / "*-prd-*.md")),
+        reverse=True,
+    )
+
+    if not prd_file_candidates:
+        return {"content": None, "path": None}
+
+    prd_file_path = _Path(prd_file_candidates[0])
+    try:
+        prd_content = prd_file_path.read_text(encoding="utf-8")
+        return {"content": prd_content, "path": str(prd_file_path)}
+    except OSError:
+        return {"content": None, "path": None}
 
 
 @router.post("/{task_id}/open-in-trae", status_code=status.HTTP_200_OK)
@@ -285,6 +407,53 @@ def open_task_in_trae(
         )
 
     return {"opened": str(worktree_dir_path)}
+
+
+@router.post("/{task_id}/open-terminal", status_code=status.HTTP_200_OK)
+def open_task_terminal(
+    task_id: str,
+) -> dict:
+    """使用 Terminal.app 实时查看该任务的 codex 输出日志.
+
+    通过 osascript 打开一个新的 Terminal 窗口，执行 tail -f 跟踪日志文件。
+    日志文件由 codex_runner 在任务执行时自动写入 /tmp/koda-{task_id[:8]}.log。
+
+    Args:
+        task_id: 任务 ID
+
+    Returns:
+        dict: 包含日志文件路径的确认信息
+
+    Raises:
+        HTTPException: 日志文件不存在（404）或 osascript 不可用（500）
+    """
+    import subprocess
+
+    log_file_path = get_task_log_path(task_id)
+
+    if not log_file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"尚无日志文件（{log_file_path}）。请先启动任务。",
+        )
+
+    try:
+        subprocess.Popen(
+            [
+                "osascript",
+                "-e", f'tell application "Terminal" to do script "tail -f {log_file_path}"',
+                "-e", 'tell application "Terminal" to activate',
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="osascript 不可用（仅支持 macOS）。",
+        )
+
+    return {"log_file": str(log_file_path)}
 
 
 @router.patch("/{task_id}", response_model=TaskResponseSchema)
