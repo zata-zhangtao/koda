@@ -13,6 +13,7 @@ from dsl.api import (
     chronicle_router,
     logs_router,
     media_router,
+    projects_router,
     run_accounts_router,
     tasks_router,
 )
@@ -67,6 +68,7 @@ def create_application() -> FastAPI:
 
     # 注册 API 路由
     application.include_router(run_accounts_router)
+    application.include_router(projects_router)
     application.include_router(tasks_router)
     application.include_router(logs_router)
     application.include_router(media_router)

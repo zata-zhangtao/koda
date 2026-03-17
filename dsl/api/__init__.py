@@ -6,6 +6,7 @@
 - logs: 日志 CRUD
 - media: 图片上传和服务
 - chronicle: 编年史视图和导出
+- projects: 项目管理
 """
 
 from dsl.api.run_accounts import router as run_accounts_router
@@ -13,6 +14,7 @@ from dsl.api.tasks import router as tasks_router
 from dsl.api.logs import router as logs_router
 from dsl.api.media import router as media_router
 from dsl.api.chronicle import router as chronicle_router
+from dsl.api.projects import router as projects_router
 
 __all__ = [
     "run_accounts_router",
@@ -20,4 +22,5 @@ __all__ = [
     "logs_router",
     "media_router",
     "chronicle_router",
+    "projects_router",
 ]

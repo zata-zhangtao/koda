@@ -6,11 +6,13 @@
 import type {
   CommandParseResult,
   DevLog,
+  Project,
   RunAccount,
   Task,
   TaskChronicle,
   TimelineEntry,
 } from "../types";
+import { type WorkflowStage } from "../types";
 
 const API_BASE = "/api";
 
@@ -67,17 +69,30 @@ export const taskApi = {
   list: () => fetchApi<Task[]>("/tasks"),
 
   /** 创建任务 */
-  create: (data: { task_title: string }) =>
+  create: (data: { task_title: string; project_id?: string | null }) =>
     fetchApi<Task>("/tasks", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  /** 更新任务状态 */
+  /** 更新任务生命周期状态 */
   updateStatus: (id: string, status: string) =>
     fetchApi<Task>(`/tasks/${id}/status`, {
       method: "PUT",
       body: JSON.stringify({ lifecycle_status: status }),
+    }),
+
+  /** 更新任务工作流阶段（通用阶段跳转） */
+  updateStage: (id: string, workflowStage: WorkflowStage) =>
+    fetchApi<Task>(`/tasks/${id}/stage`, {
+      method: "PUT",
+      body: JSON.stringify({ workflow_stage: workflowStage }),
+    }),
+
+  /** 触发任务进入执行阶段（「开始执行」按钮） */
+  execute: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/execute`, {
+      method: "POST",
     }),
 
   /** 更新任务内容 */
@@ -89,6 +104,42 @@ export const taskApi = {
 
   /** 获取任务详情 */
   get: (id: string) => fetchApi<Task>(`/tasks/${id}`),
+
+  /** 使用 trae-cn 打开 worktree 目录 */
+  openInTrae: (id: string) =>
+    fetchApi<{ opened: string }>(`/tasks/${id}/open-in-trae`, {
+      method: "POST",
+    }),
+};
+
+/** Project API */
+export const projectApi = {
+  /** 列出所有项目 */
+  list: () => fetchApi<Project[]>("/projects"),
+
+  /** 创建项目 */
+  create: (data: {
+    display_name: string;
+    repo_path: string;
+    description?: string | null;
+  }) =>
+    fetchApi<Project>("/projects", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** 获取项目详情 */
+  get: (id: string) => fetchApi<Project>(`/projects/${id}`),
+
+  /** 删除项目 */
+  delete: (id: string) =>
+    fetch(`${"/api"}/projects/${id}`, { method: "DELETE" }),
+
+  /** 使用 trae-cn 打开项目根目录 */
+  openInTrae: (id: string) =>
+    fetchApi<{ opened: string }>(`/projects/${id}/open-in-trae`, {
+      method: "POST",
+    }),
 };
 
 /** DevLog API */

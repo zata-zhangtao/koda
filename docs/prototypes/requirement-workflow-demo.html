@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Koda - Requirement Workflow Prototype</title>
+  <style>
+    :root {
+      --bg-base: #0f1117;
+      --bg-card: #161b27;
+      --bg-card2: #1e2535;
+      --border: #2a3347;
+      --text-primary: #e2e8f0;
+      --text-secondary: #8b9ab3;
+      --emerald: #10b981;
+      --emerald-dim: #065f46;
+      --blue: #3b82f6;
+      --blue-dim: #1e3a5f;
+      --amber: #f59e0b;
+      --amber-dim: #78350f;
+      --purple: #8b5cf6;
+      --purple-dim: #3b1f6e;
+      --red: #ef4444;
+      --red-dim: #7f1d1d;
+      --slate: #64748b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg-base); color: var(--text-primary); font-family: 'Inter', 'SF Pro Display', system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+
+    /* Layout */
+    .layout { display: grid; grid-template-columns: 300px 1fr; height: 100vh; overflow: hidden; }
+    .sidebar { background: var(--bg-card); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    .main { display: flex; flex-direction: column; overflow: hidden; }
+
+    /* Header */
+    .header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+    .header-title { font-weight: 700; font-size: 15px; letter-spacing: -0.3px; }
+    .header-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 6px var(--emerald); }
+
+    /* Stage Badge */
+    .stage-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+    }
+    .stage-badge--backlog       { background: #1e2535; color: var(--text-secondary); border: 1px solid var(--border); }
+    .stage-badge--prd_gen       { background: var(--amber-dim); color: var(--amber); border: 1px solid var(--amber); }
+    .stage-badge--prd_wait      { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue); }
+    .stage-badge--impl          { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
+    .stage-badge--review        { background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb; }
+    .stage-badge--test          { background: #1c3a2f; color: #34d399; border: 1px solid #059669; }
+    .stage-badge--pr            { background: #2d1f63; color: #a78bfa; border: 1px solid #7c3aed; }
+    .stage-badge--acceptance    { background: #1f2d1f; color: #86efac; border: 1px solid #16a34a; }
+    .stage-badge--changes       { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+    .stage-badge--done          { background: var(--emerald-dim); color: var(--emerald); border: 1px solid var(--emerald); }
+
+    /* Task List */
+    .task-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .task-card {
+      padding: 12px 14px; border-radius: 8px; margin-bottom: 6px; cursor: pointer;
+      border: 1px solid transparent; transition: all 0.15s ease;
+    }
+    .task-card:hover { background: var(--bg-card2); border-color: var(--border); }
+    .task-card.active { background: var(--bg-card2); border-color: var(--blue); }
+    .task-card__title { font-weight: 500; font-size: 13px; margin-bottom: 6px; }
+    .task-card__meta { display: flex; align-items: center; gap: 8px; }
+
+    /* Detail Panel */
+    .detail { flex: 1; overflow-y: auto; padding: 28px 32px; }
+    .detail__header { margin-bottom: 24px; }
+    .detail__title { font-size: 20px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.4px; }
+    .detail__desc { color: var(--text-secondary); line-height: 1.6; font-size: 13px; }
+
+    /* Action Bar */
+    .action-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px; padding: 16px; background: var(--bg-card); border-radius: 10px; border: 1px solid var(--border); }
+    .action-bar__label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px;
+      border-radius: 7px; font-size: 13px; font-weight: 500; border: none;
+      cursor: pointer; transition: all 0.15s ease; white-space: nowrap;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn--primary   { background: var(--emerald); color: #fff; }
+    .btn--primary:hover:not(:disabled)  { background: #059669; }
+    .btn--execute   { background: var(--purple); color: #fff; }
+    .btn--execute:hover:not(:disabled)  { background: #7c3aed; }
+    .btn--confirm   { background: var(--blue); color: #fff; }
+    .btn--confirm:hover:not(:disabled)  { background: #2563eb; }
+    .btn--outline   { background: transparent; color: var(--text-primary); border: 1px solid var(--border); }
+    .btn--outline:hover:not(:disabled) { background: var(--bg-card2); border-color: var(--slate); }
+    .btn--ghost     { background: transparent; color: var(--text-secondary); }
+    .btn--ghost:hover:not(:disabled)   { color: var(--red); }
+    .btn--danger    { background: var(--red); color: #fff; }
+    .btn--sm        { padding: 5px 11px; font-size: 12px; }
+
+    /* Spinner */
+    .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Timeline */
+    .timeline { margin-top: 8px; }
+    .timeline__title { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px; }
+    .timeline-item { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .timeline-item:last-child { border-bottom: none; }
+    .timeline-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; margin-top: 2px; }
+    .timeline-dot--system  { background: var(--bg-card2); }
+    .timeline-dot--ai      { background: var(--purple-dim); }
+    .timeline-dot--human   { background: var(--blue-dim); }
+    .timeline-content__meta { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+    .timeline-content__text { font-size: 13px; line-height: 1.6; color: var(--text-primary); }
+
+    /* State Machine Diagram */
+    .state-machine { margin-bottom: 28px; padding: 18px; background: var(--bg-card); border-radius: 10px; border: 1px solid var(--border); }
+    .state-machine__title { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+    .state-steps { display: flex; align-items: center; gap: 0; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+    .state-step { display: flex; align-items: center; flex-shrink: 0; }
+    .state-step__node {
+      padding: 5px 10px; border-radius: 5px; font-size: 10px; font-weight: 600;
+      border: 1px solid var(--border); background: var(--bg-card2); color: var(--text-secondary);
+      transition: all 0.2s ease; white-space: nowrap;
+    }
+    .state-step__node.current { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+    .state-step__node.done-step { border-color: var(--emerald); color: var(--emerald); background: var(--emerald-dim); }
+    .state-step__arrow { color: var(--border); padding: 0 4px; font-size: 12px; }
+
+    /* Empty state */
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); gap: 8px; }
+    .empty-state__icon { font-size: 32px; }
+
+    /* Notification */
+    .notification {
+      position: fixed; bottom: 24px; right: 24px; padding: 12px 18px;
+      border-radius: 8px; font-size: 13px; font-weight: 500;
+      border: 1px solid; animation: fadeIn 0.2s ease; z-index: 100;
+    }
+    .notification--success { background: var(--emerald-dim); color: var(--emerald); border-color: var(--emerald); }
+    .notification--info    { background: var(--blue-dim); color: var(--blue); border-color: var(--blue); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="header">
+      <div class="header-dot"></div>
+      <span class="header-title">Koda Requirements</span>
+    </div>
+    <div class="task-list" id="taskList"></div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="header" style="border-left: none;">
+      <span id="headerStage" style="margin-left: auto;"></span>
+    </div>
+    <div class="detail" id="detailPanel">
+      <div class="empty-state">
+        <div class="empty-state__icon">📋</div>
+        <span>选择一个需求卡片查看详情</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="notification" style="display:none;" class="notification"></div>
+
+<script>
+// ============================================================
+// State Machine Definition
+// ============================================================
+const STAGES = [
+  { id: 'backlog',            label: 'Backlog',         badgeClass: 'backlog' },
+  { id: 'prd_generating',     label: 'PRD 生成中',      badgeClass: 'prd_gen' },
+  { id: 'prd_waiting',        label: 'PRD 待确认',      badgeClass: 'prd_wait' },
+  { id: 'implementation',     label: '实现中',          badgeClass: 'impl' },
+  { id: 'self_review',        label: '自检中',          badgeClass: 'review' },
+  { id: 'testing',            label: '测试中',          badgeClass: 'test' },
+  { id: 'pr_preparing',       label: 'PR 准备',         badgeClass: 'pr' },
+  { id: 'acceptance',         label: '验收中',          badgeClass: 'acceptance' },
+  { id: 'done',               label: '已完成',          badgeClass: 'done' },
+];
+
+const STAGE_INDEX = Object.fromEntries(STAGES.map((s, i) => [s.id, i]));
+
+// ============================================================
+// Mock Data
+// ============================================================
+let tasks = [
+  {
+    id: '1',
+    title: '添加「开始执行」按钮',
+    description: '在 PRD 确认后，页面上应显示「开始执行」按钮，触发 AI 进入编码阶段。',
+    stage: 'prd_waiting',
+    logs: [
+      { kind: 'system', icon: '🚀', time: '17:00', text: '需求已创建，进入 Backlog。' },
+      { kind: 'ai',     icon: '🤖', time: '17:02', text: 'PRD 生成完成。\n\n**目标**：在需求详情页增加「开始执行」按钮。\n**范围**：前端 App.tsx + 后端 /api/tasks/{id}/execute 接口。\n**验收标准**：点击后任务进入 implementation_in_progress 阶段。' },
+    ],
+  },
+  {
+    id: '2',
+    title: '需求状态机重构',
+    description: '将现有 4 状态生命周期重构为 10 阶段完整工作流状态机。',
+    stage: 'backlog',
+    logs: [
+      { kind: 'system', icon: '🚀', time: '16:30', text: '需求已创建，进入 Backlog。' },
+    ],
+  },
+  {
+    id: '3',
+    title: 'Git Worktree 调度',
+    description: '开始任务时基于主分支创建 worktree，所有 AI 编码限制在其中执行。',
+    stage: 'implementation',
+    logs: [
+      { kind: 'system', icon: '🚀', time: '14:00', text: '需求进入实现阶段，Git Worktree 已创建：feat/task-003-worktree。' },
+      { kind: 'ai',     icon: '🤖', time: '14:05', text: '正在分析现有任务调度代码，准备实现 worktree 生命周期管理模块。' },
+      { kind: 'human',  icon: '👤', time: '14:20', text: '请注意复用已有 worktree，不要重复创建。' },
+    ],
+  },
+  {
+    id: '4',
+    title: '自动 PR 生成器',
+    description: '测试通过后自动整理变更摘要并发起 PR，附带需求链接和测试结果。',
+    stage: 'done',
+    logs: [
+      { kind: 'system', icon: '✅', time: '12:00', text: 'PR #42 已合并，需求验收通过，标记为完成。' },
+    ],
+  },
+];
+
+let selectedId = '1';
+
+// ============================================================
+// Helpers
+// ============================================================
+function getStageInfo(stageId) {
+  return STAGES.find(s => s.id === stageId) || STAGES[0];
+}
+
+function stageBadge(stageId) {
+  const s = getStageInfo(stageId);
+  return `<span class="stage-badge stage-badge--${s.badgeClass}">${s.label}</span>`;
+}
+
+function showNotification(msg, type = 'success') {
+  const el = document.getElementById('notification');
+  el.textContent = msg;
+  el.className = `notification notification--${type}`;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 2800);
+}
+
+function setBusy(btnId, busy) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  if (busy) {
+    btn.disabled = true;
+    btn.innerHTML = btn.innerHTML.replace(/<span[^>]*>[^<]*<\/span>/, '') + `<div class="spinner"></div>`;
+  }
+}
+
+// ============================================================
+// Advance Stage
+// ============================================================
+function advanceStage(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const idx = STAGE_INDEX[task.stage];
+  if (idx < STAGES.length - 1) {
+    task.stage = STAGES[idx + 1].id;
+  }
+}
+
+// ============================================================
+// Action Handlers
+// ============================================================
+function handleStartTask(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  setBusy('btn-start', true);
+  setTimeout(() => {
+    task.stage = 'prd_generating';
+    task.logs.push({ kind: 'system', icon: '🚀', time: now(), text: '任务已启动，AI 正在生成 PRD…' });
+    setTimeout(() => {
+      task.stage = 'prd_waiting';
+      task.logs.push({ kind: 'ai', icon: '🤖', time: now(), text: 'PRD 已生成，等待用户确认后进入编码阶段。' });
+      renderAll();
+      showNotification('PRD 生成完成，请确认后开始执行', 'info');
+    }, 1200);
+    renderAll();
+  }, 800);
+}
+
+function handleConfirmPrd(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  setBusy('btn-confirm', true);
+  setTimeout(() => {
+    task.logs.push({ kind: 'human', icon: '👤', time: now(), text: 'PRD 已确认。可点击「开始执行」触发 AI 进入编码阶段。' });
+    renderAll();
+    showNotification('PRD 确认成功，请点击「开始执行」', 'info');
+  }, 600);
+}
+
+function handleStartExecution(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  setBusy('btn-execute', true);
+  setTimeout(() => {
+    task.stage = 'implementation';
+    task.logs.push({ kind: 'system', icon: '⚡', time: now(), text: '开始执行：AI 进入无打扰编码阶段，正在基于 PRD 生成代码…' });
+    renderAll();
+    showNotification('🚀 AI 开始执行编码任务', 'success');
+  }, 900);
+}
+
+function handleNextStage(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  const prev = getStageInfo(task.stage).label;
+  advanceStage(taskId);
+  const next = getStageInfo(task.stage).label;
+  task.logs.push({ kind: 'system', icon: '➡️', time: now(), text: `阶段推进：${prev} → ${next}` });
+  renderAll();
+  showNotification(`阶段已推进至：${next}`, 'info');
+}
+
+function now() {
+  return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ============================================================
+// Render
+// ============================================================
+function renderTaskList() {
+  const container = document.getElementById('taskList');
+  container.innerHTML = tasks.map(t => `
+    <div class="task-card ${t.id === selectedId ? 'active' : ''}" onclick="selectTask('${t.id}')">
+      <div class="task-card__title">${t.title}</div>
+      <div class="task-card__meta">${stageBadge(t.stage)}</div>
+    </div>
+  `).join('');
+}
+
+function renderStateMachine(currentStage) {
+  const idx = STAGE_INDEX[currentStage] ?? 0;
+  const steps = STAGES.map((s, i) => {
+    let cls = '';
+    if (i < idx) cls = 'done-step';
+    else if (i === idx) cls = 'current';
+    return `<div class="state-step">
+      <div class="state-step__node ${cls}">${s.label}</div>
+      ${i < STAGES.length - 1 ? '<div class="state-step__arrow">›</div>' : ''}
+    </div>`;
+  }).join('');
+  return `<div class="state-machine">
+    <div class="state-machine__title">工作流阶段</div>
+    <div class="state-steps">${steps}</div>
+  </div>`;
+}
+
+function renderActionButtons(task) {
+  const s = task.stage;
+  const isLastStage = STAGE_INDEX[s] >= STAGES.length - 1;
+  let buttons = '';
+
+  // Start Task — only in backlog
+  if (s === 'backlog') {
+    buttons += `<button id="btn-start" class="btn btn--primary" onclick="handleStartTask('${task.id}')">
+      <span>▶ 开始任务</span></button>`;
+  }
+
+  // Confirm PRD — only in prd_waiting
+  if (s === 'prd_waiting') {
+    buttons += `<button id="btn-confirm" class="btn btn--confirm" onclick="handleConfirmPrd('${task.id}')">
+      <span>✓ 确认 PRD</span></button>`;
+    // ★ 开始执行 button — the MISSING button, shown when PRD is ready
+    buttons += `<button id="btn-execute" class="btn btn--execute" onclick="handleStartExecution('${task.id}')">
+      <span>⚡ 开始执行</span></button>`;
+  }
+
+  // Simulate next stage (for demo)
+  if (s !== 'backlog' && s !== 'prd_waiting' && !isLastStage) {
+    buttons += `<button class="btn btn--outline btn--sm" onclick="handleNextStage('${task.id}')">
+      <span>→ 推进阶段（演示）</span></button>`;
+  }
+
+  if (!buttons) buttons = `<span style="color:var(--text-secondary); font-size:13px;">✅ 所有阶段已完成</span>`;
+
+  return `<div>
+    <div class="action-bar__label">操作</div>
+    <div class="action-bar">${buttons}</div>
+  </div>`;
+}
+
+function renderTimeline(task) {
+  if (!task.logs.length) return '';
+  const items = [...task.logs].reverse().map(log => `
+    <div class="timeline-item">
+      <div class="timeline-dot timeline-dot--${log.kind}">${log.icon}</div>
+      <div class="timeline-content">
+        <div class="timeline-content__meta">${log.time}</div>
+        <div class="timeline-content__text">${log.text.replace(/\n/g, '<br>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</div>
+      </div>
+    </div>
+  `).join('');
+  return `<div class="timeline"><div class="timeline__title">时间线</div>${items}</div>`;
+}
+
+function renderDetail() {
+  const task = tasks.find(t => t.id === selectedId);
+  if (!task) return;
+
+  document.getElementById('headerStage').innerHTML = stageBadge(task.stage);
+
+  document.getElementById('detailPanel').innerHTML = `
+    <div class="detail__header">
+      <div class="detail__title">${task.title}</div>
+      <div class="detail__desc">${task.description}</div>
+    </div>
+    ${renderStateMachine(task.stage)}
+    ${renderActionButtons(task)}
+    ${renderTimeline(task)}
+  `;
+}
+
+function renderAll() {
+  renderTaskList();
+  renderDetail();
+}
+
+function selectTask(id) {
+  selectedId = id;
+  renderAll();
+}
+
+// Init
+renderAll();
+</script>
+</body>
+</html>

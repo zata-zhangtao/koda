@@ -12,12 +12,26 @@ export enum DevLogStateTag {
   TRANSFERRED = "TRANSFERRED",
 }
 
-/** 任务生命周期状态 */
+/** 任务生命周期状态（向后兼容） */
 export enum TaskLifecycleStatus {
   OPEN = "OPEN",
   CLOSED = "CLOSED",
   PENDING = "PENDING",
   DELETED = "DELETED",
+}
+
+/** 需求卡片工作流阶段（UI 阶段展示的唯一数据源） */
+export enum WorkflowStage {
+  BACKLOG = "backlog",
+  PRD_GENERATING = "prd_generating",
+  PRD_WAITING_CONFIRMATION = "prd_waiting_confirmation",
+  IMPLEMENTATION_IN_PROGRESS = "implementation_in_progress",
+  SELF_REVIEW_IN_PROGRESS = "self_review_in_progress",
+  TEST_IN_PROGRESS = "test_in_progress",
+  PR_PREPARING = "pr_preparing",
+  ACCEPTANCE_IN_PROGRESS = "acceptance_in_progress",
+  CHANGES_REQUESTED = "changes_requested",
+  DONE = "done",
 }
 
 /** AI 处理状态 */
@@ -39,12 +53,24 @@ export interface RunAccount {
   is_active: boolean;
 }
 
+/** Project 类型 */
+export interface Project {
+  id: string;
+  display_name: string;
+  repo_path: string;
+  description: string | null;
+  created_at: string;
+}
+
 /** Task 类型 */
 export interface Task {
   id: string;
   run_account_id: string;
+  project_id: string | null;
   task_title: string;
   lifecycle_status: TaskLifecycleStatus;
+  workflow_stage: WorkflowStage;
+  worktree_path: string | null;
   created_at: string;
   closed_at: string | null;
   log_count: number;

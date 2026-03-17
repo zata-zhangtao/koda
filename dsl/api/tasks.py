@@ -1,22 +1,25 @@
 """Task API 路由.
 
-提供任务的创建、查询和状态更新功能.
+提供任务的创建、查询、状态更新、工作流阶段管理和执行触发功能.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from dsl.models.task import Task
 from dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskResponseSchema,
+    TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
+from dsl.services.codex_runner import run_codex_task
 from dsl.services.task_service import TaskService
 from utils.database import get_db
+from utils.settings import config
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -35,15 +38,15 @@ def _get_current_run_account_id(db_session: Session) -> str:
     """
     from dsl.models.run_account import RunAccount
 
-    account = (
+    active_account = (
         db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
     )
-    if not account:
+    if not active_account:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No active run account. Please create a run account first.",
         )
-    return account.id
+    return active_account.id
 
 
 @router.get("", response_model=list[TaskResponseSchema])
@@ -59,13 +62,12 @@ def list_tasks(
         list[Task]: 任务列表，按创建时间倒序排列
     """
     run_account_id = _get_current_run_account_id(db_session)
-    tasks = TaskService.get_tasks(db_session, run_account_id)
+    task_list = TaskService.get_tasks(db_session, run_account_id)
 
-    # 添加日志数量
-    for task in tasks:
-        task.log_count = len(task.dev_logs)
+    for task_item in task_list:
+        task_item.log_count = len(task_item.dev_logs)
 
-    return tasks
+    return task_list
 
 
 @router.post("", response_model=TaskResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -74,6 +76,8 @@ def create_task(
     db_session: Annotated[Session, Depends(get_db)],
 ) -> Task:
     """创建新任务.
+
+    新任务默认 lifecycle_status=PENDING，workflow_stage=backlog.
 
     Args:
         task_create_schema: 任务创建数据
@@ -94,7 +98,7 @@ def update_task_status(
     status_update: TaskStatusUpdateSchema,
     db_session: Annotated[Session, Depends(get_db)],
 ) -> Task:
-    """更新任务状态.
+    """更新任务生命周期状态.
 
     Args:
         task_id: 任务 ID
@@ -107,14 +111,180 @@ def update_task_status(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    task = TaskService.update_task_status(db_session, task_id, status_update)
-    if not task:
+    updated_task = TaskService.update_task_status(db_session, task_id, status_update)
+    if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    task.log_count = len(task.dev_logs)
-    return task
+    updated_task.log_count = len(updated_task.dev_logs)
+    return updated_task
+
+
+@router.put("/{task_id}/stage", response_model=TaskResponseSchema)
+def update_task_stage(
+    task_id: str,
+    stage_update: TaskStageUpdateSchema,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """更新任务工作流阶段.
+
+    通用阶段更新接口，供各阶段按钮（如「确认 PRD」、「验收通过」等）使用.
+    当阶段更新为 done 时，自动将 lifecycle_status 设为 CLOSED.
+
+    Args:
+        task_id: 任务 ID
+        stage_update: 阶段更新数据
+        db_session: 数据库会话
+
+    Returns:
+        Task: 更新后的任务
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404
+    """
+    updated_task = TaskService.update_workflow_stage(db_session, task_id, stage_update)
+    if not updated_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+    updated_task.log_count = len(updated_task.dev_logs)
+    return updated_task
+
+
+@router.post("/{task_id}/execute", response_model=TaskResponseSchema)
+def execute_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """触发任务进入执行阶段并启动 codex exec 后台任务.
+
+    原子操作：
+    1. 将 workflow_stage 更新为 implementation_in_progress
+    2. 在后台异步启动 codex exec，输出实时写入 DevLog 时间线
+    3. codex 完成后自动推进至 self_review_in_progress（或失败时回退至 changes_requested）
+
+    仅允许从 prd_waiting_confirmation 或 changes_requested 阶段触发.
+
+    Args:
+        task_id: 任务 ID
+        background_tasks: FastAPI 后台任务注入
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已更新为 implementation_in_progress 的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；阶段不合法时返回 422
+    """
+    try:
+        executed_task = TaskService.execute_task(db_session, task_id)
+    except ValueError as stage_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(stage_error),
+        ) from stage_error
+
+    if not executed_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    # 收集日志文本供 Prompt 构建（在 session 关闭前读取）
+    dev_log_text_snapshot_list: list[str] = [
+        dev_log_item.text_content
+        for dev_log_item in executed_task.dev_logs
+    ]
+    task_title_snapshot_str: str = executed_task.task_title
+    run_account_id_snapshot_str: str = executed_task.run_account_id
+    worktree_path_snapshot_str: str | None = executed_task.worktree_path
+
+    # 决定 codex 工作目录：优先使用关联项目的 repo_path
+    effective_work_dir_path = config.BASE_DIR
+    if executed_task.project_id:
+        from dsl.models.project import Project
+
+        project_obj = db_session.query(Project).filter(
+            Project.id == executed_task.project_id
+        ).first()
+        if project_obj:
+            from pathlib import Path as _Path
+
+            effective_work_dir_path = _Path(project_obj.repo_path)
+
+    # 在后台异步运行 codex exec（FastAPI BackgroundTasks 原生支持 async 函数）
+    background_tasks.add_task(
+        run_codex_task,
+        task_id_str=task_id,
+        run_account_id_str=run_account_id_snapshot_str,
+        task_title_str=task_title_snapshot_str,
+        dev_log_text_list=dev_log_text_snapshot_list,
+        work_dir_path=effective_work_dir_path,
+        worktree_path_str=worktree_path_snapshot_str,
+    )
+
+    executed_task.log_count = len(executed_task.dev_logs)
+    return executed_task
+
+
+@router.post("/{task_id}/open-in-trae", status_code=status.HTTP_200_OK)
+def open_task_in_trae(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """使用 trae-cn 打开任务对应的 git worktree 目录.
+
+    需要任务已有 worktree_path（即已触发过执行），且该路径在文件系统中存在。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict: 包含打开路径的确认信息
+
+    Raises:
+        HTTPException: 任务不存在（404）、worktree 未设置（422）或路径不存在（422）
+    """
+    import subprocess
+    from pathlib import Path as _Path
+
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    if not task_obj.worktree_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Task has no worktree_path. Execute the task first.",
+        )
+
+    worktree_dir_path = _Path(task_obj.worktree_path)
+    if not worktree_dir_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
+        )
+
+    try:
+        subprocess.Popen(
+            ["trae-cn", str(worktree_dir_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="trae-cn executable not found in PATH.",
+        )
+
+    return {"opened": str(worktree_dir_path)}
 
 
 @router.patch("/{task_id}", response_model=TaskResponseSchema)
@@ -136,14 +306,14 @@ def update_task(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    task = TaskService.update_task_title(db_session, task_id, task_update_schema)
-    if not task:
+    updated_task = TaskService.update_task_title(db_session, task_id, task_update_schema)
+    if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    task.log_count = len(task.dev_logs)
-    return task
+    updated_task.log_count = len(updated_task.dev_logs)
+    return updated_task
 
 
 @router.get("/{task_id}", response_model=TaskResponseSchema)
@@ -163,11 +333,11 @@ def get_task(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    task = TaskService.get_task_by_id(db_session, task_id)
-    if not task:
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    task.log_count = len(task.dev_logs)
-    return task
+    task_obj.log_count = len(task_obj.dev_logs)
+    return task_obj

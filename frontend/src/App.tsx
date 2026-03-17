@@ -13,26 +13,19 @@ import type {
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { logApi, mediaApi, runAccountApi, taskApi } from "./api/client";
+import { logApi, mediaApi, projectApi, runAccountApi, taskApi } from "./api/client";
 import {
   AIProcessingStatus,
   DevLogStateTag,
   TaskLifecycleStatus,
+  WorkflowStage,
   type DevLog,
+  type Project,
   type RunAccount,
   type Task,
 } from "./types";
 
-type RequirementStage =
-  | "pending"
-  | "prd_generating"
-  | "prd_ready"
-  | "coding"
-  | "reviewing"
-  | "testing"
-  | "completed"
-  | "changed"
-  | "deleted";
+type RequirementStage = WorkflowStage;
 
 type TimelineKind = "ai_log" | "human_review" | "system_event";
 type WorkspaceView = "active" | "completed" | "changes";
@@ -68,10 +61,14 @@ type MutationName =
   | "create"
   | "start"
   | "confirm"
+  | "execute"
+  | "accept"
+  | "request_changes"
   | "feedback"
   | "update"
   | "complete"
   | "delete"
+  | "open_trae"
   | null;
 
 const GUEST_USER_LABEL = "Guest User";
@@ -84,12 +81,14 @@ function App() {
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
   const [allDevLogList, setAllDevLogList] = useState<DevLog[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
   const [isEditPanelOpen, setIsEditPanelOpen] = useState(false);
   const [newRequirementTitle, setNewRequirementTitle] = useState("");
   const [newRequirementDescription, setNewRequirementDescription] = useState("");
+  const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
   const [feedbackInputText, setFeedbackInputText] = useState("");
@@ -99,6 +98,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
+  const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectPath, setNewProjectPath] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
 
   useEffect(() => {
     void loadDashboardData();
@@ -177,6 +180,29 @@ function App() {
   const hasFeedbackPayload =
     Boolean(feedbackInputText.trim()) || feedbackAttachmentDraft !== null;
 
+  // 自动轮询：当选中任务处于 codex 执行中的阶段时，每 3 秒刷新一次
+  const activeExecutionStageSet = new Set<WorkflowStage>([
+    WorkflowStage.PRD_GENERATING,
+    WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    WorkflowStage.TEST_IN_PROGRESS,
+    WorkflowStage.PR_PREPARING,
+  ]);
+  const isSelectedTaskInActiveExecution =
+    selectedTaskStage !== null && activeExecutionStageSet.has(selectedTaskStage);
+
+  useEffect(() => {
+    if (!isSelectedTaskInActiveExecution) {
+      return;
+    }
+    const pollingIntervalId = window.setInterval(() => {
+      void loadDashboardData(true);
+    }, 3000);
+    return () => {
+      window.clearInterval(pollingIntervalId);
+    };
+  }, [isSelectedTaskInActiveExecution]);
+
   useEffect(() => {
     if (visibleTaskList.length === 0) {
       setSelectedTaskId(null);
@@ -204,17 +230,21 @@ function App() {
     setErrorMessage(null);
   }, [workspaceView, selectedTaskId]);
 
-  async function loadDashboardData(): Promise<void> {
-    setIsDashboardLoading(true);
+  async function loadDashboardData(silent = false): Promise<void> {
+    if (!silent) {
+      setIsDashboardLoading(true);
+    }
 
     const [
       runAccountResult,
       taskListResult,
       devLogListResult,
+      projectListResult,
     ] = await Promise.allSettled([
       runAccountApi.getCurrent(),
       taskApi.list(),
       logApi.list(),
+      projectApi.list(),
     ]);
 
     const nextRunAccount =
@@ -227,10 +257,13 @@ function App() {
       devLogListResult.status === "fulfilled"
         ? sortDevLogListByCreatedAt(devLogListResult.value)
         : [];
+    const nextProjectList =
+      projectListResult.status === "fulfilled" ? projectListResult.value : [];
 
     setCurrentRunAccount(nextRunAccount);
     setTaskList(nextTaskList);
     setAllDevLogList(nextAllDevLogList);
+    setProjectList(nextProjectList);
     setSelectedTaskId((previousSelectedTaskId) => {
       if (!previousSelectedTaskId) {
         return previousSelectedTaskId;
@@ -277,6 +310,7 @@ function App() {
     try {
       const createdTask = await taskApi.create({
         task_title: nextRequirementTitle,
+        project_id: newRequirementProjectId,
       });
 
       await logApi.create({
@@ -289,8 +323,9 @@ function App() {
       setSelectedTaskId(createdTask.id);
       setNewRequirementTitle("");
       setNewRequirementDescription("");
+      setNewRequirementProjectId(null);
       setSuccessMessage("Requirement created successfully.");
-      await loadDashboardData();
+      await loadDashboardData(true);
 
       window.setTimeout(() => {
         setIsCreatePanelOpen(false);
@@ -310,14 +345,14 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.OPEN);
+      await taskApi.updateStage(taskItem.id, WorkflowStage.PRD_GENERATING);
       await logApi.create({
         task_id: taskItem.id,
         text_content:
-          "Autonomous workflow started. Preparing PRD outline and implementation track.",
+          "任务已启动，AI 正在准备 PRD 大纲和实现路径。",
         state_tag: DevLogStateTag.OPTIMIZATION,
       });
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (startError) {
       console.error(startError);
       setErrorMessage("Failed to start task.");
@@ -332,20 +367,116 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      if (taskItem.lifecycle_status === TaskLifecycleStatus.PENDING) {
-        await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.OPEN);
-      }
-
+      await taskApi.updateStage(taskItem.id, WorkflowStage.PRD_WAITING_CONFIRMATION);
       await logApi.create({
         task_id: taskItem.id,
         text_content:
-          "PRD confirmed. Continue implementation, review, and validation based on the approved scope.",
+          "PRD 已确认。可点击「开始执行」触发 AI 进入编码阶段。",
         state_tag: DevLogStateTag.FIXED,
       });
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (confirmError) {
       console.error(confirmError);
       setErrorMessage("Failed to confirm PRD.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleStartExecution(taskItem: Task): Promise<void> {
+    setActiveMutationName("execute");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.execute(taskItem.id);
+      await logApi.create({
+        task_id: taskItem.id,
+        text_content:
+          "执行已启动，AI 进入无打扰编码阶段，正在基于 PRD 生成代码。",
+        state_tag: DevLogStateTag.OPTIMIZATION,
+      });
+      await loadDashboardData(true);
+    } catch (executeError) {
+      console.error(executeError);
+      setErrorMessage("Failed to start execution.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleAcceptTask(taskItem: Task): Promise<void> {
+    setActiveMutationName("accept");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.updateStage(taskItem.id, WorkflowStage.DONE);
+      await logApi.create({
+        task_id: taskItem.id,
+        text_content:
+          "需求验收通过，已标记为完成。",
+        state_tag: DevLogStateTag.FIXED,
+      });
+      setWorkspaceView("completed");
+      await loadDashboardData(true);
+    } catch (acceptError) {
+      console.error(acceptError);
+      setErrorMessage("Failed to accept task.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleRequestChanges(taskItem: Task): Promise<void> {
+    setActiveMutationName("request_changes");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.updateStage(taskItem.id, WorkflowStage.CHANGES_REQUESTED);
+      await logApi.create({
+        task_id: taskItem.id,
+        text_content:
+          "验收不通过，已提出修改请求。请在反馈框中补充具体问题，AI 将重新进入实现阶段。",
+        state_tag: DevLogStateTag.BUG,
+      });
+      await loadDashboardData(true);
+    } catch (requestError) {
+      console.error(requestError);
+      setErrorMessage("Failed to request changes.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleOpenInTrae(taskItem: Task): Promise<void> {
+    setActiveMutationName("open_trae");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await taskApi.openInTrae(taskItem.id);
+      setSuccessMessage(`已在 Trae 中打开：${result.opened}`);
+    } catch (openError) {
+      console.error(openError);
+      setErrorMessage("无法打开 Trae，请确认 worktree 目录已创建。");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleOpenProjectInTrae(projectId: string): Promise<void> {
+    setActiveMutationName("open_trae");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await projectApi.openInTrae(projectId);
+      setSuccessMessage(`已在 Trae 中打开：${result.opened}`);
+    } catch (openError) {
+      console.error(openError);
+      setErrorMessage("无法打开 Trae。");
     } finally {
       setActiveMutationName(null);
     }
@@ -410,7 +541,7 @@ function App() {
       setWorkspaceView("changes");
       setIsEditPanelOpen(false);
       setSuccessMessage("Requirement changes were appended to history.");
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (updateError) {
       console.error(updateError);
       setErrorMessage("Failed to update requirement.");
@@ -434,7 +565,7 @@ function App() {
       });
       setWorkspaceView("completed");
       setSuccessMessage("Requirement moved to completed.");
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (completionError) {
       console.error(completionError);
       setErrorMessage("Failed to complete requirement.");
@@ -472,7 +603,7 @@ function App() {
       });
       setWorkspaceView("changes");
       setSuccessMessage("Requirement moved to deleted history.");
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (deleteError) {
       console.error(deleteError);
       setErrorMessage("Failed to delete requirement.");
@@ -523,7 +654,7 @@ function App() {
       if (attachmentInputRef.current) {
         attachmentInputRef.current.value = "";
       }
-      await loadDashboardData();
+      await loadDashboardData(true);
     } catch (feedbackError) {
       console.error(feedbackError);
       setErrorMessage("Failed to process feedback.");
@@ -586,6 +717,49 @@ function App() {
     setErrorMessage(null);
   }
 
+  async function handleCreateProject(): Promise<void> {
+    const trimmedName = newProjectName.trim();
+    const trimmedPath = newProjectPath.trim();
+    if (!trimmedName || !trimmedPath) {
+      setErrorMessage("项目名称和仓库路径不能为空。");
+      return;
+    }
+    setActiveMutationName("create");
+    setErrorMessage(null);
+    try {
+      await projectApi.create({
+        display_name: trimmedName,
+        repo_path: trimmedPath,
+        description: newProjectDescription.trim() || null,
+      });
+      setNewProjectName("");
+      setNewProjectPath("");
+      setNewProjectDescription("");
+      setSuccessMessage(`项目「${trimmedName}」已创建。`);
+      await loadDashboardData(true);
+      window.setTimeout(() => {
+        setIsProjectPanelOpen(false);
+        setSuccessMessage(null);
+      }, 1200);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("创建项目失败，请确认路径是有效的 Git 仓库。");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleDeleteProject(projectItem: Project): Promise<void> {
+    if (!window.confirm(`删除项目「${projectItem.display_name}」？`)) return;
+    try {
+      await projectApi.delete(projectItem.id);
+      await loadDashboardData(true);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("删除项目失败。");
+    }
+  }
+
   function clearAttachmentDraft(): void {
     setFeedbackAttachmentDraft((previousAttachmentDraft) => {
       if (previousAttachmentDraft?.previewUrl) {
@@ -634,6 +808,22 @@ function App() {
               ))}
             </div>
 
+            <button
+              type="button"
+              className={joinClassNames(
+                "devflow-projects-btn",
+                isProjectPanelOpen && "devflow-projects-btn--active"
+              )}
+              onClick={() => {
+                setIsProjectPanelOpen((prev) => !prev);
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+            >
+              <CodeIcon className="devflow-icon devflow-icon--tiny" />
+              <span>项目 {projectList.length > 0 ? `(${projectList.length})` : ""}</span>
+            </button>
+
             <div className="devflow-user-chip">
               <span className="devflow-user-chip__avatar">
                 <UserIcon className="devflow-icon devflow-icon--tiny" />
@@ -649,6 +839,86 @@ function App() {
           <div className="devflow-alert devflow-alert--error">
             <RobotIcon className="devflow-icon devflow-icon--tiny" />
             <span>{errorMessage}</span>
+          </div>
+        ) : null}
+
+        {isProjectPanelOpen ? (
+          <div className="devflow-project-panel">
+            <div className="devflow-project-panel__header">
+              <h3 className="devflow-project-panel__title">
+                <CodeIcon className="devflow-icon devflow-icon--small" />
+                <span>项目管理</span>
+              </h3>
+              <button
+                type="button"
+                className="devflow-project-panel__close"
+                onClick={() => setIsProjectPanelOpen(false)}
+              >
+                <XIcon className="devflow-icon devflow-icon--small" />
+              </button>
+            </div>
+
+            <div className="devflow-project-panel__list">
+              {projectList.length === 0 ? (
+                <p className="devflow-project-panel__empty">暂无项目，请在下方添加。</p>
+              ) : (
+                projectList.map((projectItem) => (
+                  <div key={projectItem.id} className="devflow-project-item">
+                    <div className="devflow-project-item__info">
+                      <span className="devflow-project-item__name">{projectItem.display_name}</span>
+                      <span className="devflow-project-item__path">{projectItem.repo_path}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="devflow-project-item__delete"
+                      onClick={() => { void handleDeleteProject(projectItem); }}
+                    >
+                      <TrashIcon className="devflow-icon devflow-icon--tiny" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="devflow-project-panel__form">
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="项目名称"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+              />
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="本地 Git 仓库绝对路径，如 /Users/me/myrepo"
+                value={newProjectPath}
+                onChange={(e) => setNewProjectPath(e.target.value)}
+              />
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="描述（可选）"
+                value={newProjectDescription}
+                onChange={(e) => setNewProjectDescription(e.target.value)}
+              />
+              {errorMessage ? (
+                <div className="devflow-inline-message devflow-inline-message--error">
+                  <RobotIcon className="devflow-icon devflow-icon--tiny" />
+                  <span>{errorMessage}</span>
+                </div>
+              ) : null}
+              {successMessage ? (
+                <div className="devflow-inline-message devflow-inline-message--success">
+                  <CheckCircleIcon className="devflow-icon devflow-icon--tiny" />
+                  <span>{successMessage}</span>
+                </div>
+              ) : null}
+              <ActionButton
+                variant="primary"
+                busy={activeMutationName === "create"}
+                onClick={() => { void handleCreateProject(); }}
+              >
+                {activeMutationName === "create" ? "添加中..." : "添加项目"}
+              </ActionButton>
+            </div>
           </div>
         ) : null}
 
@@ -692,6 +962,23 @@ function App() {
                     setNewRequirementDescription(changeEvent.target.value)
                   }
                 />
+
+                <select
+                  className="devflow-input devflow-input--select"
+                  value={newRequirementProjectId ?? ""}
+                  onChange={(changeEvent) =>
+                    setNewRequirementProjectId(
+                      changeEvent.target.value || null
+                    )
+                  }
+                >
+                  <option value="">-- 不关联项目 --</option>
+                  {projectList.map((projectItem) => (
+                    <option key={projectItem.id} value={projectItem.id}>
+                      {projectItem.display_name}
+                    </option>
+                  ))}
+                </select>
 
                 {errorMessage ? (
                   <div className="devflow-inline-message devflow-inline-message--error">
@@ -811,8 +1098,8 @@ function App() {
                     </div>
 
                     <div className="devflow-detail__actions">
-                      {selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.OPEN &&
+                      {/* ── Backlog: 开始任务 ── */}
+                      {selectedTaskStage === WorkflowStage.BACKLOG &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
                         <ActionButton
                           variant="primary"
@@ -822,24 +1109,101 @@ function App() {
                           }}
                         >
                           <PlayIcon className="devflow-icon devflow-icon--small" />
-                          <span>Start Task</span>
+                          <span>开始任务</span>
                         </ActionButton>
                       ) : null}
 
-                      {selectedTaskStage === "prd_ready" &&
+                      {/* ── PRD 待确认: 确认 PRD + 开始执行 ── */}
+                      {selectedTaskStage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                        <>
+                          <ActionButton
+                            variant="secondary"
+                            busy={activeMutationName === "confirm"}
+                            onClick={() => {
+                              void handleConfirmPrd(selectedTask);
+                            }}
+                          >
+                            <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                            <span>确认 PRD</span>
+                          </ActionButton>
+                          <ActionButton
+                            variant="execute"
+                            busy={activeMutationName === "execute"}
+                            onClick={() => {
+                              void handleStartExecution(selectedTask);
+                            }}
+                          >
+                            <RocketIcon className="devflow-icon devflow-icon--small" />
+                            <span>开始执行</span>
+                          </ActionButton>
+                        </>
+                      ) : null}
+
+                      {/* ── Changes Requested: 重新执行 ── */}
+                      {selectedTaskStage === WorkflowStage.CHANGES_REQUESTED &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
                         <ActionButton
-                          variant="secondary"
-                          busy={activeMutationName === "confirm"}
+                          variant="execute"
+                          busy={activeMutationName === "execute"}
                           onClick={() => {
-                            void handleConfirmPrd(selectedTask);
+                            void handleStartExecution(selectedTask);
                           }}
                         >
-                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
-                          <span>Confirm PRD</span>
+                          <RocketIcon className="devflow-icon devflow-icon--small" />
+                          <span>重新执行</span>
                         </ActionButton>
                       ) : null}
 
+                      {/* ── 验收阶段: 验收通过 + 请求修改 ── */}
+                      {selectedTaskStage === WorkflowStage.ACCEPTANCE_IN_PROGRESS &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                        <>
+                          <ActionButton
+                            variant="secondary"
+                            busy={activeMutationName === "accept"}
+                            onClick={() => {
+                              void handleAcceptTask(selectedTask);
+                            }}
+                          >
+                            <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                            <span>验收通过</span>
+                          </ActionButton>
+                          <ActionButton
+                            variant="outline"
+                            busy={activeMutationName === "request_changes"}
+                            onClick={() => {
+                              void handleRequestChanges(selectedTask);
+                            }}
+                          >
+                            <EditIcon className="devflow-icon devflow-icon--small" />
+                            <span>请求修改</span>
+                          </ActionButton>
+                        </>
+                      ) : null}
+
+                      {/* ── Trae 打开：worktree 优先，无 worktree 则打开项目根 ── */}
+                      {selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      (selectedTask.worktree_path || selectedTask.project_id) ? (
+                        <ActionButton
+                          variant="outline"
+                          busy={activeMutationName === "open_trae"}
+                          onClick={() => {
+                            if (selectedTask.worktree_path) {
+                              void handleOpenInTrae(selectedTask);
+                            } else {
+                              void handleOpenProjectInTrae(selectedTask.project_id!);
+                            }
+                          }}
+                        >
+                          <CodeIcon className="devflow-icon devflow-icon--small" />
+                          <span>
+                            {selectedTask.worktree_path ? "用 Trae 打开 Worktree" : "用 Trae 打开项目"}
+                          </span>
+                        </ActionButton>
+                      ) : null}
+
+                      {/* ── 通用操作 ── */}
                       {canEditSelectedTask ? (
                         <>
                           <ActionButton
@@ -1163,7 +1527,7 @@ function CardSurface({ children, className }: CardSurfaceProps) {
 interface ActionButtonProps {
   children: ReactNode;
   onClick?: () => void;
-  variant?: "primary" | "secondary" | "outline" | "ghost";
+  variant?: "primary" | "secondary" | "execute" | "outline" | "ghost";
   className?: string;
   busy?: boolean;
   disabled?: boolean;
@@ -1371,53 +1735,10 @@ function buildTaskDocumentMarkdown(
 
 function deriveRequirementStage(
   taskItem: Task,
-  taskDevLogList: DevLog[]
+  _taskDevLogList: DevLog[]
 ): RequirementStage {
-  if (taskItem.lifecycle_status === TaskLifecycleStatus.DELETED) {
-    return "deleted";
-  }
-
-  if (hasRequirementUpdateLog(taskDevLogList)) {
-    return "changed";
-  }
-
-  if (taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED) {
-    return "completed";
-  }
-
-  if (
-    taskDevLogList.some(
-      (devLogItem) =>
-        devLogItem.ai_processing_status === AIProcessingStatus.CONFIRMED ||
-        Boolean(devLogItem.ai_generated_title) ||
-        Boolean(devLogItem.ai_analysis_text) ||
-        Boolean(devLogItem.ai_extracted_code)
-    )
-  ) {
-    return "prd_ready";
-  }
-
-  if (taskItem.lifecycle_status === TaskLifecycleStatus.PENDING) {
-    return "pending";
-  }
-
-  if (taskDevLogList.length === 0) {
-    return "prd_generating";
-  }
-
-  if (taskDevLogList.length <= 2) {
-    return "prd_ready";
-  }
-
-  if (taskDevLogList.length <= 5) {
-    return "coding";
-  }
-
-  if (taskDevLogList.length <= 8) {
-    return "reviewing";
-  }
-
-  return "testing";
+  // workflow_stage is the single source of truth — no log-count heuristics
+  return taskItem.workflow_stage;
 }
 
 function hasRequirementUpdateLog(taskDevLogList: DevLog[]): boolean {
@@ -1568,15 +1889,19 @@ function truncateText(rawText: string, maxLength: number): string {
 }
 
 function formatStageLabel(stage: RequirementStage): string {
-  if (stage === "prd_ready") {
-    return "prd ready";
-  }
-
-  if (stage === "prd_generating") {
-    return "drafting";
-  }
-
-  return stage.replace(/_/g, " ");
+  const stageLabelMap: Record<WorkflowStage, string> = {
+    [WorkflowStage.BACKLOG]: "Backlog",
+    [WorkflowStage.PRD_GENERATING]: "Drafting PRD",
+    [WorkflowStage.PRD_WAITING_CONFIRMATION]: "PRD Ready",
+    [WorkflowStage.IMPLEMENTATION_IN_PROGRESS]: "Coding",
+    [WorkflowStage.SELF_REVIEW_IN_PROGRESS]: "Self Review",
+    [WorkflowStage.TEST_IN_PROGRESS]: "Testing",
+    [WorkflowStage.PR_PREPARING]: "PR Prep",
+    [WorkflowStage.ACCEPTANCE_IN_PROGRESS]: "Acceptance",
+    [WorkflowStage.CHANGES_REQUESTED]: "Changes Requested",
+    [WorkflowStage.DONE]: "Done",
+  };
+  return stageLabelMap[stage] ?? stage.replace(/_/g, " ");
 }
 
 function formatMonthDay(rawDateText: string): string {
@@ -1960,6 +2285,34 @@ function SendIcon({ className }: SVGProps<SVGSVGElement>) {
       />
       <path
         d="M22 2l-7 20-4-9-9-4 20-7z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RocketIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
