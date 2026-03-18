@@ -10,7 +10,7 @@ import type {
   ReactNode,
   SVGProps,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { logApi, mediaApi, projectApi, runAccountApi, taskApi } from "./api/client";
@@ -105,6 +105,8 @@ function _isContinueCommand(text: string): boolean {
 
 function App() {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const aiTurnBodyElementByTurnIdRef = useRef<Record<string, HTMLDivElement | null>>({});
+  const previousExpandedTurnIdSetRef = useRef<Set<string>>(new Set());
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -221,8 +223,13 @@ function App() {
     ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
     : null;
   const conversationTurnList = groupTimelineIntoConversationTurns(selectedTimelineItemList);
-  const lastAiTurnId =
-    [...conversationTurnList].reverse().find((t) => t.kind === "ai")?.turnId ?? null;
+  const latestAiConversationTurn =
+    [...conversationTurnList].reverse().find((turnItem) => turnItem.kind === "ai") ?? null;
+  const lastAiTurnId = latestAiConversationTurn?.turnId ?? null;
+  const latestAiTurnLastItemId =
+    latestAiConversationTurn && latestAiConversationTurn.items.length > 0
+      ? latestAiConversationTurn.items[latestAiConversationTurn.items.length - 1].log.id
+      : null;
   const selectedTaskDocumentMarkdown = selectedTask
     ? buildTaskDocumentMarkdown(
         selectedTask,
@@ -307,6 +314,39 @@ function App() {
       return next;
     });
   }, [lastAiTurnId]);
+
+  useLayoutEffect(() => {
+    const previousExpandedTurnIdSet = previousExpandedTurnIdSetRef.current;
+
+    expandedTurnIdSet.forEach((expandedTurnId) => {
+      if (previousExpandedTurnIdSet.has(expandedTurnId)) {
+        return;
+      }
+
+      const expandedAiTurnBodyElement =
+        aiTurnBodyElementByTurnIdRef.current[expandedTurnId];
+      if (!expandedAiTurnBodyElement) {
+        return;
+      }
+
+      expandedAiTurnBodyElement.scrollTop = expandedAiTurnBodyElement.scrollHeight;
+    });
+
+    previousExpandedTurnIdSetRef.current = new Set(expandedTurnIdSet);
+  }, [expandedTurnIdSet]);
+
+  useLayoutEffect(() => {
+    if (!lastAiTurnId || !latestAiTurnLastItemId || !expandedTurnIdSet.has(lastAiTurnId)) {
+      return;
+    }
+
+    const latestAiTurnBodyElement = aiTurnBodyElementByTurnIdRef.current[lastAiTurnId];
+    if (!latestAiTurnBodyElement) {
+      return;
+    }
+
+    latestAiTurnBodyElement.scrollTop = latestAiTurnBodyElement.scrollHeight;
+  }, [expandedTurnIdSet, lastAiTurnId, latestAiTurnLastItemId]);
 
   // 当选中任务有 worktree 且处于 PRD 相关阶段时，轮询 PRD 文件内容
   const prdRelevantStageSet = new Set<WorkflowStage>([
@@ -1633,7 +1673,13 @@ function App() {
                               </button>
 
                               {isExpanded ? (
-                                <div className="devflow-turn-card__ai-body">
+                                <div
+                                  className="devflow-turn-card__ai-body"
+                                  ref={(aiTurnBodyElement) => {
+                                    aiTurnBodyElementByTurnIdRef.current[turn.turnId] =
+                                      aiTurnBodyElement;
+                                  }}
+                                >
                                   {turn.items.map((item) => {
                                     const imgUrl =
                                       mapMediaPathToPublicUrl(item.log.media_original_image_path) ||

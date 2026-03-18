@@ -94,8 +94,8 @@ img {
 }
 
 .devflow-shell {
-  width: min(1440px, calc(100vw - 32px));
-  margin: 0 auto;
+  width: 100%;
+  padding-inline: 16px;
 }
 
 .devflow-header {
@@ -1300,7 +1300,7 @@ img {
 
 @media (max-width: 720px) {
   .devflow-shell {
-    width: min(100vw - 24px, 1248px);
+    padding-inline: 12px;
   }
 
   .devflow-header__content,
