@@ -752,6 +752,13 @@ async def run_codex_prd(
     await asyncio.to_thread(_advance_stage_in_db, task_id_str, "prd_waiting_confirmation")
     logger.info(f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation")
 
+    # 发送邮件通知：PRD 已生成，等待用户确认
+    try:
+        from dsl.services.email_service import send_prd_ready_notification
+        await asyncio.to_thread(send_prd_ready_notification, task_id_str, task_title_str)
+    except Exception as email_error:
+        logger.warning(f"Failed to send PRD ready email for task {task_id_str[:8]}...: {email_error}")
+
 
 async def run_codex_review(
     task_id_str: str,
@@ -828,6 +835,18 @@ async def run_codex_review(
         )
         await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
         logger.info(f"Task {task_id_str[:8]}... self review requested changes.")
+
+        # 发送邮件通知：AI 自检发现阻塞性问题
+        try:
+            from dsl.services.email_service import send_task_failed_notification
+            await asyncio.to_thread(
+                send_task_failed_notification,
+                task_id_str,
+                task_title_str,
+                self_review_summary_str or "AI 自检发现阻塞性问题",
+            )
+        except Exception as email_error:
+            logger.warning(f"Failed to send changes_requested email for task {task_id_str[:8]}...: {email_error}")
         return
 
     missing_status_log_text = (

@@ -8,6 +8,7 @@ from dsl.models.run_account import RunAccount
 from dsl.models.project import Project
 from dsl.models.task import Task
 from dsl.models.dev_log import DevLog
+from dsl.models.email_settings import EmailSettings
 
 __all__ = [
     "AIProcessingStatus",
@@ -18,4 +19,5 @@ __all__ = [
     "Project",
     "Task",
     "DevLog",
+    "EmailSettings",
 ]

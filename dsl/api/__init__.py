@@ -15,6 +15,7 @@ from dsl.api.logs import router as logs_router
 from dsl.api.media import router as media_router
 from dsl.api.chronicle import router as chronicle_router
 from dsl.api.projects import router as projects_router
+from dsl.api.email_settings import router as email_settings_router
 
 __all__ = [
     "run_accounts_router",
@@ -23,4 +24,5 @@ __all__ = [
     "media_router",
     "chronicle_router",
     "projects_router",
+    "email_settings_router",
 ]

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dsl.api import (
     chronicle_router,
+    email_settings_router,
     logs_router,
     media_router,
     projects_router,
@@ -92,6 +93,7 @@ def create_application() -> FastAPI:
     application.include_router(logs_router)
     application.include_router(media_router)
     application.include_router(chronicle_router)
+    application.include_router(email_settings_router)
 
     # 挂载静态文件服务（媒体文件）
     media_path = config.MEDIA_STORAGE_PATH

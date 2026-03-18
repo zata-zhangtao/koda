@@ -4,6 +4,7 @@
  */
 
 export { ChronicleView } from "./ChronicleView";
+export { EmailSettingsModal } from "./EmailSettingsModal";
 export { InputBox } from "./InputBox";
 export { LogCard } from "./LogCard";
 export { Sidebar } from "./Sidebar";

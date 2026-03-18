@@ -14,6 +14,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { logApi, mediaApi, projectApi, runAccountApi, taskApi } from "./api/client";
+import { EmailSettingsModal } from "./components/EmailSettingsModal";
 import {
   AIProcessingStatus,
   DevLogStateTag,
@@ -134,6 +135,7 @@ function App() {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
 
   function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
     setNewRequirementTitle("");
@@ -1061,9 +1063,22 @@ function App() {
               </span>
               <span className="devflow-user-chip__label">{currentUserLabel}</span>
             </div>
+
+            <button
+              type="button"
+              className="devflow-projects-btn"
+              onClick={() => setIsEmailSettingsOpen(true)}
+              title="Email notification settings"
+            >
+              <span>📧</span>
+            </button>
           </div>
         </div>
       </header>
+
+      {isEmailSettingsOpen && (
+        <EmailSettingsModal onClose={() => setIsEmailSettingsOpen(false)} />
+      )}
 
       <main className="devflow-shell devflow-main">
         {errorMessage ? (

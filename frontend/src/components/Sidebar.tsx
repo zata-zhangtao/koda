@@ -13,6 +13,7 @@ interface SidebarProps {
   onCreateTask: (title: string) => void;
   onTaskStatusChange: (taskId: string, status: string) => void;
   reviewQueueCount: number;
+  onOpenEmailSettings: () => void;
 }
 
 export function Sidebar({
@@ -23,6 +24,7 @@ export function Sidebar({
   onCreateTask,
   onTaskStatusChange,
   reviewQueueCount,
+  onOpenEmailSettings,
 }: SidebarProps) {
   const handleCreateTask = () => {
     const title = prompt("Enter task title:");
@@ -108,6 +110,13 @@ export function Sidebar({
         {reviewQueueCount === 0 && (
           <div style={styles.emptyReview}>No pending reviews</div>
         )}
+      </div>
+
+      {/* 底部设置按钮 */}
+      <div style={styles.settingsSection}>
+        <button style={styles.settingsButton} onClick={onOpenEmailSettings} title="Email notification settings">
+          📧 Email Notifications
+        </button>
       </div>
     </aside>
   );
@@ -293,5 +302,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "13px",
     color: "#666",
     padding: "8px 0",
+  },
+  settingsSection: {
+    padding: "12px 16px",
+    borderTop: "1px solid #2d3748",
+  },
+  settingsButton: {
+    width: "100%",
+    padding: "8px 12px",
+    backgroundColor: "transparent",
+    border: "1px solid #2d3748",
+    borderRadius: "6px",
+    color: "#a0a0a0",
+    fontSize: "12px",
+    cursor: "pointer",
+    textAlign: "left" as const,
   },
 };

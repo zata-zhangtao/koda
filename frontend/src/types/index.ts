@@ -111,6 +111,31 @@ export interface TimelineEntry extends DevLog {
   has_media: boolean;
 }
 
+/** 邮件通知设置 */
+export interface EmailSettings {
+  id: number;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password_masked: string;
+  smtp_use_ssl: boolean;
+  receiver_email: string;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 邮件设置保存请求体 */
+export interface EmailSettingsUpdate {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_use_ssl: boolean;
+  receiver_email: string;
+  is_enabled: boolean;
+}
+
 /** 任务编年史 */
 export interface TaskChronicle {
   task: {

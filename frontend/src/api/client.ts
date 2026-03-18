@@ -6,6 +6,8 @@
 import type {
   CommandParseResult,
   DevLog,
+  EmailSettings,
+  EmailSettingsUpdate,
   Project,
   RunAccount,
   Task,
@@ -283,6 +285,26 @@ export const mediaApi = {
   /** 获取图片 URL */
   getImageUrl: (filename: string, isThumbnail = false) =>
     `/media/${filename}${isThumbnail ? "?thumbnail=true" : ""}`,
+};
+
+/** Email Settings API */
+export const emailSettingsApi = {
+  /** 获取邮件设置 */
+  get: () => fetchApi<EmailSettings>("/email-settings"),
+
+  /** 保存邮件设置（upsert） */
+  save: (data: EmailSettingsUpdate) =>
+    fetchApi<EmailSettings>("/email-settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /** 发送测试邮件 */
+  test: (subject?: string, body?: string) =>
+    fetchApi<{ success: boolean; message: string }>("/email-settings/test", {
+      method: "POST",
+      body: JSON.stringify({ subject, body }),
+    }),
 };
 
 /** Chronicle API */
