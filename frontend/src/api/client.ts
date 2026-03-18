@@ -96,7 +96,7 @@ export const taskApi = {
   list: () => fetchApi<Task[]>("/tasks"),
 
   /** 创建任务 */
-  create: (data: { task_title: string; project_id?: string | null }) =>
+  create: (data: { task_title: string; project_id?: string | null; requirement_brief?: string | null }) =>
     fetchApi<Task>("/tasks", {
       method: "POST",
       body: JSON.stringify(data),
@@ -129,7 +129,7 @@ export const taskApi = {
     }),
 
   /** 更新任务内容 */
-  update: (id: string, data: { task_title: string }) =>
+  update: (id: string, data: { task_title: string; requirement_brief?: string | null }) =>
     fetchApi<Task>(`/tasks/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),

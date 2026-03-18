@@ -17,6 +17,7 @@ class TaskCreateSchema(BaseModel):
     Attributes:
         task_title: 任务标题
         project_id: 关联的 Project ID（可选）
+        requirement_brief: 需求描述文本（可选）
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -25,6 +26,7 @@ class TaskCreateSchema(BaseModel):
         ..., min_length=1, max_length=200, description="任务标题"
     )
     project_id: str | None = Field(None, description="关联的 Project ID")
+    requirement_brief: str | None = Field(None, description="需求描述文本")
 
 
 class TaskStatusUpdateSchema(BaseModel):
@@ -60,6 +62,7 @@ class TaskUpdateSchema(BaseModel):
 
     Attributes:
         task_title: 更新后的任务标题
+        requirement_brief: 更新后的需求描述文本（可选）
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -67,6 +70,7 @@ class TaskUpdateSchema(BaseModel):
     task_title: str = Field(
         ..., min_length=1, max_length=200, description="更新后的任务标题"
     )
+    requirement_brief: str | None = Field(None, description="更新后的需求描述文本")
 
 
 class TaskResponseSchema(BaseModel):
@@ -94,6 +98,7 @@ class TaskResponseSchema(BaseModel):
         default=WorkflowStage.BACKLOG, description="工作流阶段"
     )
     worktree_path: str | None = Field(None, description="git worktree 绝对路径")
+    requirement_brief: str | None = Field(None, description="需求描述文本")
     created_at: datetime = Field(..., description="创建时间")
     closed_at: datetime | None = Field(None, description="关闭时间")
     log_count: int = Field(default=0, description="日志条目数量")

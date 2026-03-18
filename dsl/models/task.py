@@ -67,6 +67,10 @@ class Task(Base):
         String(500),
         nullable=True,
     )
+    requirement_brief: Mapped[str | None] = mapped_column(
+        String(5000),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,

@@ -404,6 +404,7 @@ function App() {
       const createdTask = await taskApi.create({
         task_title: nextRequirementTitle,
         project_id: newRequirementProjectId,
+        requirement_brief: nextRequirementDescription,
       });
 
       await logApi.create({
@@ -654,11 +655,10 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      if (titleChanged) {
-        await taskApi.update(selectedTask.id, {
-          task_title: nextRequirementTitle,
-        });
-      }
+      await taskApi.update(selectedTask.id, {
+        task_title: nextRequirementTitle,
+        requirement_brief: nextRequirementDescription,
+      });
 
       await logApi.create({
         task_id: selectedTask.id,
@@ -1947,6 +1947,7 @@ function deriveRequirementSnapshot(
   taskItem: Task,
   taskDevLogList: DevLog[]
 ): RequirementSnapshot {
+  // Check devlogs first for manual revisions (most recent wins)
   for (let index = taskDevLogList.length - 1; index >= 0; index -= 1) {
     const parsedRequirementChange = parseRequirementChangeLog(
       taskDevLogList[index].text_content
@@ -1961,20 +1962,17 @@ function deriveRequirementSnapshot(
     }
   }
 
-  const firstTextLog = taskDevLogList.find((devLogItem) =>
-    Boolean(cleanMarkdownPreview(devLogItem.text_content))
-  );
-
-  if (!firstTextLog) {
+  // Use requirement_brief stored directly on the task (immune to log pagination)
+  if (taskItem.requirement_brief) {
     return {
-      summary: "No requirement brief captured yet.",
+      summary: taskItem.requirement_brief,
       title: taskItem.task_title,
       changeKind: null,
     };
   }
 
   return {
-    summary: cleanMarkdownPreview(firstTextLog.text_content),
+    summary: "No requirement brief captured yet.",
     title: taskItem.task_title,
     changeKind: null,
   };
@@ -2200,7 +2198,7 @@ function cleanMarkdownPreview(rawMarkdownText: string): string {
     .replace(/^\/[a-z-]+\s+/gi, "")
     .replace(/```[\s\S]*?```/g, " code block ")
     .replace(/`/g, "")
-    .replace(/[#!>*_[\]()\-]+/g, " ")
+    .replace(/[#!>*_[\]()\-+]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

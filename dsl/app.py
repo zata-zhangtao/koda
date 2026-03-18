@@ -17,9 +17,27 @@ from dsl.api import (
     run_accounts_router,
     tasks_router,
 )
-from utils.database import Base, create_tables
+from sqlalchemy import text
+
+from utils.database import Base, create_tables, engine
 from utils.logger import logger
 from utils.settings import config
+
+
+def _run_migrations() -> None:
+    """运行增量数据库迁移，确保新列存在于旧数据库中.
+
+    使用 ALTER TABLE ... ADD COLUMN IF NOT EXISTS（SQLite 3.37.0+）或
+    捕获异常的方式安全地添加新列。
+    """
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN requirement_brief VARCHAR(5000)"))
+            conn.commit()
+            logger.info("Migration: added requirement_brief column to tasks")
+        except Exception:
+            # 列已存在时数据库会抛出异常，安全忽略
+            pass
 
 
 @asynccontextmanager
@@ -36,6 +54,7 @@ async def lifespan(app: FastAPI):
     """
     # 启动时创建表
     create_tables(Base)
+    _run_migrations()
     logger.info("DSL tables initialized")
 
     yield

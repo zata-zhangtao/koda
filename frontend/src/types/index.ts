@@ -71,6 +71,7 @@ export interface Task {
   lifecycle_status: TaskLifecycleStatus;
   workflow_stage: WorkflowStage;
   worktree_path: string | null;
+  requirement_brief: string | null;
   created_at: string;
   closed_at: string | null;
   log_count: number;

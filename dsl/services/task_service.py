@@ -46,6 +46,7 @@ class TaskService:
             lifecycle_status=TaskLifecycleStatus.PENDING,
             workflow_stage=WorkflowStage.BACKLOG,
             project_id=task_create_schema.project_id,
+            requirement_brief=task_create_schema.requirement_brief,
         )
 
         db_session.add(new_task)
@@ -334,6 +335,8 @@ class TaskService:
             return None
 
         task_obj.task_title = task_update_schema.task_title
+        if task_update_schema.requirement_brief is not None:
+            task_obj.requirement_brief = task_update_schema.requirement_brief
         db_session.commit()
         db_session.refresh(task_obj)
 
