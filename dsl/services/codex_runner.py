@@ -639,19 +639,31 @@ def _run_logged_codex_conflict_resolution(
     )
     _append_text_to_task_log(task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}")
 
-    completed_process = subprocess.run(
-        [
-            codex_executable_path_str,
-            "exec",
-            "--dangerously-bypass-approvals-and-sandbox",
-            codex_prompt_text_str,
-        ],
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    _CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
+
+    try:
+        completed_process = subprocess.run(
+            [
+                codex_executable_path_str,
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                codex_prompt_text_str,
+            ],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        timeout_text = (
+            f"❌ Codex conflict resolution ({operation_kind_str}) timed out after "
+            f"{_CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS}s — aborting {operation_kind_str}."
+        )
+        _append_text_to_task_log(task_log_path, timeout_text)
+        _write_log_to_db(task_id_str, run_account_id_str, timeout_text, "BUG")
+        return None
 
     command_output_parts = [
         text_part.strip()
