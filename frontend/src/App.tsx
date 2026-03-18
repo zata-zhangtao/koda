@@ -220,8 +220,14 @@ function App() {
         ? completedTaskList
         : changedTaskList;
   const visibleTaskIds = visibleTaskList.map((taskItem) => taskItem.id).join(",");
+  // Primary: find in current workspace view.
+  // Fallback: find in full task list so the timeline never disappears when a task
+  // transitions to a different workspace view (e.g. CLOSED → completed tab).
   const selectedTask =
-    visibleTaskList.find((taskItem) => taskItem.id === selectedTaskId) ?? null;
+    visibleTaskList.find((taskItem) => taskItem.id === selectedTaskId) ??
+    (selectedTaskId
+      ? taskList.find((taskItem) => taskItem.id === selectedTaskId) ?? null
+      : null);
   const selectedTaskDevLogs = selectedTask
     ? devLogsByTaskId[selectedTask.id] ?? []
     : [];
@@ -313,6 +319,23 @@ function App() {
       return visibleTaskList[0].id;
     });
   }, [workspaceView, visibleTaskIds, visibleTaskList]);
+
+  // Auto-switch workspace view when the selected task moves out of the current view
+  // (e.g. task completes its git ops and lifecycle_status becomes CLOSED while the
+  // user is still on the "active" tab).
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    if (visibleTaskIds.includes(selectedTaskId)) return;
+
+    const missingTask = taskList.find((t) => t.id === selectedTaskId);
+    if (!missingTask) return;
+
+    if (missingTask.lifecycle_status === TaskLifecycleStatus.CLOSED) {
+      setWorkspaceView("completed");
+    } else if (missingTask.lifecycle_status === TaskLifecycleStatus.DELETED) {
+      setWorkspaceView("changes");
+    }
+  }, [selectedTaskId, visibleTaskIds, taskList]);
 
   useEffect(() => {
     setIsCreatePanelOpen(false);
