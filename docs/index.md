@@ -1,25 +1,25 @@
-# Koda 文档
+# Koda 项目文档
 
 ## 项目目标
 
-Koda 当前以 **DevStream Log (DSL)** 为核心：它把开发过程中的任务、日志、媒体附件和导出能力整合为一个低摩擦记录系统。仓库同时保留了一组可复用的 AI 工具模块，方便后续接入模型配置、分析流程和自动化脚本。
+Koda 当前的真实主线不是“通用 Python 模板”，而是一套围绕 **需求卡片、开发日志和 AI 自动化执行** 搭建的 DevStream Log 平台。
 
-这套文档的目标有两个：
+仓库已经落地的能力可以概括为三件事：
 
-- 让新开发者可以在本地快速启动 DSL 前后端。
-- 把仓库内已经验证过的自动化实践固化下来，尤其是如何从脚本调用 `codex` 并实时观察输出。
-- 把产品目标路线沉淀成可讨论、可迭代的文档，而不是只停留在口头描述。
+- 把需求拆成 `Task`，并用 `DevLog` 持续记录上下文、反馈、附件和 AI 输出。
+- 让 FastAPI 后端在任务启动或执行时调起 `codex exec`，自动生成 PRD 或代码实现。
+- 用 React 前端把任务状态、对话时间线、PRD 内容和项目入口组织成一个单机开发工作台。
 
 ## 核心特性
 
-- **DSL Web 应用**：FastAPI 后端配合 React + Vite 前端，面向开发日志采集、任务管理和导出场景。
-- **结构化数据模型**：`RunAccount`、`Task`、`DevLog` 三个核心实体构成任务和日志主链路。
-- **媒体处理能力**：支持图片上传、缩略图生成和静态文件访问。
-- **AI 工具模块**：`ai_agent/utils/model_loader.py` 负责加载模型清单与环境变量配置。
-- **Codex 自动化实践**：仓库文档中补充了 `codex exec` 的非交互调用方式与脚本监听模式。
-- **自动化研发路线**：文档已收录“技术路线 20260317”，定义从需求卡片到 PR、验收和反馈回环的目标流程。
+- **需求卡片工作流**：`backlog`、`prd_generating`、`implementation_in_progress` 等阶段已经进入数据模型与前端展示。
+- **任务时间线**：文本日志、图片附件、状态标记和 AI 输出统一归档到同一条需求历史里。
+- **项目绑定与 Worktree**：任务可关联本地 Git 仓库，并在启动时创建独立 worktree。
+- **Codex 自动化**：后端通过 `dsl/services/codex_runner.py` 构造 Prompt、调用 `codex exec`、写回日志并推进阶段。
+- **媒体与导出**：支持图片上传、缩略图生成、Markdown 编年史导出。
+- **AI 模型配置工具**：`ai_agent/` 中保留了可复用的模型注册与凭据解析能力。
 
-## 快速安装
+## Quick Install
 
 ```bash
 uv sync
@@ -28,21 +28,67 @@ cd ..
 just dsl-dev
 ```
 
-启动后可访问：
+启动后访问：
 
 - 前端：`http://localhost:5173`
-- 后端健康检查：`http://localhost:8000/health`
+- 后端：`http://localhost:8000`
+- 健康检查：`http://localhost:8000/health`
 
-## 阅读路径
+## 代码资产盘点
 
-- 首次接手项目：先看[快速开始](getting-started.md)
-- 需要理解运行链路：看[系统设计](architecture/system-design.md)
-- 需要理解产品目标流程：看[技术路线 20260317](architecture/technical-route-20260317.md)
-- 需要调用 Codex CLI：看[Codex 脚本调用](guides/codex-cli-automation.md)
-- 需要查 Python 对象签名：看[API 参考](api/references.md)
+### 入口点
+
+- `main.py`：后端启动入口，调用 `uvicorn.run("dsl.app:app", ...)`
+- `dsl/app.py`：FastAPI 应用工厂，负责生命周期、路由注册与媒体挂载
+- `frontend/src/main.tsx`：前端挂载入口
+- `justfile`：统一命令入口，已包含 `docs-serve`、`docs-build`、`dsl-dev`、`run`
+
+### 核心逻辑
+
+- `dsl/api/`：HTTP 路由层，按 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 拆分
+- `dsl/services/`：任务编排、日志解析、媒体存储、编年史导出、Codex 自动化
+- `frontend/src/App.tsx`：需求工作台主界面，负责任务列表、阶段按钮、轮询与 PRD 展示
+- `utils/`：配置、日志、数据库连接等底座能力
+
+### 数据层
+
+- ORM 模型：`dsl/models/project.py`、`dsl/models/task.py`、`dsl/models/dev_log.py`、`dsl/models/run_account.py`
+- Pydantic Schema：`dsl/schemas/`
+- 数据库接入：`utils/database.py`
+- 默认数据库：`data/dsl.db`
+
+### AI 资产
+
+- `dsl/services/codex_runner.py`：Prompt 构造、`codex exec` 调用、实时日志回写、阶段推进
+- `ai_agent/utils/model_loader.py`：模型配置读取与聊天模型实例化
+- `ai_agent/utils/models.json`：提供商与模型注册表
+- `ai_agent/.env.example`：AI 服务凭据示例
+
+### 配置文件
+
+- `pyproject.toml`：Python 依赖与开发依赖
+- `utils/settings.py`：运行时配置与路径
+- `frontend/vite.config.ts`：前端端口与代理
+- `mkdocs.yml`：文档站点导航与插件配置
+
+## 当前落地范围
+
+需要明确区分“已实现”和“路线图”：
+
+- 已实现的自动化主链路是：创建任务、生成 PRD、确认 PRD、触发编码、写回执行日志。
+- `WorkflowStage` 中的 `test_in_progress`、`pr_preparing`、`acceptance_in_progress` 已进入枚举与前端显示，但当前仓库还没有完整自动推进逻辑。
+- `ai_agent/` 当前是工具库，不是 DSL 请求链路中的主处理器。
+
+## 推荐阅读路径
+
+- 第一次接手项目：先看[快速开始](getting-started.md)
+- 想理解真实模块边界：看[系统设计](architecture/system-design.md)
+- 想改配置或端口：看[配置说明](guides/configuration.md)
+- 想看 Codex 是怎么接进任务流的：看[Codex 自动化](guides/codex-cli-automation.md)
+- 想核对对象签名：看[API 参考](api/references.md)
 
 ## 文档维护约定
 
-- 业务逻辑、函数签名或配置发生变化时，要同步更新 `docs/` 和 `mkdocs.yml`。
-- 本仓库使用 MkDocs Material，预览命令是 `just docs-serve`。
-- 提交前至少执行一次 `just docs-build`，确保站点可以在严格模式下构建通过。
+- 业务逻辑、函数签名、环境变量或工作流阶段变化时，必须同步更新 `docs/` 与 `mkdocs.yml`。
+- 文档预览命令是 `just docs-serve`。
+- 提交前至少执行一次 `just docs-build`，确保站点在严格模式下构建通过。

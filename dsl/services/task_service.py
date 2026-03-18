@@ -193,10 +193,11 @@ class TaskService:
         if not task_obj:
             return None
 
-        if task_obj.workflow_stage != WorkflowStage.BACKLOG:
+        allowed_start_stages = {WorkflowStage.BACKLOG, WorkflowStage.PRD_GENERATING}
+        if task_obj.workflow_stage not in allowed_start_stages:
             raise ValueError(
                 f"Task {task_id[:8]}... cannot start from stage "
-                f"'{task_obj.workflow_stage.value}'. Only backlog tasks can be started."
+                f"'{task_obj.workflow_stage.value}'. Only backlog or prd_generating tasks can be restarted."
             )
 
         task_obj.workflow_stage = WorkflowStage.PRD_GENERATING

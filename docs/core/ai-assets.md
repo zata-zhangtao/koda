@@ -1,46 +1,75 @@
 # AI 资产
 
-## 当前已存在的 AI 相关资产
+## 总览
 
-仓库里已经有一组独立于 DSL 主流程的 AI 工具文件，主要位于 `ai_agent/`：
+这个仓库里的 AI 相关资产分成两层：
 
-- `ai_agent/utils/model_loader.py`
-- `ai_agent/utils/models.json`
-- `ai_agent/.env.example`
+- **主业务链路中的自动化能力**：围绕任务卡片调用 `codex exec`
+- **旁路工具能力**：围绕模型注册表、凭据解析和 LangChain 模型实例化
 
-它们的职责并不是直接提供一个完整 AI Agent，而是为后续接入模型能力提供基础设施。
+两者都与 AI 有关，但职责不同，不能混为一谈。
 
-## 模型配置加载
+## 已识别 AI 资产
 
-`ai_agent/utils/model_loader.py` 负责三件事：
+| 位置 | 类型 | 作用 |
+| --- | --- | --- |
+| `dsl/services/codex_runner.py` | 自动化执行器 | 构造 PRD Prompt 与实现 Prompt，调用 `codex exec` |
+| `dsl/models/enums.py` | 工作流状态 | 定义 `WorkflowStage` 与 `AIProcessingStatus` |
+| `ai_agent/utils/model_loader.py` | 工具库 | 读取模型配置并创建聊天模型 |
+| `ai_agent/utils/models.json` | 模型注册表 | 声明提供商、模型类别与基础 URL |
+| `ai_agent/.env.example` | 配置样例 | 提供 DashScope、OpenRouter 等密钥占位项 |
 
-- 读取 `models.json` 中定义的提供商和模型元数据
-- 从环境变量中解析 API Key
-- 根据模型名推测上游提供商，并实例化 LangChain 聊天模型
+## 任务流中的 AI 能力
 
-这部分适合被更上层的 Agent、工作流或测试脚本复用。
+### PRD 生成
 
-## 环境变量
+`run_codex_prd` 会把任务标题、最近日志和固定 PRD 章节要求拼成 Prompt，再让 Codex 在 worktree 中写出 `tasks/*-prd-*.md`。
 
-`ai_agent/.env.example` 当前列出了外部服务密钥的占位变量。真实密钥不应提交到仓库，而应放在本地 `.env` 或安全的密钥管理系统中。
+### 编码执行
 
-如果你后续新增提供商，建议同时更新：
+`run_codex_task` 会把任务标题、历史日志和 worktree 路径拼成实现 Prompt，要求 Codex 在现有项目结构中完成改动，并把结果实时写回 `DevLog`。
 
-1. `ai_agent/utils/models.json`
-2. `.env.example`
-3. 本页文档
+### AI 字段预留
+
+`DevLog` 模型中已经包含以下 AI 相关字段：
+
+- `ai_processing_status`
+- `ai_generated_title`
+- `ai_analysis_text`
+- `ai_extracted_code`
+- `ai_confidence_score`
+
+这些字段说明项目已经为图片解析、AI 校正和后续多模型工作流预留了数据位，但目前主工作流仍以 Codex 文本执行为主。
+
+## `ai_agent/` 工具层
+
+`ai_agent/utils/model_loader.py` 的定位更像可复用工具模块，而不是 DSL 主请求链路的一部分。它主要完成：
+
+- 读取 `models.json`
+- 解析 `api_key_env` 或默认环境变量
+- 根据模型名推断提供商
+- 创建 `ChatOpenAI` 或 `ChatAnthropic` 等 LangChain 模型实例
+
+当前 `models.json` 中已声明的提供商包括：
+
+- `dashscope`
+- `openrouter`
+- `vectorengine`
+- `azhexing`
+- `redbox`
 
 ## 当前缺口
 
-这次文档扫描里，没有发现已经正式收敛到仓库主线的以下资产：
+以下 AI 资产在仓库中还没有形成稳定工程约定：
 
-- 统一的 Prompt 目录
-- Golden dataset 或自动化评测脚本
-- 面向生产环境的模型路由策略文档
+- 独立的 Prompt 文件目录
+- Golden dataset
+- 自动化评测脚本
+- 面向生产环境的模型路由与回退策略
+- 自动化测试代理、PR 代理、验收代理
 
-因此后续如果开始引入完整 AI 流程，建议新增两类页面：
+## 维护建议
 
-- Prompt 管理
-- Evaluation 与回归验证
-
-当前文档先记录已经存在且可复用的基础设施，避免把尚未落地的 AI 流程写成既定事实。
+- 新增 AI 提供商时，同时更新 `models.json`、`.env.example` 和文档。
+- 修改 Prompt 时，优先同步更新[Prompt 管理](prompt-management.md)。
+- 新增 AI 工作流前，先明确它属于“业务主链路”还是“旁路工具层”，避免职责混乱。

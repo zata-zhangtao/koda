@@ -2,52 +2,107 @@
 
 ## 总览
 
-DSL 当前是一套典型的前后端分离应用：
+当前 DSL 是一个前后端分离的单机工作台：
 
-- `frontend/`：React + Vite 前端
-- `main.py`：后端启动入口
-- `dsl/`：FastAPI 路由、模型、服务层
-- `utils/`：日志、配置、数据库等通用底座
+- `frontend/` 提供需求卡片与时间线界面
+- `dsl/` 提供 FastAPI 路由、服务层与 ORM 模型
+- `utils/` 提供配置、数据库和日志底座
+- `ai_agent/` 提供与主业务链路松耦合的模型配置工具
 
-## 后端入口
+## 后端结构
 
-后端启动链路如下：
+### 启动链路
 
 1. `main.py` 调用 `uvicorn.run("dsl.app:app", ...)`
-2. `dsl.app` 创建 FastAPI 应用并注册路由
-3. `lifespan` 在启动时调用 `create_tables(Base)` 初始化表结构
+2. `dsl.app.create_application()` 创建 FastAPI 应用
+3. `lifespan` 在启动时调用 `create_tables(Base)`
+4. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
+5. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
-这意味着本地首次启动时，SQLite 表会自动创建，不需要手工跑迁移。
+### 路由与服务分工
 
-## 路由分层
+- `dsl/api/`：负责参数校验、依赖注入、HTTP 异常与状态码
+- `dsl/services/`：负责业务规则与状态推进
+- `dsl/models/`：定义数据库实体
+- `dsl/schemas/`：定义请求与响应模型
 
-当前后端接口分为五组：
+新增后端功能时，推荐保持下面的修改顺序：
 
-- `run_accounts`：运行账户管理
-- `tasks`：任务生命周期管理
-- `logs`：开发日志 CRUD 与命令解析
-- `media`：图片和附件上传
-- `chronicle`：时间线、任务编年史与 Markdown 导出
+1. 先定义或调整 Pydantic Schema
+2. 在 `dsl/services/` 实现业务规则
+3. 在 `dsl/api/` 暴露路由
+4. 在前端 `api/client.ts` 对接接口
+5. 更新文档并执行验证
 
-这一层主要负责 HTTP 参数解析、状态码和异常翻译，业务逻辑继续下沉到 `dsl/services/`。
+## 前端结构
+
+前端主入口集中在 `frontend/src/App.tsx`，它承担了三个关键职责：
+
+- 拉取 `RunAccount`、`Task`、`DevLog`、`Project` 四类核心数据
+- 根据 `workflow_stage` 渲染按钮、阶段标签与 PRD 面板
+- 在 PRD 生成或编码执行阶段每秒轮询一次后端，实时刷新时间线
+
+除 `App.tsx` 外，以下文件是主要协作点：
+
+- `frontend/src/api/client.ts`：所有 HTTP 请求入口
+- `frontend/src/types/index.ts`：后端数据结构的 TypeScript 映射
+- `frontend/src/components/`：时间线、侧边栏、输入框等局部视图
+
+## 当前工作流实现情况
+
+### 已落地的阶段推进
+
+项目已经具备以下链路：
+
+1. 创建任务，默认进入 `backlog`
+2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
+3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后推进到 `prd_waiting_confirmation`
+4. 点击“开始执行”，后端进入 `implementation_in_progress`
+5. `run_codex_task` 调起 `codex exec`，成功后推进到 `self_review_in_progress`
+
+### 已建模但尚未自动化闭环的阶段
+
+以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示，但当前仓库尚未完整实现自动推进器：
+
+- `test_in_progress`
+- `pr_preparing`
+- `acceptance_in_progress`
+- `changes_requested` 到后续更细粒度阶段的闭环
+
+这部分要理解为“产品路线已经确定，自动化编排还在建设中”。
 
 ## 数据与文件
 
 - SQLite 数据库：`data/dsl.db`
-- 原图目录：`data/media/original`
-- 缩略图目录：`data/media/thumbnail`
+- 原图与附件：`data/media/original`
+- 缩略图：`data/media/thumbnail`
 - 应用日志：`logs/app.log`
+- 任务实时输出：`/tmp/koda-<task短ID>.log`
 
-开发时如果你看到接口返回成功但页面没有渲染媒体，通常先检查 `StaticFiles` 挂载的目录里是否已经生成文件。
+如果出现“数据库有记录但界面没刷新”的情况，优先检查：
 
-## 前端协作方式
+- 当前任务是否处于前端会自动轮询的阶段
+- API 是否返回了预期的 `workflow_stage`
+- `DevLog` 是否真正写入了当前任务
 
-前端默认运行在 `5173` 端口，后端在 `8000` 端口。`dsl.app` 已内置本地开发需要的 CORS 配置：
+## 开发建议
 
-- `http://localhost:5173`
-- `http://127.0.0.1:5173`
+### 改任务流时
 
-如果你新增了前端调试域名，记得同步更新 CORS 配置与文档。
+- 把 `workflow_stage` 视为唯一事实来源
+- 后端和前端要同时更新 `WorkflowStage` 相关逻辑
+- 文档中要同步说明哪些阶段已自动化，哪些只是占位
+
+### 改媒体上传时
+
+- 优先在 `dsl/services/media_service.py` 保持文件路径策略一致
+- 任何路径字段变更都要同步更新文档与前端展示逻辑
+
+### 改 AI 自动化时
+
+- 先看 `dsl/services/codex_runner.py`
+- 明确是改 PRD Prompt 还是实现 Prompt
+- 注意日志写回、阶段推进和 `/tmp` 实时日志文件三者必须保持一致
 
 ## 推荐开发流程
 
@@ -58,7 +113,7 @@ cd ..
 just dsl-dev
 ```
 
-当你只调后端时，可以简化为：
+只调后端时可以简化为：
 
 ```bash
 just setup-data

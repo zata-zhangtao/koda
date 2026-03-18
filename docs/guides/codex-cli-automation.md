@@ -1,124 +1,132 @@
-# Codex 脚本调用
+# Codex 自动化
 
-## 结论
+## 总览
 
-可以。当前开发机已经在 **2026-03-17** 通过 `codex --help` 与 `codex exec --help` 验证：`codex` CLI 提供了适合脚本调用的非交互子命令 `codex exec`。
+这个仓库不是“仅仅支持手动调用 Codex”，而是已经把 `codex exec` 接进了任务生命周期。
 
-对自动化场景，最实用的组合是：
+真实调用入口有两个：
 
-- `codex exec`：一次性执行提示词
-- `--json`：把事件流以 JSONL 形式写到标准输出
-- `-C <dir>`：指定工作目录
-- `-o <file>`：把最后一条消息单独写入文件
+- `dsl/api/tasks.py` 的 `start_task` 会在后台触发 `run_codex_prd`
+- `dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
 
-## 推荐调用方式
+对应的核心实现位于 `dsl/services/codex_runner.py`。
 
-最小命令如下：
+## 当前实现方式
 
-```bash
-codex exec --json -C /path/to/repo "分析这个项目的结构"
-```
+### PRD 生成链路
 
-如果提示词很长，可以通过标准输入传入：
+1. 前端点击“开始任务”
+2. 后端将任务推进到 `prd_generating`
+3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree
+4. `run_codex_prd` 组装 PRD Prompt
+5. 后端调用 `codex exec`
+6. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
+7. 成功后任务推进到 `prd_waiting_confirmation`
 
-```bash
-cat prompt.txt | codex exec --json -C /path/to/repo -
-```
+### 编码执行链路
 
-这里的 `-` 表示从 `stdin` 读取提示词，而不是把 `-` 当作普通字符串。
+1. 前端点击“开始执行”
+2. 后端将任务推进到 `implementation_in_progress`
+3. `run_codex_task` 组装实现 Prompt
+4. 后端调用 `codex exec`
+5. 输出继续实时写入 `DevLog`
+6. 成功后任务推进到 `self_review_in_progress`
 
-## 为什么推荐 `--json`
+## Prompt 来源
 
-`--json` 让脚本可以按行处理 Codex 输出，而不是把整段终端文本当成不可解析的字符流。常见用途包括：
+### PRD Prompt
 
-- 实时打印代理事件
-- 把每一行 JSON 追加到日志文件
-- 只提取某些事件类型做二次处理
-- 在任务结束后根据退出码判断成功或失败
+由 `run_codex_prd` 直接在代码中拼接，输入包括：
 
-## Python 监听示例
+- 任务标题
+- 最近几条任务日志
+- 当前 worktree 路径
+- 生成 PRD 的固定章节规范
 
-下面是一个最小可用的包装器。它会启动 `codex exec`，实时读取 `stdout`，尝试按 JSON 解析，并把完整事件流保存到日志文件。
+它会要求 Codex 真正在 `tasks/` 目录中写出 `*-prd-*.md` 文件，而不是只把内容打印到终端。
 
-```python
-from __future__ import annotations
+### 实现 Prompt
 
-import json
-import subprocess
-from pathlib import Path
+由 `build_codex_prompt` 构造，输入包括：
 
+- 任务标题
+- 最近最多 10 条历史日志
+- 可选的 worktree 路径
 
-def run_codex_exec(prompt_text: str, workspace_dir: str) -> int:
-    """运行 codex exec 并实时监听输出。"""
+当前 Prompt 会显式要求：
 
-    logs_dir_path = Path("logs")
-    logs_dir_path.mkdir(parents=True, exist_ok=True)
-    jsonl_log_path = logs_dir_path / "codex-exec.jsonl"
+- 在现有代码风格内修改
+- Python 保持 Google Style Docstring
+- 文件读写显式使用 `encoding="utf-8"`
 
-    codex_process = subprocess.Popen(
-        [
-            "codex",
-            "exec",
-            "--json",
-            "-C",
-            workspace_dir,
-            prompt_text,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        bufsize=1,
-    )
+## 实际调用特征
 
-    assert codex_process.stdout is not None
-    assert codex_process.stderr is not None
-
-    with jsonl_log_path.open("a", encoding="utf-8") as log_file:
-        for stdout_line in codex_process.stdout:
-            stripped_stdout_line = stdout_line.rstrip("\n")
-            print(stripped_stdout_line)
-            log_file.write(stripped_stdout_line + "\n")
-
-            try:
-                codex_event_obj = json.loads(stripped_stdout_line)
-            except json.JSONDecodeError:
-                continue
-
-            event_type = codex_event_obj.get("type")
-            if event_type:
-                print(f"[event] {event_type}")
-
-    stderr_text = codex_process.stderr.read()
-    if stderr_text:
-        print(stderr_text)
-
-    codex_process.wait()
-    return codex_process.returncode
-```
-
-## 只拿最终答案
-
-如果你不关心中间事件，只想保留最终回答，可以额外使用 `-o`：
+当前仓库中的调用并没有使用 `--json` 事件流，而是选择了更直接的标准输出监听方式：
 
 ```bash
-codex exec --json -o last_message.txt -C /path/to/repo "帮我总结这个仓库"
+codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"
 ```
 
-这样做的好处是：
+实现细节如下：
 
-- `stdout` 继续保留完整事件流，方便调试
-- `last_message.txt` 直接保存最终消息，方便后续脚本消费
+- `cwd` 由 Python `asyncio.create_subprocess_exec` 指定为项目根目录或 worktree
+- `stderr` 被合并到 `stdout`
+- 输出按行读取
+- 每积累 5 行，或等待 1.5 秒，就批量写入一条 `DevLog`
 
-## 实践建议
+## 日志与可观测性
 
-- 逐行读取 `stdout`，不要等进程退出后一次性读取。
-- 对日志文件显式使用 `encoding="utf-8"`。
-- 依赖 `returncode` 判断任务是否成功，而不是仅靠有没有文本输出。
-- 事件 JSON 的字段结构可能随 CLI 版本演进，解析时优先只依赖你真正用到的字段。
+### 数据库时间线
 
-## 适用边界
+Codex 的输出不是单独存放在某个审计表中，而是直接写回 `DevLog` 时间线。这意味着前端可以把 AI 执行过程当成普通日志流来展示。
 
-`codex exec` 适合“一次发起任务，持续看输出，结束后拿结果”的模式。
+### 本地日志文件
 
-如果你需要的是更长期、协议化的集成，而不是一次性任务执行，可以进一步研究 CLI 自带的 `codex mcp-server`。这一页先聚焦已经验证可用、落地成本最低的 `exec` 模式。
+每个任务还会生成一个独立的本地日志文件：
+
+```text
+/tmp/koda-<task短ID>.log
+```
+
+你可以通过后端接口 `POST /api/tasks/{task_id}/open-terminal` 在 macOS 上打开一个新的 Terminal 窗口执行 `tail -f`。
+
+### PRD 文件定位
+
+后端读取 PRD 内容时，会在任务的 worktree 中查找：
+
+```text
+tasks/*-prd-*.md
+```
+
+并选择按名称逆序排序后的最新文件返回给前端。
+
+## 故障处理
+
+### 未安装 `codex`
+
+如果开发机找不到 `codex` 可执行文件：
+
+- 后端会写入一条 `BUG` 类型的 DevLog
+- 任务阶段会回退到 `changes_requested`
+
+### PRD 重新生成
+
+`run_codex_prd` 在执行前会清理 worktree `tasks/` 下旧的 `*-prd-*.md` 文件，避免前端读取到历史版本。
+
+### Worktree 选择优先级
+
+Codex 的工作目录选择顺序如下：
+
+1. 任务已有 `worktree_path`
+2. 任务绑定的 `Project.repo_path`
+3. Koda 仓库根目录
+
+## 当前边界
+
+当前实现已经把 Codex 接进任务编排，但还不是完整代理平台：
+
+- 没有使用结构化 JSON 事件流
+- 还没有把测试、PR 创建、验收代理自动串起来
+- Prompt 仍然写死在 Python 字符串中，没有独立版本管理
+
+如果你打算继续扩展这一层，建议先看[Prompt 管理](../core/prompt-management.md)和[系统设计](../architecture/system-design.md)。

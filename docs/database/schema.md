@@ -2,18 +2,20 @@
 
 ## 总览
 
-DSL 的数据主链路围绕三个实体展开：
+当前数据库围绕四个核心实体组织：
 
-- `RunAccount`：标识当前运行环境与开发者上下文
-- `Task`：聚合同一工作主题下的日志
-- `DevLog`：记录文本、媒体路径与 AI 解析结果
+- `RunAccount`：谁在当前机器上运行 DSL
+- `Project`：可被任务绑定的本地 Git 仓库
+- `Task`：需求卡片与工作流阶段
+- `DevLog`：任务时间线中的文本、附件与 AI 结果
 
 ## 实体关系图
 
 ```mermaid
 erDiagram
     RUN_ACCOUNT ||--o{ TASK : owns
-    RUN_ACCOUNT ||--o{ DEV_LOG : creates
+    RUN_ACCOUNT ||--o{ DEV_LOG : writes
+    PROJECT ||--o{ TASK : scopes
     TASK ||--o{ DEV_LOG : contains
 
     RUN_ACCOUNT {
@@ -26,11 +28,22 @@ erDiagram
         bool is_active
     }
 
+    PROJECT {
+        string id PK
+        string display_name
+        string repo_path
+        text description
+        datetime created_at
+    }
+
     TASK {
         string id PK
         string run_account_id FK
+        string project_id FK
         string task_title
         string lifecycle_status
+        string workflow_stage
+        string worktree_path
         datetime created_at
         datetime closed_at
     }
@@ -56,39 +69,78 @@ erDiagram
 
 ### RunAccount
 
-`RunAccount` 是 DSL 的上下文锚点。它记录当前是谁、在哪个系统环境里工作，以及当前 Git 分支是什么。绝大多数任务和日志查询都会先定位当前活跃账户。
+`RunAccount` 是整条时间线的运行环境锚点。系统会根据“当前活跃账户”过滤任务和日志。
 
 关键字段：
 
-- `id`：UUID 主键
-- `account_display_name`：用于界面展示
-- `is_active`：标记当前是否为活跃账户
+| 字段 | 说明 |
+| --- | --- |
+| `id` | UUID 主键 |
+| `account_display_name` | 用于前端展示的名称 |
+| `user_name` | 本机用户名 |
+| `environment_os` | 操作系统 |
+| `git_branch_name` | 当前分支信息 |
+| `is_active` | 是否为当前活跃账户 |
+
+### Project
+
+`Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `display_name` | 项目显示名称 |
+| `repo_path` | 本地 Git 仓库绝对路径 |
+| `description` | 项目描述 |
 
 ### Task
 
-`Task` 表示一个工作单元，负责把一组相关日志串起来，并维护生命周期状态。
+`Task` 是需求卡片的核心实体，也是工作流状态的唯一事实来源。
 
 关键字段：
 
-- `run_account_id`：归属账户
-- `task_title`：任务标题
-- `lifecycle_status`：如 `OPEN` 或 `CLOSED`
-- `closed_at`：关闭时间
+| 字段 | 说明 |
+| --- | --- |
+| `run_account_id` | 所属运行账户 |
+| `project_id` | 关联项目，可为空 |
+| `task_title` | 需求标题 |
+| `lifecycle_status` | 生命周期状态 |
+| `workflow_stage` | 当前工作流阶段 |
+| `worktree_path` | 任务 worktree 绝对路径 |
+| `closed_at` | 完成或关闭时间 |
+
+需要特别关注的字段：
+
+- `workflow_stage`：前端按钮和状态展示的唯一依据
+- `worktree_path`：决定 Codex 实际工作目录
 
 ### DevLog
 
-`DevLog` 是最细粒度的记录对象，既能存纯文本，也能挂载图片和 AI 结果。
+`DevLog` 是最细粒度的时间线记录。无论是用户反馈、附件、系统提示还是 Codex 输出，最终都汇聚到这里。
 
 关键字段：
 
-- `task_id`：归属任务
-- `text_content`：Markdown 文本
-- `state_tag`：日志状态标记
-- `media_original_image_path` 与 `media_thumbnail_path`：媒体路径
-- `ai_*` 字段：Phase 2 的 AI 处理结果
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `run_account_id` | 所属运行账户 |
+| `text_content` | Markdown 文本 |
+| `state_tag` | 状态标记，如 `BUG`、`FIXED` |
+| `media_original_image_path` | 原图或附件路径 |
+| `media_thumbnail_path` | 缩略图路径 |
+| `ai_*` | AI 解析结果预留字段 |
 
-## 设计备注
+## 设计观察
 
-- 关系上采用 `RunAccount -> Task -> DevLog` 的主链路，同时 `DevLog` 也直接关联 `RunAccount`，便于跨任务聚合查询。
-- 当前通过 `create_tables(Base)` 在启动时自动建表，适合开发期快速迭代。
-- 如果后续需要长期演进数据库结构，建议引入正式迁移工具，再补一页迁移规范文档。
+### 目前没有 JSONB 字段
+
+所有 AI 结果和媒体路径都是显式列，而不是放在 JSON 字段里。这让前端读取更直接，但也意味着字段扩展需要修改表结构。
+
+### 当前没有迁移表
+
+仓库里没有 Alembic 或等价迁移工具。表结构通过应用启动时的 `create_tables(Base)` 初始化，适合快速开发，不适合复杂演进。详见[迁移策略](migrations.md)。
+
+### 媒体路径存的是相对项目根的字符串
+
+这让后端可以直接把路径映射到静态目录，但部署时必须确保 `data/media/` 作为持久目录保留下来。

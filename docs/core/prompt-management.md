@@ -1,0 +1,92 @@
+# Prompt 管理
+
+## 总览
+
+当前仓库里的 Prompt 还没有独立成模板文件，而是直接写在 Python 代码里。这是一个典型的“先把自动化跑通，再逐步沉淀治理”的状态。
+
+如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `dsl/services/codex_runner.py`。
+
+## Prompt 位置
+
+| 位置 | 用途 | 触发时机 |
+| --- | --- | --- |
+| `build_codex_prompt` | 代码实现 Prompt | 点击“开始执行”后 |
+| `run_codex_prd` 内的 `prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
+
+## Prompt 输入来源
+
+### 代码实现 Prompt
+
+`build_codex_prompt` 会使用：
+
+- `task_title`
+- 最近最多 10 条 `DevLog.text_content`
+- 可选的 `worktree_path`
+
+这些输入决定了 Codex 是否能理解当前需求上下文。
+
+### PRD 生成 Prompt
+
+`run_codex_prd` 里的 Prompt 会使用：
+
+- 任务标题
+- 最近最多 5 条日志
+- worktree 路径说明
+- 强制要求的 PRD 章节结构
+
+它不仅要求生成文案，还要求真正把 PRD 写到 `tasks/` 目录。
+
+## Prompt 输出副作用
+
+当前 Prompt 不是“只返回一段文本”这么简单，它们会影响真实工作流：
+
+- 决定 `codex exec` 在什么目录运行
+- 决定是否会生成 PRD 文件
+- 决定哪些内容被写回 `DevLog`
+- 决定任务阶段是否推进或回退
+
+因此任何 Prompt 改动都应该被当成业务逻辑改动，而不是普通文案调整。
+
+## 修改原则
+
+### 保持输入稳定
+
+- 不要随意改变任务标题、日志摘要、worktree 说明的拼接位置
+- 如果新增上下文字段，要确认前端和后端是否都能稳定提供
+
+### 保持输出可观察
+
+- Prompt 变更后，要确保 Codex 的关键输出仍然会写回 `DevLog`
+- PRD Prompt 变更后，要确认前端仍能通过 `tasks/*-prd-*.md` 读取结果
+
+### 保持工程约束
+
+当前实现 Prompt 已经内嵌了一些工程约束，例如：
+
+- Python 使用 Google Style Docstring
+- 文件读写显式指定 `encoding="utf-8"`
+- 输出需要总结修改文件和注意事项
+
+这些约束如果被移除，项目一致性会明显下降。
+
+## 推荐变更流程
+
+1. 修改 `dsl/services/codex_runner.py`
+2. 重新启动或重新触发对应任务
+3. 观察 `/tmp/koda-<task短ID>.log`
+4. 检查 `DevLog` 时间线是否仍然完整
+5. 如果改的是 PRD Prompt，检查 `tasks/*-prd-*.md` 是否按预期生成
+6. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
+
+## 当前缺口
+
+### 尚未具备的治理能力
+
+- Prompt 独立文件化
+- Prompt 版本号
+- Prompt A/B 对比
+- 针对 Prompt 的自动化评测
+- Golden dataset 回归验证
+
+!!! note "后续建议"
+    当自动化链路继续扩展到测试代理、PR 代理和验收代理时，建议把 Prompt 从 Python 字符串迁移到单独目录，并建立版本化管理。

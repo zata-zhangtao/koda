@@ -250,9 +250,20 @@ async def run_codex_prd(
             encoding="utf-8",
         )
 
+        # 清理 worktree 中的旧 PRD 文件，确保显示的是本次生成的最新 PRD
+        import glob as _glob
+        old_prd_files = _glob.glob(str(work_dir_path / "tasks" / "*-prd-*.md"))
+        for old_prd_file_str in old_prd_files:
+            try:
+                Path(old_prd_file_str).unlink()
+                logger.info(f"Removed old PRD file: {old_prd_file_str}")
+            except OSError as cleanup_err:
+                logger.warning(f"Could not remove old PRD file {old_prd_file_str}: {cleanup_err}")
+
         codex_process = await asyncio.create_subprocess_exec(
             codex_executable_path,
             "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
             prd_prompt,
             cwd=str(work_dir_path),
             stdout=asyncio.subprocess.PIPE,
@@ -385,6 +396,7 @@ async def run_codex_task(
         codex_process = await asyncio.create_subprocess_exec(
             codex_executable_path,
             "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
             constructed_codex_prompt,
             cwd=str(work_dir_path),
             stdout=asyncio.subprocess.PIPE,

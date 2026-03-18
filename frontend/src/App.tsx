@@ -258,19 +258,33 @@ function App() {
     });
   }, [lastAiTurnId]);
 
-  // 当选中任务有 worktree 时，轮询 PRD 文件内容
+  // 当选中任务有 worktree 且处于 PRD 相关阶段时，轮询 PRD 文件内容
+  const prdRelevantStageSet = new Set<WorkflowStage>([
+    // PRD_GENERATING 不在这里：生成中阶段强制显示 banner，不读旧文件
+    WorkflowStage.PRD_WAITING_CONFIRMATION,
+    WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    WorkflowStage.TEST_IN_PROGRESS,
+    WorkflowStage.PR_PREPARING,
+    WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+    WorkflowStage.CHANGES_REQUESTED,
+  ]);
+
   useEffect(() => {
+    // 切换任务时立即清空，防止残留
+    setPrdFileContent(null);
+
     if (!selectedTaskId) return;
     const task = taskList.find((t) => t.id === selectedTaskId);
     if (!task?.worktree_path) return;
+    const stage = deriveRequirementStage(task, devLogsByTaskId[task.id] ?? []);
+    if (!prdRelevantStageSet.has(stage)) return;
 
     const loadPrd = () => {
       taskApi
         .getPrdFile(selectedTaskId)
         .then((result) => {
-          if (result.content) {
-            setPrdFileContent(result.content);
-          }
+          setPrdFileContent(result.content ?? null);
         })
         .catch(() => {});
     };
@@ -410,6 +424,8 @@ function App() {
       setErrorMessage(
         startError instanceof Error ? startError.message : "Failed to start task."
       );
+      // 刷新数据，让界面与数据库实际状态同步
+      await loadDashboardData(true);
     } finally {
       setActiveMutationName(null);
     }
@@ -1182,19 +1198,31 @@ function App() {
                         </ActionButton>
                       ) : null}
 
-                      {/* ── PRD 撰写中: 确认 PRD ── */}
+                      {/* ── PRD 撰写中: 重新生成 + 确认 PRD ── */}
                       {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
-                        <ActionButton
-                          variant="secondary"
-                          busy={activeMutationName === "confirm"}
-                          onClick={() => {
-                            void handleConfirmPrd(selectedTask);
-                          }}
-                        >
-                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
-                          <span>确认 PRD</span>
-                        </ActionButton>
+                        <>
+                          <ActionButton
+                            variant="primary"
+                            busy={activeMutationName === "start"}
+                            onClick={() => {
+                              void handleStartTask(selectedTask);
+                            }}
+                          >
+                            <PlayIcon className="devflow-icon devflow-icon--small" />
+                            <span>重新生成</span>
+                          </ActionButton>
+                          <ActionButton
+                            variant="secondary"
+                            busy={activeMutationName === "confirm"}
+                            onClick={() => {
+                              void handleConfirmPrd(selectedTask);
+                            }}
+                          >
+                            <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                            <span>确认 PRD</span>
+                          </ActionButton>
+                        </>
                       ) : null}
 
                       {/* ── PRD 待确认: 确认 PRD + 开始执行 ── */}
@@ -1543,7 +1571,10 @@ function App() {
                       </h3>
 
                       <CardSurface className="devflow-document-card">
-                        {prdFileContent ? (
+                        {prdFileContent &&
+                        selectedTaskStage !== WorkflowStage.BACKLOG &&
+                        selectedTaskStage !== WorkflowStage.DONE &&
+                        selectedTaskStage !== WorkflowStage.PRD_GENERATING ? (
                           <div className="devflow-markdown devflow-markdown--document">
                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                               {prdFileContent}

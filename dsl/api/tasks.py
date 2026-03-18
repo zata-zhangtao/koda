@@ -156,6 +156,7 @@ def update_task_stage(
 @router.post("/{task_id}/start", response_model=TaskResponseSchema)
 def start_task(
     task_id: str,
+    background_tasks: BackgroundTasks,
     db_session: Annotated[Session, Depends(get_db)],
 ) -> Task:
     """启动任务：创建 git worktree 并进入 PRD_GENERATING 阶段.
