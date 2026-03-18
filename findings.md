@@ -1,32 +1,34 @@
 # Findings & Decisions
 
 ## Requirements
-- `self_review_in_progress` must represent an actual review activity, not only a stage update.
-- The review should run automatically after implementation succeeds.
-- Review output must be visible in the existing DevLog timeline.
-- The implementation phase must not default to `git commit`; code submission requires user confirmation.
-- Documentation must reflect the new runtime behavior.
+- WebDAV-restored projects must survive a machine change without blindly trusting stale absolute paths.
+- Project rebinding should verify both repository identity and revision consistency.
+- Operators need explicit UI states for path problems, wrong-repo problems, and commit drift.
+- Existing SQLite databases must gain the new fields without forcing a rebuild.
 
 ## Research Findings
-- `dsl/services/codex_runner.py` currently advances the task to `self_review_in_progress` immediately after `run_codex_task` exits successfully, but it does not start any follow-up review executor.
-- `docs/architecture/system-design.md` and `docs/guides/dsl-development.md` already describe `self_review_in_progress` as part of the automated mainline, which makes the missing review runner a real behavior/documentation mismatch.
-- `docs/architecture/technical-route-20260317.md` defines the intended self-review scope as PRD coverage, regressions, documentation sync, and error-path checks.
-- `build_codex_prompt` previously told Codex to commit after implementation inside a worktree, which conflicts with the requirement that submission must wait for user confirmation.
-- There are no existing tests for `dsl/services/codex_runner.py`, so this change needs new focused coverage around subprocess orchestration and stage/log side effects.
+- `Project` previously stored only `repo_path`, so a restored DB could not tell whether a new local path pointed to the same repository.
+- The app already has a small startup migration hook in `dsl.app`, so adding nullable `Project` columns is feasible without Alembic.
+- WebDAV upload happens from the local DB file directly, which makes it the correct place to refresh project fingerprints before syncing.
+- The earlier relink flow only repaired paths; it had no way to reject a different remote or highlight a same-remote commit drift.
+- Existing project tests used fake `.git` directories, which are insufficient once fingerprint logic depends on real Git metadata.
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Add a dedicated self-review prompt builder | Keeps implementation instructions separate from review instructions and makes review behavior testable |
-| Run self review automatically after implementation succeeds | Makes `self_review_in_progress` correspond to real work in the backend |
-| Parse a structured review status marker from Codex output | Allows review findings to influence stage handling without needing JSON event streaming |
-| Keep review output in the same task log stream | Preserves the existing operator workflow based on DevLog plus `/tmp/koda-<task>.log` |
-| Leave passing tasks in `self_review_in_progress` for now | Prevents a false transition to `test_in_progress` before test automation exists |
-| Make PRD completion and implementation completion separate from code submission | Matches the requirement that users confirm before any commit-style handoff |
+| Persist normalized `repo_remote_url` and `repo_head_commit_hash` on `Project` | This is the minimum durable fingerprint needed to compare restored projects across machines |
+| Normalize remote URLs before storing/comparing | Lets `git@host:org/repo.git` and `https://host/org/repo.git` compare as the same repository |
+| Refresh fingerprints before WebDAV upload | Keeps the synced database aligned with the latest accepted local repo state |
+| Reject relink when remote mismatches, but allow commit drift with a warning | Wrong repo is unsafe; newer commit on the same repo can be intentional |
+| Backfill only missing fingerprints on startup | Avoids destroying the previously synced baseline while still upgrading old databases |
+| Replace fake-repo tests with real Git repos | Needed to validate remote normalization, HEAD drift, and refresh behavior accurately |
 
 ## Resources
-- `dsl/services/codex_runner.py`
-- `dsl/api/tasks.py`
-- `docs/guides/codex-cli-automation.md`
-- `docs/architecture/system-design.md`
-- `docs/guides/dsl-development.md`
+- `dsl/models/project.py`
+- `dsl/schemas/project_schema.py`
+- `dsl/services/project_service.py`
+- `dsl/api/projects.py`
+- `dsl/services/webdav_service.py`
+- `dsl/app.py`
+- `frontend/src/App.tsx`
+- `tests/test_project_service.py`

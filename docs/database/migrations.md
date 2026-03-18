@@ -46,6 +46,16 @@
 !!! warning "重要"
     不能把 `create_tables(Base)` 误认为“自动迁移器”。它只能创建缺失表，不能安全升级已有表。
 
+### 当前内置补丁
+
+虽然项目没有 Alembic，但 `dsl.app` 里已经有少量启动期补丁逻辑，会对少数已知列执行 `ALTER TABLE ... ADD COLUMN`。例如：
+
+- `tasks.requirement_brief`
+- `projects.repo_remote_url`
+- `projects.repo_head_commit_hash`
+
+这类补丁只适合非常有限的“新增可空列”场景，仍然不能替代正式迁移系统。
+
 ## 推荐变更清单
 
 每次改动 `dsl/models/` 时，至少回答下面几个问题：

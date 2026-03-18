@@ -41,6 +41,42 @@ def _run_migrations() -> None:
             # 列已存在时数据库会抛出异常，安全忽略
             pass
 
+        try:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)"))
+            conn.commit()
+            logger.info("Migration: added repo_remote_url column to projects")
+        except Exception:
+            pass
+
+        try:
+            conn.execute(
+                text("ALTER TABLE projects ADD COLUMN repo_head_commit_hash VARCHAR(64)")
+            )
+            conn.commit()
+            logger.info("Migration: added repo_head_commit_hash column to projects")
+        except Exception:
+            pass
+
+
+def _backfill_missing_project_repo_fingerprints() -> None:
+    """补全旧数据库中缺失的项目仓库指纹."""
+    from dsl.services.project_service import ProjectService
+    from utils.database import SessionLocal
+
+    db_session = SessionLocal()
+    try:
+        updated_project_count_int = ProjectService.refresh_project_repo_fingerprints(
+            db_session,
+            only_missing=True,
+        )
+        if updated_project_count_int > 0:
+            logger.info(
+                "Backfilled repo fingerprints for %s existing projects",
+                updated_project_count_int,
+            )
+    finally:
+        db_session.close()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,6 +93,7 @@ async def lifespan(app: FastAPI):
     # 启动时创建表
     create_tables(Base)
     _run_migrations()
+    _backfill_missing_project_repo_fingerprints()
     logger.info("DSL tables initialized")
 
     yield

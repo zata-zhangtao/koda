@@ -84,7 +84,9 @@ erDiagram
 
 ### Project
 
-`Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。
+`Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。除了路径本身，项目还会记录仓库的 `origin` remote 与 `HEAD` commit 指纹，用于跨机器恢复时校验你绑定的是不是同一个仓库、是不是同一个同步基线。
+
+注意：`repo_path` 是机器本地路径。若你通过 WebDAV 恢复了另一台机器上的数据库备份，项目记录会保留，但 `repo_path` 可能失效，需要在项目面板中重新绑定当前机器上的仓库路径。重绑后，系统还会继续检查 remote 与 commit hash 是否和同步时记录的指纹一致。
 
 关键字段：
 
@@ -92,7 +94,12 @@ erDiagram
 | --- | --- |
 | `display_name` | 项目显示名称 |
 | `repo_path` | 本地 Git 仓库绝对路径 |
+| `repo_remote_url` | 最近一次保存/同步时记录的归一化 origin remote |
+| `repo_head_commit_hash` | 最近一次保存/同步时记录的 HEAD commit hash |
 | `description` | 项目描述 |
+| `is_repo_path_valid` | API 响应中的派生字段，表示当前机器上该路径是否仍可用 |
+| `is_repo_remote_consistent` | API 响应中的派生字段，表示当前 repo 是否仍然指向同一个 remote |
+| `is_repo_head_consistent` | API 响应中的派生字段，表示当前 repo HEAD 是否仍与同步基线一致 |
 
 ### Task
 

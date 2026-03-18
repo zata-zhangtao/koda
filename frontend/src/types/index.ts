@@ -58,7 +58,15 @@ export interface Project {
   id: string;
   display_name: string;
   repo_path: string;
+  repo_remote_url: string | null;
+  repo_head_commit_hash: string | null;
+  current_repo_remote_url: string | null;
+  current_repo_head_commit_hash: string | null;
   description: string | null;
+  is_repo_path_valid: boolean;
+  is_repo_remote_consistent: boolean | null;
+  is_repo_head_consistent: boolean | null;
+  repo_consistency_note: string | null;
   created_at: string;
 }
 

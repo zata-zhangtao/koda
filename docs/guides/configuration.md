@@ -104,6 +104,14 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 
 优先改 `utils/settings.py`，不要在多个模块里分散读取环境变量。
 
+如果你通过 WebDAV 在另一台机器上恢复数据库，还需要检查项目面板中的 `Project.repo_path`。这些路径是机器本地绑定，不会自动适配新的目录结构；当前版本会把失效项目标记为 `Need relink`，remote 不一致的项目标记为 `Wrong repo`，HEAD 偏离同步基线的项目标记为 `Commit drift`。
+
+其中：
+
+- `Need relink`：当前机器上找不到这个仓库路径
+- `Wrong repo`：你绑定到了另一个 Git remote，系统会阻止把它当成原项目使用
+- `Commit drift`：remote 一致，但当前 HEAD 不同于最近一次同步到 WebDAV 时记录的 commit；确认无误后再次执行 WebDAV 上传即可刷新同步基线
+
 ### 新增 AI 提供商时
 
 至少同步修改：

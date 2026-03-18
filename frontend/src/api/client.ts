@@ -188,12 +188,31 @@ export const projectApi = {
       body: JSON.stringify(data),
     }),
 
+  /** 更新项目，主要用于在新机器上重绑本地仓库路径 */
+  update: (
+    id: string,
+    data: {
+      display_name: string;
+      repo_path: string;
+      description?: string | null;
+    }
+  ) =>
+    fetchApi<Project>(`/projects/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
   /** 获取项目详情 */
   get: (id: string) => fetchApi<Project>(`/projects/${id}`),
 
   /** 删除项目 */
-  delete: (id: string) =>
-    fetch(`${"/api"}/projects/${id}`, { method: "DELETE" }),
+  delete: async (id: string) => {
+    const response = await fetch(`${API_BASE}/projects/${id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+  },
 
   /** 使用 trae-cn 打开项目根目录 */
   openInTrae: (id: string) =>

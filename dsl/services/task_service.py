@@ -230,6 +230,26 @@ class TaskService:
 
             if project_obj:
                 repo_path_obj = Path(project_obj.repo_path)
+                from dsl.services.project_service import ProjectService
+
+                project_consistency_snapshot = ProjectService.build_project_consistency_snapshot(
+                    project_obj
+                )
+                if not repo_path_obj.exists():
+                    raise ValueError(
+                        "关联项目的仓库路径在当前机器上不存在："
+                        f"{repo_path_obj}。请先更新项目路径。"
+                    )
+                if not (repo_path_obj / ".git").exists():
+                    raise ValueError(
+                        "关联项目的仓库路径不是有效 Git 仓库："
+                        f"{repo_path_obj}。请先更新项目路径。"
+                    )
+                if project_consistency_snapshot.is_repo_remote_consistent is False:
+                    raise ValueError(
+                        "关联项目当前绑定到错误的代码仓库。"
+                        "请先把项目重绑到与已同步指纹一致的 Git remote。"
+                    )
                 task_short_id_str = task_id[:8]
                 branch_name_str = f"task/{task_short_id_str}"
                 worktree_path_str = str(

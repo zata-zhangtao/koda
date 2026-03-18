@@ -68,6 +68,55 @@ def _load_webdav_settings_from_db():
         db_session.close()
 
 
+def _build_repo_relink_hint_message() -> str:
+    """生成 WebDAV 恢复后的项目路径修复提示.
+
+    Returns:
+        str: 追加到同步结果后的提示语；若无需提示则返回空字符串
+    """
+    from dsl.models.project import Project
+    from dsl.services.project_service import ProjectService
+    from utils.database import SessionLocal
+
+    db_session = SessionLocal()
+    try:
+        project_list = db_session.query(Project).all()
+        invalid_project_count_int = 0
+        head_mismatch_project_count_int = 0
+        for project_obj in project_list:
+            if not ProjectService.is_repo_path_valid(project_obj.repo_path):
+                invalid_project_count_int += 1
+                continue
+
+            consistency_snapshot = ProjectService.build_project_consistency_snapshot(project_obj)
+            if consistency_snapshot.is_repo_head_consistent is False:
+                head_mismatch_project_count_int += 1
+    except Exception as relink_hint_error:
+        logger.error(f"Failed to inspect project repo paths after WebDAV restore: {relink_hint_error}")
+        return ""
+    finally:
+        db_session.close()
+
+    if invalid_project_count_int == 0 and head_mismatch_project_count_int == 0:
+        return ""
+
+    hint_message_part_list: list[str] = []
+    if invalid_project_count_int > 0:
+        project_label_str = "project" if invalid_project_count_int == 1 else "projects"
+        hint_message_part_list.append(
+            f"{invalid_project_count_int} synced {project_label_str} still point to "
+            "paths from another machine and should be relinked in Project settings"
+        )
+    if head_mismatch_project_count_int > 0:
+        project_label_str = "project" if head_mismatch_project_count_int == 1 else "projects"
+        hint_message_part_list.append(
+            f"{head_mismatch_project_count_int} {project_label_str} already match the repo "
+            "path but are on a different HEAD commit than the synced fingerprint"
+        )
+
+    return " " + "; ".join(hint_message_part_list) + "."
+
+
 def test_webdav_connection(
     server_url_str: str,
     username_str: str,
@@ -299,6 +348,23 @@ def sync_database_to_webdav() -> tuple[bool, str, str | None]:
     if not all(required_fields_list):
         return False, "WebDAV settings are incomplete.", None
 
+    from dsl.services.project_service import ProjectService
+    from utils.database import SessionLocal
+
+    db_session = SessionLocal()
+    try:
+        refreshed_project_count_int = ProjectService.refresh_project_repo_fingerprints(
+            db_session,
+            only_missing=False,
+        )
+        if refreshed_project_count_int > 0:
+            logger.info(
+                "Refreshed repo fingerprints for %s projects before WebDAV upload",
+                refreshed_project_count_int,
+            )
+    finally:
+        db_session.close()
+
     db_url_str = config.DATABASE_URL
     # 仅处理 SQLite 本地文件
     if not db_url_str.startswith("sqlite:///"):
@@ -350,4 +416,8 @@ def restore_database_from_webdav() -> tuple[bool, str]:
         password_str=webdav_settings_obj.password,
         remote_path_str=webdav_settings_obj.remote_path,
     )
-    return download_success_bool, download_message_str
+    if not download_success_bool:
+        return False, download_message_str
+
+    relink_hint_message_str = _build_repo_relink_hint_message()
+    return True, f"{download_message_str}{relink_hint_message_str}"

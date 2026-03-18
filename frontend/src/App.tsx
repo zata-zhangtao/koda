@@ -135,6 +135,10 @@ function App() {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState("");
+  const [editingProjectPath, setEditingProjectPath] = useState("");
+  const [editingProjectDescription, setEditingProjectDescription] = useState("");
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
 
   function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
@@ -173,12 +177,23 @@ function App() {
     if (
       newRequirementProjectId &&
       !projectList.some(
-        (projectItem) => projectItem.id === newRequirementProjectId
+        (projectItem) =>
+          projectItem.id === newRequirementProjectId &&
+          isProjectSelectable(projectItem)
       )
     ) {
       setNewRequirementProjectId(null);
     }
   }, [newRequirementProjectId, projectList]);
+
+  useEffect(() => {
+    if (
+      editingProjectId &&
+      !projectList.some((projectItem) => projectItem.id === editingProjectId)
+    ) {
+      resetProjectEditDraft();
+    }
+  }, [editingProjectId, projectList]);
 
   const devLogsByTaskId = buildDevLogsByTaskId(allDevLogList);
   const activeTaskList = taskList.filter(
@@ -213,6 +228,11 @@ function App() {
   const selectedTaskSnapshot = selectedTask
     ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
     : null;
+  const hasProjectConsistencyIssues = projectList.some(
+    (projectItem) =>
+      !isProjectSelectable(projectItem) ||
+      projectItem.is_repo_head_consistent === false
+  );
   const requirementViewModelList = visibleTaskList.map((taskItem) =>
     buildRequirementViewModel(taskItem, devLogsByTaskId[taskItem.id] ?? [])
   );
@@ -985,7 +1005,66 @@ function App() {
       }, 1200);
     } catch (err) {
       console.error(err);
-      setErrorMessage("创建项目失败，请确认路径是有效的 Git 仓库。");
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : "创建项目失败，请确认路径是有效的 Git 仓库。"
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  function resetProjectEditDraft(): void {
+    setEditingProjectId(null);
+    setEditingProjectName("");
+    setEditingProjectPath("");
+    setEditingProjectDescription("");
+  }
+
+  function openProjectEdit(projectItem: Project): void {
+    setEditingProjectId(projectItem.id);
+    setEditingProjectName(projectItem.display_name);
+    setEditingProjectPath(projectItem.repo_path);
+    setEditingProjectDescription(projectItem.description ?? "");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  async function handleUpdateProject(): Promise<void> {
+    if (!editingProjectId) {
+      return;
+    }
+
+    const trimmedName = editingProjectName.trim();
+    const trimmedPath = editingProjectPath.trim();
+    if (!trimmedName || !trimmedPath) {
+      setErrorMessage("项目名称和仓库路径不能为空。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("update");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const updatedProject = await projectApi.update(editingProjectId, {
+        display_name: trimmedName,
+        repo_path: trimmedPath,
+        description: editingProjectDescription.trim() || null,
+      });
+      await loadDashboardData(true);
+      resetProjectEditDraft();
+      setSuccessMessage(
+        updatedProject.is_repo_head_consistent === false
+          ? `项目「${updatedProject.display_name}」已更新，但当前 HEAD 与已同步指纹不同。`
+          : `项目「${updatedProject.display_name}」已更新。`
+      );
+    } catch (err) {
+      console.error(err);
+      setErrorMessage(
+        err instanceof Error ? err.message : "更新项目失败，请确认路径是有效的 Git 仓库。"
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -995,10 +1074,13 @@ function App() {
     if (!window.confirm(`删除项目「${projectItem.display_name}」？`)) return;
     try {
       await projectApi.delete(projectItem.id);
+      if (editingProjectId === projectItem.id) {
+        resetProjectEditDraft();
+      }
       await loadDashboardData(true);
     } catch (err) {
       console.error(err);
-      setErrorMessage("删除项目失败。");
+      setErrorMessage(err instanceof Error ? err.message : "删除项目失败。");
     }
   }
 
@@ -1114,24 +1196,131 @@ function App() {
             </div>
 
             <div className="devflow-project-panel__list">
+              {hasProjectConsistencyIssues ? (
+                <div className="devflow-inline-message devflow-inline-message--error">
+                  <RobotIcon className="devflow-icon devflow-icon--tiny" />
+                  <span>检测到项目一致性问题。请按列表中的状态修复路径、仓库或提交基线。</span>
+                </div>
+              ) : null}
+
               {projectList.length === 0 ? (
                 <p className="devflow-project-panel__empty">暂无项目，请在下方添加。</p>
               ) : (
-                projectList.map((projectItem) => (
-                  <div key={projectItem.id} className="devflow-project-item">
-                    <div className="devflow-project-item__info">
-                      <span className="devflow-project-item__name">{projectItem.display_name}</span>
-                      <span className="devflow-project-item__path">{projectItem.repo_path}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="devflow-project-item__delete"
-                      onClick={() => { void handleDeleteProject(projectItem); }}
+                projectList.map((projectItem) => {
+                  const projectHealthState = getProjectHealthState(projectItem);
+                  return (
+                    <div
+                      key={projectItem.id}
+                      className={joinClassNames(
+                        "devflow-project-item",
+                        projectHealthState.containerClassName
+                      )}
                     >
-                      <TrashIcon className="devflow-icon devflow-icon--tiny" />
-                    </button>
-                  </div>
-                ))
+                      {editingProjectId === projectItem.id ? (
+                        <>
+                          <div className="devflow-project-item__form">
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="项目名称"
+                              value={editingProjectName}
+                              onChange={(changeEvent) =>
+                                setEditingProjectName(changeEvent.target.value)
+                              }
+                            />
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="当前机器上的本地 Git 仓库绝对路径"
+                              value={editingProjectPath}
+                              onChange={(changeEvent) =>
+                                setEditingProjectPath(changeEvent.target.value)
+                              }
+                            />
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="描述（可选）"
+                              value={editingProjectDescription}
+                              onChange={(changeEvent) =>
+                                setEditingProjectDescription(changeEvent.target.value)
+                              }
+                            />
+                          </div>
+
+                          <div className="devflow-project-item__actions">
+                            <button
+                              type="button"
+                              className="devflow-project-item__action"
+                              onClick={resetProjectEditDraft}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="devflow-project-item__action devflow-project-item__action--primary"
+                              onClick={() => {
+                                void handleUpdateProject();
+                              }}
+                            >
+                              {activeMutationName === "update" ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="devflow-project-item__info">
+                            <div className="devflow-project-item__title-row">
+                              <span className="devflow-project-item__name">
+                                {projectItem.display_name}
+                              </span>
+                              <span
+                                className={joinClassNames(
+                                  "devflow-project-item__status",
+                                  projectHealthState.statusClassName
+                                )}
+                              >
+                                {projectHealthState.statusLabel}
+                              </span>
+                            </div>
+                            <span className="devflow-project-item__path">{projectItem.repo_path}</span>
+                            {projectItem.description ? (
+                              <span className="devflow-project-item__description">
+                                {projectItem.description}
+                              </span>
+                            ) : null}
+                            {projectHealthState.note ? (
+                              <span className="devflow-project-item__hint">
+                                {projectHealthState.note}
+                              </span>
+                            ) : null}
+                            {projectHealthState.fingerprint ? (
+                              <span className="devflow-project-item__fingerprint">
+                                {projectHealthState.fingerprint}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div className="devflow-project-item__actions">
+                            <button
+                              type="button"
+                              className="devflow-project-item__action"
+                              onClick={() => openProjectEdit(projectItem)}
+                            >
+                              {projectHealthState.actionLabel}
+                            </button>
+                            <button
+                              type="button"
+                              className="devflow-project-item__delete"
+                              onClick={() => {
+                                void handleDeleteProject(projectItem);
+                              }}
+                            >
+                              <TrashIcon className="devflow-icon devflow-icon--tiny" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
@@ -1225,8 +1414,14 @@ function App() {
                 >
                   <option value="">-- 不关联项目 --</option>
                   {projectList.map((projectItem) => (
-                    <option key={projectItem.id} value={projectItem.id}>
-                      {projectItem.display_name}
+                    <option
+                      key={projectItem.id}
+                      value={projectItem.id}
+                      disabled={!isProjectSelectable(projectItem)}
+                    >
+                      {isProjectSelectable(projectItem)
+                        ? projectItem.display_name
+                        : `${projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
                     </option>
                   ))}
                 </select>
@@ -2438,6 +2633,100 @@ function joinClassNames(
   ...classNameList: Array<string | false | null | undefined>
 ): string {
   return classNameList.filter(Boolean).join(" ");
+}
+
+function isProjectSelectable(projectItem: Project): boolean {
+  return (
+    projectItem.is_repo_path_valid &&
+    projectItem.is_repo_remote_consistent !== false
+  );
+}
+
+function shortenCommitHash(rawCommitHash: string | null): string | null {
+  if (!rawCommitHash) {
+    return null;
+  }
+
+  return rawCommitHash.slice(0, 8);
+}
+
+function getProjectHealthState(projectItem: Project): {
+  statusLabel: string;
+  statusClassName: string;
+  containerClassName: string | null;
+  actionLabel: string;
+  note: string | null;
+  fingerprint: string | null;
+} {
+  if (!projectItem.is_repo_path_valid) {
+    return {
+      statusLabel: "Need relink",
+      statusClassName: "devflow-project-item__status--invalid",
+      containerClassName: "devflow-project-item--invalid",
+      actionLabel: "Relink",
+      note:
+        projectItem.repo_consistency_note ??
+        "This repo path is not valid on the current machine.",
+      fingerprint: null,
+    };
+  }
+
+  if (projectItem.is_repo_remote_consistent === false) {
+    return {
+      statusLabel: "Wrong repo",
+      statusClassName: "devflow-project-item__status--invalid",
+      containerClassName: "devflow-project-item--invalid",
+      actionLabel: "Relink",
+      note:
+        projectItem.repo_consistency_note ??
+        "Current repo origin does not match the stored synced fingerprint.",
+      fingerprint: projectItem.repo_remote_url
+        ? `Expected remote: ${projectItem.repo_remote_url}`
+        : null,
+    };
+  }
+
+  if (projectItem.is_repo_head_consistent === false) {
+    const expectedCommitHash = shortenCommitHash(projectItem.repo_head_commit_hash);
+    const currentCommitHash = shortenCommitHash(
+      projectItem.current_repo_head_commit_hash
+    );
+    return {
+      statusLabel: "Commit drift",
+      statusClassName: "devflow-project-item__status--warning",
+      containerClassName: "devflow-project-item--warning",
+      actionLabel: "Edit",
+      note:
+        projectItem.repo_consistency_note ??
+        "Current repo HEAD differs from the stored synced fingerprint.",
+      fingerprint:
+        expectedCommitHash && currentCommitHash
+          ? `Expected ${expectedCommitHash} · Current ${currentCommitHash}`
+          : null,
+    };
+  }
+
+  if (projectItem.repo_consistency_note) {
+    return {
+      statusLabel: "Pending sync",
+      statusClassName: "devflow-project-item__status--warning",
+      containerClassName: "devflow-project-item--warning",
+      actionLabel: "Edit",
+      note: projectItem.repo_consistency_note,
+      fingerprint: null,
+    };
+  }
+
+  return {
+    statusLabel: "Ready",
+    statusClassName: "devflow-project-item__status--valid",
+    containerClassName: null,
+    actionLabel: "Edit",
+    note: null,
+    fingerprint: shortenCommitHash(projectItem.repo_head_commit_hash)
+      ? `HEAD ${shortenCommitHash(projectItem.repo_head_commit_hash)}`
+      : null,
+  };
 }
 
 function PlusIcon({ className }: SVGProps<SVGSVGElement>) {

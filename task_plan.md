@@ -1,6 +1,6 @@
-# Task Plan: Execute Real Self Review in `self_review_in_progress`
+# Task Plan: Preserve Repo Fingerprints Across WebDAV Restore
 
-**Goal**: Ensure that after implementation finishes, Koda actually runs a Codex-powered code review during `self_review_in_progress` instead of only flipping the workflow stage.
+**Goal**: Make cross-computer WebDAV restores verify more than `repo_path` by persisting project Git fingerprints (`origin` remote + `HEAD` commit), comparing them against the current machine, and surfacing actionable repair states in the UI.
 **Started**: 2026-03-18
 
 ## Current Phase
@@ -9,41 +9,45 @@ All phases complete ✅
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Inspect the current implementation-to-review handoff
-- [x] Identify the safest place to trigger a dedicated review run
-- [x] Define review outcomes and their stage/log effects
+- [x] Inspect the existing WebDAV restore flow and current `Project` persistence model
+- [x] Confirm how schema changes are applied to existing SQLite databases
+- [x] Decide how remote/commit verification should behave during relink
 - **Status:** complete
 
 ### Phase 2: Implementation
-- [x] Add a dedicated self-review Codex prompt and runner
-- [x] Reuse existing retry, logging, and cancellation behavior
-- [x] Ensure implementation success transitions into a real review run
-- [x] Keep failure behavior coherent for review findings vs execution failures
-- [x] Remove default auto-commit instructions and require user confirmation before commit
+- [x] Add persisted project Git fingerprint columns and startup migration/backfill support
+- [x] Refresh stored fingerprints before WebDAV upload so synced DB snapshots stay current
+- [x] Reject relinking to a different remote while allowing same-remote commit drift to remain visible
+- [x] Expose path/remote/head consistency in project API responses
+- [x] Update the project management UI with distinct states for relink, wrong repo, and commit drift
 - **Status:** complete
 
 ### Phase 3: Verification
-- [x] Add focused tests for review execution and outcome handling
-- [x] Run relevant automated checks
-- [x] Run `uv run mkdocs build --strict`
+- [x] Replace path-only project tests with real Git-backed fingerprint tests
+- [x] Run focused backend tests, frontend build, and MkDocs build
+- [x] Synchronize operator-facing docs
 - **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Reuse the existing Codex subprocess pattern for self review | Keeps cancellation, retry, stdout streaming, and DevLog behavior consistent across phases |
-| Treat implementation and self review as separate phase executions | Preserves the semantics of `self_review_in_progress` as an actual running phase instead of a passive label |
-| Keep successful reviews in `self_review_in_progress` and only auto-regress on blocking findings | Avoids pretending that tests are running before the project has a real automated `test_in_progress` executor |
-| Remove default `git commit` instructions from the implementation prompt | PRD completion and implementation output should still require explicit user confirmation before code submission |
+| Store normalized `origin` remote plus `HEAD` commit in `Project` | Path alone is machine-local and cannot prove the restored repo is the same codebase or revision |
+| Refresh project fingerprints just before WebDAV upload | Ensures the synced database represents the latest accepted local repo baseline |
+| Reject remote mismatch but only warn on commit drift | Binding the wrong repo is unsafe, but being on a newer commit of the same repo can be legitimate |
+| Preserve stored fingerprint during relink when remote matches | Keeps the synced baseline available for comparison instead of immediately overwriting it |
+| Add lightweight startup migration/backfill for the new nullable columns | Existing SQLite databases need these fields without requiring manual rebuilds |
 
 ## Completion Summary
 - **Status:** Complete (2026-03-18)
 - **Tests:**
-  - `uv run python -m py_compile dsl/services/codex_runner.py dsl/api/tasks.py tests/test_codex_runner.py` -> PASS
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run python - <<'PY' ... pytest.main(['tests/test_codex_runner.py', 'tests/test_task_service.py', '-vv', '-s']) ... PY` -> PASS
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/models/project.py dsl/schemas/project_schema.py dsl/services/project_service.py dsl/api/projects.py dsl/services/task_service.py dsl/services/webdav_service.py dsl/app.py tests/test_project_service.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_project_service.py tests/test_task_service.py -q` -> PASS
+  - `npm run build` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS
 - **Deliverables:**
-  - `dsl/services/codex_runner.py` - real self-review phase runner, structured review status parsing, no default auto-commit instruction
-  - `tests/test_codex_runner.py` - regression coverage for passing and failing self-review flows plus prompt confirmation requirements
-  - `dsl/api/tasks.py` - updated execute-task contract comments/docstring
-  - `docs/guides/codex-cli-automation.md`, `docs/guides/dsl-development.md`, `docs/architecture/system-design.md`, `docs/index.md` - synchronized workflow and confirmation docs
+  - `dsl/models/project.py`, `dsl/schemas/project_schema.py`, `dsl/services/project_service.py`, `dsl/api/projects.py` - persisted repo fingerprints plus consistency comparison API
+  - `dsl/app.py` - startup migration and missing-fingerprint backfill
+  - `dsl/services/webdav_service.py` - fingerprint refresh before upload plus richer restore hint
+  - `frontend/src/App.tsx`, `frontend/src/types/index.ts`, `frontend/src/index.css` - UI states for relink / wrong repo / commit drift
+  - `tests/test_project_service.py` - Git-backed regression coverage for normalized remote, relink validation, commit drift, and fingerprint refresh
+  - `docs/database/schema.md`, `docs/database/migrations.md`, `docs/guides/configuration.md` - synchronized operator docs

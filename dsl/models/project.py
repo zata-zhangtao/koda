@@ -25,6 +25,8 @@ class Project(Base):
         id (str): UUID 主键
         display_name (str): 项目展示名称，如 "My App"
         repo_path (str): 本地 Git 仓库绝对路径，如 "/Users/zata/code/my-app"
+        repo_remote_url (str | None): 项目仓库的归一化 origin remote URL
+        repo_head_commit_hash (str | None): 项目仓库在最近一次同步时记录的 HEAD commit 哈希
         description (str | None): 项目描述（可选）
         created_at (datetime): 创建时间
     """
@@ -38,6 +40,8 @@ class Project(Base):
     )
     display_name: Mapped[str] = mapped_column(String(100))
     repo_path: Mapped[str] = mapped_column(String(500))
+    repo_remote_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    repo_head_commit_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

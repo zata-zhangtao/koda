@@ -1501,6 +1501,17 @@ img {
   background: var(--devflow-surface-alt);
   border-radius: 8px;
   border: 1px solid var(--devflow-line);
+  gap: 12px;
+}
+
+.devflow-project-item--invalid {
+  border-color: rgba(220, 38, 38, 0.35);
+  background: rgba(127, 29, 29, 0.08);
+}
+
+.devflow-project-item--warning {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(180, 83, 9, 0.08);
 }
 
 .devflow-project-item__info {
@@ -1515,6 +1526,38 @@ img {
   font-weight: 600;
 }
 
+.devflow-project-item__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.devflow-project-item__status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.devflow-project-item__status--valid {
+  color: #166534;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.devflow-project-item__status--invalid {
+  color: #991b1b;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.devflow-project-item__status--warning {
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.16);
+}
+
 .devflow-project-item__path {
   font-size: 0.75rem;
   color: var(--devflow-text-muted);
@@ -1523,6 +1566,55 @@ img {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 480px;
+}
+
+.devflow-project-item__description,
+.devflow-project-item__hint,
+.devflow-project-item__fingerprint {
+  font-size: 0.75rem;
+  color: var(--devflow-text-muted);
+}
+
+.devflow-project-item__hint {
+  color: #991b1b;
+}
+
+.devflow-project-item--warning .devflow-project-item__hint {
+  color: #92400e;
+}
+
+.devflow-project-item__fingerprint {
+  font-family: monospace;
+}
+
+.devflow-project-item__form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.devflow-project-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.devflow-project-item__action {
+  border: 1px solid var(--devflow-line);
+  background: transparent;
+  color: var(--devflow-text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.devflow-project-item__action--primary {
+  background: var(--devflow-accent);
+  border-color: var(--devflow-accent);
+  color: white;
 }
 
 .devflow-project-item__delete {
