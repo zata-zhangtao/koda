@@ -11,6 +11,7 @@
 | 位置 | 用途 | 触发时机 |
 | --- | --- | --- |
 | `build_codex_prompt` | 代码实现 Prompt | 点击“开始执行”后 |
+| `build_codex_completion_prompt` | 完成阶段 Prompt | 点击“Complete”后 |
 | `run_codex_prd` 内的 `prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
 
 ## Prompt 输入来源
@@ -36,12 +37,23 @@
 
 它不仅要求生成文案，还要求真正把 PRD 写到 `tasks/` 目录。
 
+### 完成阶段 Prompt
+
+`build_codex_completion_prompt` 会使用：
+
+- `task_title`
+- 最近最多 8 条 `DevLog.text_content`
+- 必填的 `worktree_path`
+
+这些输入决定了 Codex 是否能在正确的 worktree 中完成最终 Git 收尾。
+
 ## Prompt 输出副作用
 
 当前 Prompt 不是“只返回一段文本”这么简单，它们会影响真实工作流：
 
 - 决定 `codex exec` 在什么目录运行
 - 决定是否会生成 PRD 文件
+- 决定点击 `Complete` 后是否会在 worktree 中执行 `commit` 与 `git rebase main`
 - 决定哪些内容被写回 `DevLog`
 - 决定任务阶段是否推进或回退
 

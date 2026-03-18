@@ -16,7 +16,14 @@ from dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.codex_runner import cancel_codex_task, get_task_log_path, run_codex_prd, run_codex_task
+from dsl.services.codex_runner import (
+    cancel_codex_task,
+    get_task_log_path,
+    is_codex_task_running,
+    run_codex_completion,
+    run_codex_prd,
+    run_codex_task,
+)
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
 from utils.database import get_db
@@ -318,6 +325,88 @@ def execute_task(
 
     executed_task.log_count = len(executed_task.dev_logs)
     return executed_task
+
+
+@router.post("/{task_id}/complete", response_model=TaskResponseSchema)
+def complete_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """触发任务进入完成收尾阶段，并在 worktree 中执行 Git 收尾动作.
+
+    收尾动作由 Codex 在任务 worktree 中执行，顺序固定为：
+    1. 先提交当前改动
+    2. 再执行 `git rebase main`
+
+    若收尾成功，任务自动推进到 `done`；若失败，则回退到 `changes_requested`。
+
+    Args:
+        task_id: 任务 ID
+        background_tasks: FastAPI 后台任务注入
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已更新为 `pr_preparing` 的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；阶段不合法、worktree 缺失或目录不存在时返回 422；
+            若当前任务已存在运行中的 Codex 进程则返回 409
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex is already running for this task.",
+        )
+
+    try:
+        completion_task = TaskService.prepare_task_completion(db_session, task_id)
+    except ValueError as completion_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(completion_error),
+        ) from completion_error
+
+    if not completion_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    if not completion_task.worktree_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Task has no worktree_path. Complete is only available for worktree-backed tasks.",
+        )
+
+    from pathlib import Path as _Path
+
+    worktree_dir_path = _Path(completion_task.worktree_path)
+    if not worktree_dir_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
+        )
+
+    dev_log_text_snapshot_list: list[str] = [
+        dev_log_item.text_content for dev_log_item in completion_task.dev_logs
+    ]
+    task_title_snapshot_str: str = completion_task.task_title
+    run_account_id_snapshot_str: str = completion_task.run_account_id
+    worktree_path_snapshot_str: str = completion_task.worktree_path
+
+    background_tasks.add_task(
+        run_codex_completion,
+        task_id_str=task_id,
+        run_account_id_str=run_account_id_snapshot_str,
+        task_title_str=task_title_snapshot_str,
+        dev_log_text_list=dev_log_text_snapshot_list,
+        work_dir_path=worktree_dir_path,
+        worktree_path_str=worktree_path_snapshot_str,
+    )
+
+    completion_task.log_count = len(completion_task.dev_logs)
+    return completion_task
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponseSchema)

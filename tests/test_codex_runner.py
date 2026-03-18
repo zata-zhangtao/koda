@@ -84,8 +84,19 @@ def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
     assert "git add -A" not in implementation_prompt_text
 
 
+def test_build_codex_completion_prompt_orders_commit_before_rebase() -> None:
+    """Completion prompt should tell Codex to commit before rebasing main."""
+    completion_prompt_text = codex_runner.build_codex_completion_prompt(
+        task_title="Finalize branch",
+        dev_log_text_list=["Implementation already passed review."],
+        worktree_path_str="/tmp/project-wt-12345678",
+    )
+
+    assert "先完成一次 `commit`，再执行 `git rebase main`" in completion_prompt_text
+    assert "不要 push" in completion_prompt_text
+
+
 def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
     """A passing self review should run automatically and keep the review stage."""
@@ -110,7 +121,7 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     ]
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
-        recorded_prompt_text_list.append(args[3])
+        recorded_prompt_text_list.append(kwargs["codex_prompt_text_str"])
         return fake_process_queue.pop(0)
 
     def fake_write_log_to_db(
@@ -124,22 +135,37 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
-    monkeypatch.setattr(codex_runner.shutil, "which", lambda executable_name_str: "/usr/bin/codex")
-    monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-    monkeypatch.setattr(codex_runner, "_write_log_to_db", fake_write_log_to_db)
-    monkeypatch.setattr(codex_runner, "_advance_stage_in_db", fake_advance_stage)
-    monkeypatch.setattr(codex_runner, "_CODEX_LOG_DIR", tmp_path)
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
-    asyncio.run(
-        codex_runner.run_codex_task(
-            task_id_str="12345678-pass-case",
-            run_account_id_str="run-account-1",
-            task_title_str="Implement review automation",
-            dev_log_text_list=["User requested a real self review phase."],
-            work_dir_path=tmp_path,
-            worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_task(
+                task_id_str="12345678-pass-case",
+                run_account_id_str="run-account-1",
+                task_title_str="Implement review automation",
+                dev_log_text_list=["User requested a real self review phase."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
         )
-    )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
 
     assert len(recorded_prompt_text_list) == 2
     assert "不要默认执行 `git commit`" in recorded_prompt_text_list[0]
@@ -154,7 +180,6 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
 
 
 def test_run_codex_task_moves_to_changes_requested_on_review_findings(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
     """Blocking self-review findings should regress the task to changes requested."""
@@ -191,25 +216,173 @@ def test_run_codex_task_moves_to_changes_requested_on_review_findings(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
-    monkeypatch.setattr(codex_runner.shutil, "which", lambda executable_name_str: "/usr/bin/codex")
-    monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-    monkeypatch.setattr(codex_runner, "_write_log_to_db", fake_write_log_to_db)
-    monkeypatch.setattr(codex_runner, "_advance_stage_in_db", fake_advance_stage)
-    monkeypatch.setattr(codex_runner, "_CODEX_LOG_DIR", tmp_path)
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
-    asyncio.run(
-        codex_runner.run_codex_task(
-            task_id_str="12345678-fail-case",
-            run_account_id_str="run-account-2",
-            task_title_str="Implement review automation",
-            dev_log_text_list=["User requested a real self review phase."],
-            work_dir_path=tmp_path,
-            worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_task(
+                task_id_str="12345678-fail-case",
+                run_account_id_str="run-account-2",
+                task_title_str="Implement review automation",
+                dev_log_text_list=["User requested a real self review phase."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
         )
-    )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
 
     assert recorded_stage_value_list == [
         "self_review_in_progress",
         "changes_requested",
     ]
     assert any("AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
+
+
+def test_run_codex_completion_advances_task_to_done_on_success(
+    tmp_path: Path,
+) -> None:
+    """A successful completion flow should close the task after commit and rebase."""
+    recorded_prompt_text_list: list[str] = []
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        recorded_prompt_text_list.append(kwargs["codex_prompt_text_str"])
+        return FakeCodexProcess(
+            output_line_list=[
+                "Created commit abc123",
+                "Successfully rebased onto main",
+            ],
+            planned_return_code_int=0,
+            pid_int=5555,
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_completion(
+                task_id_str="12345678-done-case",
+                run_account_id_str="run-account-3",
+                task_title_str="Finalize branch",
+                dev_log_text_list=["Implementation already passed review."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert len(recorded_prompt_text_list) == 1
+    assert "先完成一次 `commit`，再执行 `git rebase main`" in recorded_prompt_text_list[0]
+    assert recorded_stage_value_list == ["done"]
+    assert any("Codex 正在当前 worktree 中执行" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("任务已标记为完成" in log_text for log_text, _ in recorded_log_entry_list)
+
+    task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
+    assert "=== Koda codex-complete" in task_log_text
+
+
+def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
+    tmp_path: Path,
+) -> None:
+    """A failed completion flow should regress the task to changes requested."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        return FakeCodexProcess(
+            output_line_list=["Rebase conflict on app.py"],
+            planned_return_code_int=1,
+            pid_int=6666,
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_completion(
+                task_id_str="12345678-finish-fail",
+                run_account_id_str="run-account-4",
+                task_title_str="Finalize branch",
+                dev_log_text_list=["Implementation already passed review."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert any("未能完成 worktree 收尾" in log_text for log_text, _ in recorded_log_entry_list)

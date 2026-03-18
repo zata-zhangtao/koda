@@ -133,6 +133,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 触发任务进入完成收尾阶段（先 commit，再 git rebase main） */
+  complete: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/complete`, {
+      method: "POST",
+    }),
+
   /** 更新任务内容 */
   update: (id: string, data: { task_title: string; requirement_brief?: string | null }) =>
     fetchApi<Task>(`/tasks/${id}`, {

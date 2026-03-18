@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import pytest
 
+from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.project import Project
 from dsl.models.run_account import RunAccount
 from dsl.schemas.task_schema import TaskCreateSchema
@@ -125,3 +126,63 @@ def test_create_task_allows_unlinked_tasks(db_session: Session) -> None:
 
     assert created_task.project_id is None
     assert created_task.lifecycle_status.value == "PENDING"
+
+
+def test_prepare_task_completion_moves_worktree_task_into_pr_preparing(
+    db_session: Session,
+) -> None:
+    """Completion should move eligible worktree tasks into pr_preparing."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_create_schema = TaskCreateSchema(task_title="Finalize branch")
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=task_create_schema,
+        run_account_id=run_account_obj.id,
+    )
+    created_task.worktree_path = "/tmp/project-wt-12345678"
+    created_task.workflow_stage = WorkflowStage.SELF_REVIEW_IN_PROGRESS
+    created_task.lifecycle_status = TaskLifecycleStatus.OPEN
+    db_session.commit()
+
+    updated_task = TaskService.prepare_task_completion(db_session, created_task.id)
+
+    assert updated_task is not None
+    assert updated_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.OPEN
+
+
+def test_prepare_task_completion_rejects_tasks_without_worktree(
+    db_session: Session,
+) -> None:
+    """Completion should fail when the task has no worktree path."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_create_schema = TaskCreateSchema(task_title="Finalize branch")
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=task_create_schema,
+        run_account_id=run_account_obj.id,
+    )
+    created_task.workflow_stage = WorkflowStage.SELF_REVIEW_IN_PROGRESS
+    created_task.lifecycle_status = TaskLifecycleStatus.OPEN
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="has no worktree_path"):
+        TaskService.prepare_task_completion(db_session, created_task.id)

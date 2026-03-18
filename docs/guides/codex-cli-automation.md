@@ -36,6 +36,17 @@
 8. 若 review 发现阻塞问题，任务回退到 `changes_requested`
 9. 若 review 通过，任务保持在 `self_review_in_progress`，等待后续测试自动化或人工推进
 
+### 完成收尾链路
+
+1. 前端点击“Complete”
+2. 后端将任务推进到 `pr_preparing`
+3. `run_codex_completion` 组装完成阶段 Prompt
+4. 后端调用 `codex exec`
+5. Codex 在任务 worktree 中按顺序执行：先 `commit`，再 `git rebase main`
+6. 输出继续实时写入 `DevLog`
+7. 若收尾成功，任务自动推进到 `done`
+8. 若收尾失败，任务回退到 `changes_requested`
+
 ## Prompt 来源
 
 ### PRD Prompt
@@ -77,6 +88,21 @@
 - 这是 review-only 阶段，不修改文件
 - 审查需求覆盖、明显回归、文档同步和错误路径
 - 输出结构化标记 `SELF_REVIEW_SUMMARY` 与 `SELF_REVIEW_STATUS`
+
+### 完成阶段 Prompt
+
+由 `build_codex_completion_prompt` 构造，输入包括：
+
+- 任务标题
+- 最近最多 8 条历史日志
+- 必填的 worktree 路径
+
+当前 Prompt 会显式要求：
+
+- 所有 Git 操作都发生在当前任务 worktree
+- 严格按顺序先执行 `commit`，再执行 `git rebase main`
+- 不要 push、不要 merge、不要删除分支
+- 若无可提交改动、缺少 `main` 或 rebase 冲突，要明确报告失败原因
 
 ## 实际调用特征
 

@@ -194,7 +194,20 @@ def cancel_codex_task(task_id_str: str) -> bool:
         except ProcessLookupError:
             pass
         _running_codex_processes.pop(task_id_str, None)
-        return False
+    return False
+
+
+def is_codex_task_running(task_id_str: str) -> bool:
+    """判断指定任务当前是否仍有 Codex 进程在运行.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+
+    Returns:
+        bool: 若存在未退出的 Codex 进程则返回 True
+    """
+    codex_process_obj = _running_codex_processes.get(task_id_str)
+    return codex_process_obj is not None and codex_process_obj.returncode is None
 
 
 def get_task_log_path(task_id_str: str) -> Path:
@@ -261,6 +274,36 @@ def _append_exit_code_to_task_log(task_log_path: Path, exit_code_int: int) -> No
     """
     with task_log_path.open("a", encoding="utf-8") as log_file_handle:
         log_file_handle.write(f"\n=== exit code: {exit_code_int} ===\n")
+
+
+async def _create_codex_subprocess(
+    codex_executable_path_str: str,
+    codex_prompt_text_str: str,
+    work_dir_path: Path,
+) -> asyncio.subprocess.Process:
+    """创建 Codex CLI 子进程.
+
+    单独抽出该包装器，便于测试时稳定地替换 subprocess 行为，而不必直接 monkeypatch
+    `asyncio.create_subprocess_exec`。
+
+    Args:
+        codex_executable_path_str: codex 可执行文件路径
+        codex_prompt_text_str: 发给 codex exec 的 Prompt
+        work_dir_path: codex 运行目录
+
+    Returns:
+        asyncio.subprocess.Process: 已启动的子进程对象
+    """
+    return await asyncio.create_subprocess_exec(
+        codex_executable_path_str,
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        codex_prompt_text_str,
+        cwd=str(work_dir_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
 
 
 def build_codex_prompt(
@@ -372,6 +415,57 @@ def build_codex_review_prompt(
     return constructed_review_prompt_text
 
 
+def build_codex_completion_prompt(
+    task_title: str,
+    dev_log_text_list: list[str],
+    worktree_path_str: str,
+) -> str:
+    """根据任务标题和历史日志构建完成阶段 Prompt.
+
+    点击「Complete」后，Codex 会在任务对应的 git worktree 中执行最终 Git 收尾：
+    先提交当前改动，再执行 `git rebase main`。
+
+    Args:
+        task_title: 需求卡片标题
+        dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
+        worktree_path_str: 任务对应的 git worktree 绝对路径
+
+    Returns:
+        str: 完整的完成阶段 Prompt 文本
+    """
+    completion_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=8,
+        separator_str="\n\n---\n",
+        empty_context_text_str="（暂无额外上下文，请根据需求标题和当前工作区改动完成收尾）",
+    )
+
+    constructed_completion_prompt_text = f"""你现在处于 Koda 工作流的完成阶段，需要在任务对应的 git worktree 中完成最终 Git 收尾动作。
+
+## 需求标题
+{task_title}
+
+## 最近上下文（来自任务日志）
+{completion_context_block_str}
+
+## Git Worktree 说明
+当前工作目录就是任务对应的 git worktree：`{worktree_path_str}`
+- 所有命令都必须在这个 worktree 中执行
+- 不要切换到其他目录、不要创建新 worktree、不要 push
+
+## 执行要求
+1. 先查看当前 `git status`，确认本次任务的工作区状态。
+2. 按照用户点击「Complete」的要求，严格按顺序执行：先完成一次 `commit`，再执行 `git rebase main`。
+3. `git commit` 的提交消息要简洁，且应与当前需求标题相关。
+4. 如果工作区没有可提交的变更、`main` 分支不存在、或 rebase 发生冲突，停止继续操作，并明确输出失败原因。
+5. 不要 push、不要 merge、不要删除分支、不要做额外的 Git 清理动作。
+6. 最后简要输出：提交结果、rebase 结果、是否还需要人工处理。
+
+请开始执行。"""
+
+    return constructed_completion_prompt_text
+
+
 def _write_log_to_db(
     task_id_str: str,
     run_account_id_str: str,
@@ -415,14 +509,26 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
         task_id_str: 任务 ID
         next_stage_value: WorkflowStage 枚举值字符串
     """
-    from dsl.models.enums import WorkflowStage
+    from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
     from dsl.models.task import Task
+    from utils.helpers import utc_now_naive
 
     db_session = SessionLocal()
     try:
         task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
         if task_obj:
-            task_obj.workflow_stage = WorkflowStage(next_stage_value)
+            next_workflow_stage = WorkflowStage(next_stage_value)
+            task_obj.workflow_stage = next_workflow_stage
+            if next_workflow_stage == WorkflowStage.DONE:
+                task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
+                task_obj.closed_at = utc_now_naive()
+            else:
+                if task_obj.lifecycle_status in {
+                    TaskLifecycleStatus.PENDING,
+                    TaskLifecycleStatus.CLOSED,
+                }:
+                    task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+                task_obj.closed_at = None
             db_session.commit()
             logger.info(f"Task {task_id_str[:8]}... stage advanced to {next_stage_value}")
     except Exception as stage_update_error:
@@ -497,15 +603,10 @@ async def _run_codex_phase(
     for attempt_index in range(_MAX_AUTO_RETRY + 1):
         codex_process_obj: asyncio.subprocess.Process | None = None
         try:
-            codex_process_obj = await asyncio.create_subprocess_exec(
-                codex_executable_path_str,
-                "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                codex_prompt_text_str,
-                cwd=str(work_dir_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                start_new_session=True,
+            codex_process_obj = await _create_codex_subprocess(
+                codex_executable_path_str=codex_executable_path_str,
+                codex_prompt_text_str=codex_prompt_text_str,
+                work_dir_path=work_dir_path,
             )
             _running_codex_processes[task_id_str] = codex_process_obj
 
@@ -942,3 +1043,71 @@ async def run_codex_task(
         work_dir_path=work_dir_path,
         worktree_path_str=worktree_path_str,
     )
+
+
+async def run_codex_completion(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str,
+) -> None:
+    """在任务 worktree 中执行完成阶段的 Git 收尾动作.
+
+    完成阶段会让 Codex 按顺序执行一次提交，然后运行 `git rebase main`。
+    若收尾成功，任务自动推进到 `done`；若失败，任务回退到 `changes_requested`。
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+        run_account_id_str: 运行账户 UUID 字符串
+        task_title_str: 任务标题，用于构建 Prompt
+        dev_log_text_list: 历史日志文本列表，用于构建上下文
+        work_dir_path: codex 的工作目录，必须是任务 worktree
+        worktree_path_str: 任务对应的 git worktree 绝对路径
+    """
+    completion_prompt_text_str = build_codex_completion_prompt(
+        task_title=task_title_str,
+        dev_log_text_list=dev_log_text_list,
+        worktree_path_str=worktree_path_str,
+    )
+
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        "🚀 已收到完成请求，Codex 正在当前 worktree 中执行：先 `commit`，再 `git rebase main`。",
+        "OPTIMIZATION",
+    )
+
+    completion_phase_result = await _run_codex_phase(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        codex_prompt_text_str=completion_prompt_text_str,
+        work_dir_path=work_dir_path,
+        phase_log_label_str="codex-complete",
+        phase_display_name_str="完成收尾",
+        cancelled_log_text_str="🛑 用户手动中断了完成阶段。",
+        overwrite_existing_log_bool=False,
+    )
+
+    if not completion_phase_result.success:
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            "❌ Codex 未能完成 worktree 收尾（`commit` -> `git rebase main`），任务已回退至：待修改（changes_requested）。",
+            "BUG",
+        )
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+        return
+
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        "✅ Codex 已在任务 worktree 中完成 Git 收尾：已提交当前改动，并执行 `git rebase main`。任务已标记为完成。",
+        "FIXED",
+    )
+    await asyncio.to_thread(_advance_stage_in_db, task_id_str, "done")
+    logger.info(f"Task {task_id_str[:8]}... completion flow finished successfully.")

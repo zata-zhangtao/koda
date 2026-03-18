@@ -759,6 +759,15 @@ function App() {
     setSuccessMessage(null);
 
     try {
+      if (taskItem.worktree_path) {
+        await taskApi.complete(taskItem.id);
+        setSuccessMessage(
+          "Codex is finalizing the worktree: commit, then git rebase main."
+        );
+        await loadDashboardData(true);
+        return;
+      }
+
       await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.CLOSED);
       await logApi.create({
         task_id: taskItem.id,

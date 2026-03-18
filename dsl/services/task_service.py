@@ -360,6 +360,71 @@ class TaskService:
         return task_obj
 
     @staticmethod
+    def prepare_task_completion(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """将任务推进到完成收尾阶段（pr_preparing）.
+
+        仅允许已经拥有 worktree 的任务进入该阶段。进入后，后台会触发
+        Codex 在该 worktree 中执行 Git 收尾动作。
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 更新后的任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当前阶段不允许完成，或任务尚无 worktree
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot complete from lifecycle "
+                f"'{task_obj.lifecycle_status.value}'."
+            )
+
+        if not task_obj.worktree_path:
+            raise ValueError(
+                f"Task {task_id[:8]}... has no worktree_path. Start the task first."
+            )
+
+        allowed_source_stages = {
+            WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+            WorkflowStage.TEST_IN_PROGRESS,
+            WorkflowStage.PR_PREPARING,
+            WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+            WorkflowStage.CHANGES_REQUESTED,
+        }
+        if task_obj.workflow_stage not in allowed_source_stages:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot complete from stage "
+                f"'{task_obj.workflow_stage.value}'. "
+                f"Allowed: {[stage.value for stage in allowed_source_stages]}"
+            )
+
+        task_obj.workflow_stage = WorkflowStage.PR_PREPARING
+        task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+        task_obj.closed_at = None
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(
+            f"Task {task_id[:8]}... completion requested → pr_preparing"
+            f", worktree={task_obj.worktree_path}"
+        )
+        return task_obj
+
+    @staticmethod
     def get_active_task(db_session: Session, run_account_id: str) -> Task | None:
         """获取当前活跃任务（最新的 OPEN 状态任务）.
 
