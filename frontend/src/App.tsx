@@ -782,7 +782,7 @@ function App() {
       if (taskItem.worktree_path) {
         await taskApi.complete(taskItem.id);
         setSuccessMessage(
-          "Codex is finalizing the worktree: commit, then git rebase main."
+          "Koda is finalizing the branch: git add ., commit from the task summary, rebase main, auto-fix rebase conflicts with Codex if needed, merge into main, and clean up the worktree."
         );
         await loadDashboardData(true);
         return;

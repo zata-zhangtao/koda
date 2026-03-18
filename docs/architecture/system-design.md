@@ -114,7 +114,7 @@ flowchart TD
 
 其中 `self_review_in_progress` 不再只是状态切换：`run_codex_task` 在实现完成后会立即触发一次独立的 Codex review，review 输出继续写回 `DevLog`；若发现阻塞问题，任务会回退到 `changes_requested`。
 
-`pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中启动一个独立的 Codex 完成阶段，要求其先执行提交，再执行 `git rebase main`。成功后任务自动进入 `done`；失败则回退到 `changes_requested`。
+`pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`、基于任务摘要生成 `git commit -m ...`、`git rebase main`，若 rebase / merge 冲突则自动调用 Codex 修复，然后复用当前持有 `main` 分支的工作区完成 merge 与清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。
 
 `test_in_progress` 与 `acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
 

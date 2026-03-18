@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import signal
+import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +33,9 @@ _CODEX_LOG_DIR = Path("/tmp")
 
 # 正在运行的 codex 进程注册表：task_id -> asyncio.subprocess.Process
 _running_codex_processes: dict[str, "asyncio.subprocess.Process"] = {}
+
+# 正在运行的后台任务集合：覆盖 codex 与非 codex 的任务收尾动作
+_running_background_task_ids: set[str] = set()
 
 # 用户主动取消的任务集合（用于区分「用户中断」与「意外中断」）
 _user_cancelled_tasks: set[str] = set()
@@ -61,6 +66,27 @@ class CodexPhaseExecutionResult:
     success: bool
     output_lines: list[str]
     was_cancelled: bool = False
+
+
+@dataclass(slots=True)
+class GitCompletionExecutionResult:
+    """Describe the result of the deterministic Git completion flow.
+
+    Attributes:
+        merged_to_main: Whether the feature branch was merged into ``main``
+        cleanup_succeeded: Whether worktree/branch cleanup finished successfully
+        output_lines: Collected command output lines for logging
+        feature_branch_name: Resolved feature branch name
+        failure_reason_text: Human-readable failure reason
+        worktree_removed: Whether the task worktree was removed from disk
+    """
+
+    merged_to_main: bool
+    cleanup_succeeded: bool
+    output_lines: list[str]
+    feature_branch_name: str | None = None
+    failure_reason_text: str | None = None
+    worktree_removed: bool = False
 
 
 def _output_contains_interruption(output_lines: list[str]) -> bool:
@@ -206,6 +232,9 @@ def is_codex_task_running(task_id_str: str) -> bool:
     Returns:
         bool: 若存在未退出的 Codex 进程则返回 True
     """
+    if task_id_str in _running_background_task_ids:
+        return True
+
     codex_process_obj = _running_codex_processes.get(task_id_str)
     return codex_process_obj is not None and codex_process_obj.returncode is None
 
@@ -274,6 +303,695 @@ def _append_exit_code_to_task_log(task_log_path: Path, exit_code_int: int) -> No
     """
     with task_log_path.open("a", encoding="utf-8") as log_file_handle:
         log_file_handle.write(f"\n=== exit code: {exit_code_int} ===\n")
+
+
+def _append_output_block_to_task_log(task_log_path: Path, output_text_str: str) -> None:
+    """Append multi-line command output to the task log.
+
+    Args:
+        task_log_path: Task log file path
+        output_text_str: Multi-line output text
+    """
+    if not output_text_str.strip():
+        return
+
+    for output_line_str in output_text_str.rstrip().splitlines():
+        _append_text_to_task_log(task_log_path, output_line_str)
+
+
+def _build_completion_commit_message(
+    task_id_str: str,
+    task_title_str: str,
+    task_summary_str: str | None,
+    dev_log_text_list: list[str],
+) -> str:
+    """Build a short compliant commit subject from the task summary first.
+
+    Args:
+        task_id_str: Task UUID
+        task_title_str: Task title, used only as a last-resort fallback
+        task_summary_str: Task summary / requirement brief
+        dev_log_text_list: Recent task logs, used as secondary fallback context
+
+    Returns:
+        str: Sanitized commit subject
+    """
+    commit_subject_candidate_list = [task_summary_str or ""]
+    commit_subject_candidate_list.extend(reversed(dev_log_text_list))
+    commit_subject_candidate_list.append(task_title_str)
+
+    for raw_commit_subject_candidate_str in commit_subject_candidate_list:
+        summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[0].strip()
+        normalized_commit_subject_str = " ".join(summary_subject_line_str.split()).rstrip(".")
+        if normalized_commit_subject_str:
+            return normalized_commit_subject_str[:72].rstrip()
+
+    return f"Task summary update {task_id_str[:8]}"
+
+
+def _resolve_primary_repo_root_from_worktree(worktree_path: Path) -> Path:
+    """Resolve the primary repository worktree from a task worktree.
+
+    Args:
+        worktree_path: Task worktree path
+
+    Returns:
+        Path: Primary repository root path
+
+    Raises:
+        ValueError: When the worktree does not resolve to a valid shared Git dir
+    """
+    completed_process = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=str(worktree_path),
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    raw_common_dir_path = completed_process.stdout.strip()
+    if not raw_common_dir_path:
+        raise ValueError(f"无法解析 worktree 对应的 git common dir：{worktree_path}")
+
+    git_common_dir_path = Path(raw_common_dir_path)
+    if not git_common_dir_path.is_absolute():
+        git_common_dir_path = (worktree_path / git_common_dir_path).resolve()
+
+    resolved_repo_root_path = git_common_dir_path.parent
+    if not resolved_repo_root_path.exists():
+        raise ValueError(f"worktree 对应的主仓库目录不存在：{resolved_repo_root_path}")
+
+    return resolved_repo_root_path
+
+
+def _resolve_worktree_path_for_branch(repo_path: Path, branch_name_str: str) -> Path | None:
+    """Resolve the worktree path that currently has a branch checked out.
+
+    Args:
+        repo_path: Any repository or worktree path in the shared repo
+        branch_name_str: Branch name to locate, for example ``main``
+
+    Returns:
+        Path | None: Worktree path for the branch when found
+    """
+    completed_process = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo_path),
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    current_worktree_path: Path | None = None
+    target_branch_ref_str = f"refs/heads/{branch_name_str}"
+    for output_line_str in completed_process.stdout.splitlines():
+        if output_line_str.startswith("worktree "):
+            current_worktree_path = Path(output_line_str.removeprefix("worktree ").strip())
+            continue
+        if output_line_str.startswith("branch ") and current_worktree_path is not None:
+            branch_ref_str = output_line_str.removeprefix("branch ").strip()
+            if branch_ref_str == target_branch_ref_str:
+                return current_worktree_path
+            current_worktree_path = None
+    return None
+
+
+def _run_logged_command(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    command_argument_list: list[str],
+    cwd_path: Path,
+    command_log_label_str: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run one command and mirror the result into the task log and DevLog.
+
+    Args:
+        task_id_str: Task UUID
+        run_account_id_str: Run account UUID
+        task_log_path: Task log file path
+        command_argument_list: Command argument list
+        cwd_path: Working directory
+        command_log_label_str: Human-readable label for the command
+
+    Returns:
+        subprocess.CompletedProcess[str]: Completed process object
+    """
+    command_display_str = shlex.join(command_argument_list)
+    _append_text_to_task_log(task_log_path, f"$ ({command_log_label_str}) {command_display_str}")
+
+    completed_process = subprocess.run(
+        command_argument_list,
+        cwd=str(cwd_path),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    command_output_parts = [
+        text_part.strip()
+        for text_part in [completed_process.stdout, completed_process.stderr]
+        if text_part and text_part.strip()
+    ]
+    combined_output_text = "\n".join(command_output_parts)
+    if combined_output_text:
+        _append_output_block_to_task_log(task_log_path, combined_output_text)
+    else:
+        _append_text_to_task_log(task_log_path, "(no output)")
+
+    _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
+
+    log_text_parts = [f"`{command_display_str}` -> exit {completed_process.returncode}"]
+    if combined_output_text:
+        log_text_parts.append(combined_output_text)
+    _write_log_to_db(
+        task_id_str,
+        run_account_id_str,
+        "\n".join(log_text_parts),
+        "OPTIMIZATION" if completed_process.returncode == 0 else "BUG",
+    )
+    return completed_process
+
+
+def _has_unmerged_conflicts(repo_path: Path) -> bool:
+    """Check whether the current Git working tree still has unresolved conflicts.
+
+    Args:
+        repo_path: Repository or worktree path
+
+    Returns:
+        bool: Whether any unmerged paths remain
+    """
+    completed_process = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        cwd=str(repo_path),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return bool((completed_process.stdout or "").strip())
+
+
+def _is_git_operation_still_in_progress(repo_path: Path, operation_kind_str: str) -> bool:
+    """Check whether a rebase or merge is still active in the repository.
+
+    Args:
+        repo_path: Repository or worktree path
+        operation_kind_str: Either ``rebase`` or ``merge``
+
+    Returns:
+        bool: Whether the requested Git operation is still active
+    """
+    if operation_kind_str == "merge":
+        completed_process = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return completed_process.returncode == 0
+
+    rebase_marker_name_list = ["rebase-merge", "rebase-apply"]
+    for rebase_marker_name_str in rebase_marker_name_list:
+        marker_path_process = subprocess.run(
+            ["git", "rev-parse", "--git-path", rebase_marker_name_str],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        marker_path_text = (marker_path_process.stdout or "").strip()
+        if not marker_path_text:
+            continue
+        marker_path = Path(marker_path_text)
+        if not marker_path.is_absolute():
+            marker_path = (repo_path / marker_path).resolve()
+        if marker_path.exists():
+            return True
+    return False
+
+
+def _build_codex_conflict_resolution_prompt(
+    *,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    repo_path: Path,
+    operation_kind_str: str,
+) -> str:
+    """Build the Codex prompt for automatic Git conflict resolution.
+
+    Args:
+        task_title_str: Task title
+        dev_log_text_list: Recent task history
+        repo_path: Repository or worktree path containing conflicts
+        operation_kind_str: Either ``rebase`` or ``merge``
+
+    Returns:
+        str: Prompt text for ``codex exec``
+    """
+    recent_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=8,
+        separator_str="\n\n---\n",
+        empty_context_text_str="（暂无额外上下文，请基于当前冲突与代码状态自行判断）",
+    )
+
+    operation_continue_instruction_str = (
+        "解决完冲突后执行 `git add .`，然后继续 `git rebase --continue`。"
+        if operation_kind_str == "rebase"
+        else "解决完冲突后执行 `git add .`，然后继续 `git merge --continue`；如果该命令不可用，则使用 `git commit --no-edit` 完成 merge。"
+    )
+
+    return f"""你现在处于 Koda 的自动 Git 冲突修复阶段，需要为当前任务自动处理 `{operation_kind_str}` 冲突。
+
+## 任务标题
+{task_title_str}
+
+## 最近上下文
+{recent_context_block_str}
+
+## 当前目录
+`{repo_path}`
+
+## 执行要求
+1. 先检查 `git status` 和当前冲突文件，识别所有未解决的冲突。
+2. 直接修改冲突文件，保留本任务已经完成的正确实现，并吸收 `main` 上需要保留的改动。
+3. 如果冲突涉及文档、类型或配置，保持它们与最终代码一致。
+4. {operation_continue_instruction_str}
+5. 如果继续过程中再次出现新的冲突，继续重复“解决冲突 -> add -> continue”，直到当前 `{operation_kind_str}` 真正结束。
+6. 不要 `git rebase --abort`、不要 `git merge --abort`、不要 push。
+7. 最后输出：解决了哪些冲突文件、`{operation_kind_str}` 是否已经完成、是否还需要人工处理。
+
+请现在直接执行。"""
+
+
+def _run_logged_codex_conflict_resolution(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    repo_path: Path,
+    operation_kind_str: str,
+) -> subprocess.CompletedProcess[str] | None:
+    """Invoke Codex to resolve a rebase or merge conflict in place.
+
+    Args:
+        task_id_str: Task UUID
+        run_account_id_str: Run account UUID
+        task_log_path: Task log file path
+        task_title_str: Task title
+        dev_log_text_list: Recent task history
+        repo_path: Repository or worktree path containing conflicts
+        operation_kind_str: Either ``rebase`` or ``merge``
+
+    Returns:
+        subprocess.CompletedProcess[str] | None: Completed process object, or None if Codex is unavailable
+    """
+    codex_executable_path_str = shutil.which("codex")
+    if not codex_executable_path_str:
+        missing_codex_text = (
+            f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
+        )
+        _append_text_to_task_log(task_log_path, missing_codex_text)
+        _write_log_to_db(task_id_str, run_account_id_str, missing_codex_text, "BUG")
+        return None
+
+    codex_prompt_text_str = _build_codex_conflict_resolution_prompt(
+        task_title_str=task_title_str,
+        dev_log_text_list=dev_log_text_list,
+        repo_path=repo_path,
+        operation_kind_str=operation_kind_str,
+    )
+    command_display_str = (
+        f"codex exec --dangerously-bypass-approvals-and-sandbox "
+        f"<{operation_kind_str}-conflict-prompt>"
+    )
+    _append_text_to_task_log(task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}")
+
+    completed_process = subprocess.run(
+        [
+            codex_executable_path_str,
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            codex_prompt_text_str,
+        ],
+        cwd=str(repo_path),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    command_output_parts = [
+        text_part.strip()
+        for text_part in [completed_process.stdout, completed_process.stderr]
+        if text_part and text_part.strip()
+    ]
+    combined_output_text = "\n".join(command_output_parts)
+    if combined_output_text:
+        _append_output_block_to_task_log(task_log_path, combined_output_text)
+    else:
+        _append_text_to_task_log(task_log_path, "(no output)")
+    _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
+
+    resolution_status_text = (
+        f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
+    )
+    if combined_output_text:
+        resolution_status_text += f"\n{combined_output_text}"
+    _write_log_to_db(
+        task_id_str,
+        run_account_id_str,
+        resolution_status_text,
+        "OPTIMIZATION" if completed_process.returncode == 0 else "BUG",
+    )
+    return completed_process
+
+
+def _finalize_completion_in_db(task_id_str: str, clear_worktree_path_bool: bool) -> None:
+    """Mark a task as done after a successful completion flow.
+
+    Args:
+        task_id_str: Task UUID
+        clear_worktree_path_bool: Whether to clear the stored worktree path
+    """
+    from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+    from dsl.models.task import Task
+    from utils.helpers import utc_now_naive
+
+    db_session = SessionLocal()
+    try:
+        task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
+        if task_obj is None:
+            return
+
+        task_obj.workflow_stage = WorkflowStage.DONE
+        task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
+        task_obj.closed_at = utc_now_naive()
+        if clear_worktree_path_bool:
+            task_obj.worktree_path = None
+        db_session.commit()
+        logger.info(
+            "Task %s... completion finalized (clear_worktree_path=%s)",
+            task_id_str[:8],
+            clear_worktree_path_bool,
+        )
+    except Exception as completion_finalize_error:
+        logger.error(
+            "Failed to finalize completion for task %s...: %s",
+            task_id_str[:8],
+            completion_finalize_error,
+        )
+        db_session.rollback()
+    finally:
+        db_session.close()
+
+
+def _execute_git_completion_flow(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    task_summary_str: str | None,
+    dev_log_text_list: list[str],
+    worktree_path_str: str,
+) -> GitCompletionExecutionResult:
+    """Run the deterministic Git completion sequence for a task worktree.
+
+    Args:
+        task_id_str: Task UUID
+        run_account_id_str: Run account UUID
+        task_title_str: Task title used as fallback context
+        task_summary_str: Task summary / requirement brief used for the commit subject
+        dev_log_text_list: Recent task history for commit-message fallback and conflict resolution
+        worktree_path_str: Task worktree path
+
+    Returns:
+        GitCompletionExecutionResult: Completion outcome metadata
+    """
+    from dsl.services.git_worktree_service import GitWorktreeService
+
+    task_log_path = get_task_log_path(task_id_str)
+    worktree_path = Path(worktree_path_str)
+    output_line_list: list[str] = []
+    _write_phase_log_header(
+        task_log_path=task_log_path,
+        task_id_str=task_id_str,
+        phase_log_label_str="git-complete",
+        overwrite_existing_log_bool=False,
+    )
+
+    try:
+        repo_root_path = _resolve_primary_repo_root_from_worktree(worktree_path)
+    except (subprocess.CalledProcessError, ValueError) as resolve_error:
+        failure_reason_text = str(resolve_error)
+        _append_text_to_task_log(task_log_path, failure_reason_text)
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=[failure_reason_text],
+            failure_reason_text=failure_reason_text,
+        )
+
+    branch_name_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "symbolic-ref", "--short", "HEAD"],
+        cwd_path=worktree_path,
+        command_log_label_str="resolve-branch",
+    )
+    output_line_list.extend((branch_name_process.stdout or "").splitlines())
+    if branch_name_process.returncode != 0:
+        failure_reason_text = "无法解析当前任务 worktree 的分支名。"
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            failure_reason_text=failure_reason_text,
+        )
+
+    feature_branch_name = (branch_name_process.stdout or "").strip()
+    if not feature_branch_name:
+        failure_reason_text = "当前任务 worktree 未处于命名分支，无法执行合并。"
+        _append_text_to_task_log(task_log_path, failure_reason_text)
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            failure_reason_text=failure_reason_text,
+        )
+
+    merge_target_worktree_path = _resolve_worktree_path_for_branch(repo_root_path, "main")
+    if merge_target_worktree_path is None:
+        merge_target_worktree_path = repo_root_path
+
+    repo_status_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "status", "--short"],
+        cwd_path=merge_target_worktree_path,
+        command_log_label_str="repo-status",
+    )
+    output_line_list.extend((repo_status_process.stdout or "").splitlines())
+    if repo_status_process.returncode != 0:
+        failure_reason_text = "无法检查主仓库状态。"
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            feature_branch_name=feature_branch_name,
+            failure_reason_text=failure_reason_text,
+        )
+
+    if (repo_status_process.stdout or "").strip():
+        failure_reason_text = (
+            "承载 `main` 分支的工作区不是干净状态，无法自动执行 merge。"
+        )
+        _append_text_to_task_log(task_log_path, failure_reason_text)
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            feature_branch_name=feature_branch_name,
+            failure_reason_text=failure_reason_text,
+        )
+
+    merge_target_branch_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "branch", "--show-current"],
+        cwd_path=merge_target_worktree_path,
+        command_log_label_str="main-worktree-branch",
+    )
+    output_line_list.extend((merge_target_branch_process.stdout or "").splitlines())
+    if merge_target_branch_process.returncode != 0:
+        failure_reason_text = "无法确认承载 `main` 分支的工作区当前分支。"
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            feature_branch_name=feature_branch_name,
+            failure_reason_text=failure_reason_text,
+        )
+
+    current_merge_target_branch_name = (merge_target_branch_process.stdout or "").strip()
+    commit_message_str = _build_completion_commit_message(
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+        task_summary_str=task_summary_str,
+        dev_log_text_list=dev_log_text_list,
+    )
+    command_plan = [
+        ("worktree-status", ["git", "status", "--short"], worktree_path),
+        ("git-add", ["git", "add", "."], worktree_path),
+        ("git-commit", ["git", "commit", "-m", commit_message_str], worktree_path),
+        ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
+    ]
+    if current_merge_target_branch_name != "main":
+        command_plan.append(("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path))
+    command_plan.append(
+        ("merge-feature", ["git", "merge", feature_branch_name], merge_target_worktree_path)
+    )
+
+    merge_completed_bool = False
+    for command_log_label_str, command_argument_list, command_cwd_path in command_plan:
+        completed_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=command_argument_list,
+            cwd_path=command_cwd_path,
+            command_log_label_str=command_log_label_str,
+        )
+        output_line_list.extend((completed_process.stdout or "").splitlines())
+        output_line_list.extend((completed_process.stderr or "").splitlines())
+        if completed_process.returncode != 0:
+            operation_kind_str = ""
+            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(command_cwd_path):
+                operation_kind_str = "rebase"
+            elif command_log_label_str == "merge-feature" and _has_unmerged_conflicts(command_cwd_path):
+                operation_kind_str = "merge"
+
+            if operation_kind_str:
+                codex_resolution_process = _run_logged_codex_conflict_resolution(
+                    task_id_str=task_id_str,
+                    run_account_id_str=run_account_id_str,
+                    task_log_path=task_log_path,
+                    task_title_str=task_title_str,
+                    dev_log_text_list=dev_log_text_list,
+                    repo_path=command_cwd_path,
+                    operation_kind_str=operation_kind_str,
+                )
+                if codex_resolution_process is not None:
+                    output_line_list.extend((codex_resolution_process.stdout or "").splitlines())
+                    output_line_list.extend((codex_resolution_process.stderr or "").splitlines())
+                if (
+                    codex_resolution_process is not None
+                    and codex_resolution_process.returncode == 0
+                    and not _has_unmerged_conflicts(command_cwd_path)
+                    and not _is_git_operation_still_in_progress(command_cwd_path, operation_kind_str)
+                ):
+                    if command_log_label_str == "merge-feature":
+                        merge_completed_bool = True
+                    continue
+
+                failure_reason_text = (
+                    f"{operation_kind_str} 冲突已触发 Codex 自动修复，但未能成功完成："
+                    f"{shlex.join(command_argument_list)}"
+                )
+            else:
+                failure_reason_text = (
+                    f"命令失败：{shlex.join(command_argument_list)}"
+                )
+            return GitCompletionExecutionResult(
+                merged_to_main=merge_completed_bool,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+        if command_log_label_str == "merge-feature":
+            merge_completed_bool = True
+
+    cleanup_script_path = GitWorktreeService.resolve_cleanup_script_path(repo_root_path)
+    if cleanup_script_path is not None:
+        cleanup_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=[
+                str(cleanup_script_path),
+                feature_branch_name,
+                "main",
+                "--delete",
+                "--worktree-path",
+                worktree_path_str,
+            ],
+            cwd_path=merge_target_worktree_path,
+            command_log_label_str="cleanup-script",
+        )
+        output_line_list.extend((cleanup_process.stdout or "").splitlines())
+        output_line_list.extend((cleanup_process.stderr or "").splitlines())
+        cleanup_succeeded_bool = cleanup_process.returncode == 0
+        return GitCompletionExecutionResult(
+            merged_to_main=True,
+            cleanup_succeeded=cleanup_succeeded_bool,
+            output_lines=output_line_list,
+            feature_branch_name=feature_branch_name,
+            failure_reason_text=(
+                None
+                if cleanup_succeeded_bool
+                else "分支已合并到 main，但 repo-local cleanup 脚本执行失败。"
+            ),
+            worktree_removed=not worktree_path.exists(),
+        )
+
+    cleanup_command_plan = [
+        ("remove-worktree", ["git", "worktree", "remove", worktree_path_str], merge_target_worktree_path),
+        ("delete-branch", ["git", "branch", "-d", feature_branch_name], merge_target_worktree_path),
+    ]
+    for command_log_label_str, command_argument_list, command_cwd_path in cleanup_command_plan:
+        completed_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=command_argument_list,
+            cwd_path=command_cwd_path,
+            command_log_label_str=command_log_label_str,
+        )
+        output_line_list.extend((completed_process.stdout or "").splitlines())
+        output_line_list.extend((completed_process.stderr or "").splitlines())
+        if completed_process.returncode != 0:
+            return GitCompletionExecutionResult(
+                merged_to_main=True,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text="分支已合并到 main，但清理 task worktree 或分支失败。",
+                worktree_removed=not worktree_path.exists(),
+            )
+
+    return GitCompletionExecutionResult(
+        merged_to_main=True,
+        cleanup_succeeded=True,
+        output_lines=output_line_list,
+        feature_branch_name=feature_branch_name,
+        worktree_removed=not worktree_path.exists(),
+    )
 
 
 async def _create_codex_subprocess(
@@ -420,10 +1138,10 @@ def build_codex_completion_prompt(
     dev_log_text_list: list[str],
     worktree_path_str: str,
 ) -> str:
-    """根据任务标题和历史日志构建完成阶段 Prompt.
+    """根据任务标题和历史日志构建完成阶段说明文本.
 
-    点击「Complete」后，Codex 会在任务对应的 git worktree 中执行最终 Git 收尾：
-    先提交当前改动，再执行 `git rebase main`。
+    当前完成阶段已改为后端直接执行 Git 命令，这个文本主要用于描述
+    `Complete` 对应的精确命令顺序，便于测试与文档保持一致。
 
     Args:
         task_title: 需求卡片标题
@@ -431,7 +1149,7 @@ def build_codex_completion_prompt(
         worktree_path_str: 任务对应的 git worktree 绝对路径
 
     Returns:
-        str: 完整的完成阶段 Prompt 文本
+        str: 完整的完成阶段说明文本
     """
     completion_context_block_str = _build_recent_context_block(
         dev_log_text_list=dev_log_text_list,
@@ -450,16 +1168,18 @@ def build_codex_completion_prompt(
 
 ## Git Worktree 说明
 当前工作目录就是任务对应的 git worktree：`{worktree_path_str}`
-- 所有命令都必须在这个 worktree 中执行
-- 不要切换到其他目录、不要创建新 worktree、不要 push
+- `git add .`、`git commit`、`git rebase main` 在当前 worktree 中执行
+- merge 会复用当前持有 `main` 分支的工作区；只有找不到该工作区时才会尝试 `git checkout main`
+- 不要创建新 worktree、不要 push
 
 ## 执行要求
 1. 先查看当前 `git status`，确认本次任务的工作区状态。
-2. 按照用户点击「Complete」的要求，严格按顺序执行：先完成一次 `commit`，再执行 `git rebase main`。
-3. `git commit` 的提交消息要简洁，且应与当前需求标题相关。
-4. 如果工作区没有可提交的变更、`main` 分支不存在、或 rebase 发生冲突，停止继续操作，并明确输出失败原因。
-5. 不要 push、不要 merge、不要删除分支、不要做额外的 Git 清理动作。
-6. 最后简要输出：提交结果、rebase 结果、是否还需要人工处理。
+2. 严格按顺序执行：`git add .`、`git commit -m "<task summary>"`、`git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
+3. `git commit` 的提交消息要使用任务摘要 / requirement brief，而不是直接复用任务标题。
+4. 如果 `git rebase main` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
+5. 如果工作区没有可提交的变更、缺少 `main`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
+6. merge 成功后，需要清理 task worktree 与本地任务分支；不要 push。
+7. 最后简要输出：提交结果、rebase 结果、merge 结果、是否还需要人工处理。
 
 请开始执行。"""
 
@@ -1049,65 +1769,98 @@ async def run_codex_completion(
     task_id_str: str,
     run_account_id_str: str,
     task_title_str: str,
+    task_summary_str: str | None,
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str,
 ) -> None:
-    """在任务 worktree 中执行完成阶段的 Git 收尾动作.
+    """在任务 worktree 中执行确定性的 Git 收尾与合并动作.
 
-    完成阶段会让 Codex 按顺序执行一次提交，然后运行 `git rebase main`。
-    若收尾成功，任务自动推进到 `done`；若失败，任务回退到 `changes_requested`。
+    完成阶段会在后台按顺序执行：
+    `git add .` -> `git commit -m "<task summary>"` -> `git rebase main`
+    -> 复用承载 `main` 的工作区执行 `git merge <task branch>` -> 清理 worktree/分支。
+    若 `git rebase main` 发生冲突，会自动调用 Codex 修复冲突并继续 rebase。
+    若合并成功，任务自动推进到 `done`；若在合并前失败，任务回退到 `changes_requested`。
 
     Args:
         task_id_str: 任务 UUID 字符串
         run_account_id_str: 运行账户 UUID 字符串
-        task_title_str: 任务标题，用于构建 Prompt
-        dev_log_text_list: 历史日志文本列表，用于构建上下文
-        work_dir_path: codex 的工作目录，必须是任务 worktree
+        task_title_str: 任务标题，用于补充上下文
+        task_summary_str: 任务摘要 / requirement brief，用于 commit message
+        dev_log_text_list: 历史日志文本列表，用于 commit message 回退和冲突修复上下文
+        work_dir_path: 保留参数；当前应为任务 worktree
         worktree_path_str: 任务对应的 git worktree 绝对路径
     """
-    completion_prompt_text_str = build_codex_completion_prompt(
-        task_title=task_title_str,
-        dev_log_text_list=dev_log_text_list,
-        worktree_path_str=worktree_path_str,
-    )
+    del work_dir_path
 
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        "🚀 已收到完成请求，Codex 正在当前 worktree 中执行：先 `commit`，再 `git rebase main`。",
-        "OPTIMIZATION",
-    )
-
-    completion_phase_result = await _run_codex_phase(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        codex_prompt_text_str=completion_prompt_text_str,
-        work_dir_path=work_dir_path,
-        phase_log_label_str="codex-complete",
-        phase_display_name_str="完成收尾",
-        cancelled_log_text_str="🛑 用户手动中断了完成阶段。",
-        overwrite_existing_log_bool=False,
-    )
-
-    if not completion_phase_result.success:
+    _running_background_task_ids.add(task_id_str)
+    try:
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            "❌ Codex 未能完成 worktree 收尾（`commit` -> `git rebase main`），任务已回退至：待修改（changes_requested）。",
+            "🚀 已收到完成请求，Koda 正在执行：`git add .` -> `git commit` -> `git rebase main`。若 rebase 冲突，会自动调用 Codex 修复；随后会在承载 `main` 的工作区完成 merge 与清理。",
+            "OPTIMIZATION",
+        )
+
+        completion_result = await asyncio.to_thread(
+            _execute_git_completion_flow,
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            task_summary_str=task_summary_str,
+            dev_log_text_list=dev_log_text_list,
+            worktree_path_str=worktree_path_str,
+        )
+
+        if not completion_result.merged_to_main:
+            failure_reason_text = completion_result.failure_reason_text or (
+                "Git 收尾在合并到 main 之前失败。"
+            )
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                "❌ Koda 未能完成分支收尾与合并："
+                f"{failure_reason_text}\n"
+                "任务已回退至：待修改（changes_requested）。",
+                "BUG",
+            )
+            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            return
+
+        if completion_result.cleanup_succeeded:
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                "✅ Koda 已完成分支收尾并合并到 `main`，task worktree 与分支也已清理。任务已标记为完成。",
+                "FIXED",
+            )
+            await asyncio.to_thread(_finalize_completion_in_db, task_id_str, True)
+            logger.info(f"Task {task_id_str[:8]}... completion flow merged and cleaned up.")
+            return
+
+        cleanup_warning_text = completion_result.failure_reason_text or (
+            "分支已合并到 main，但 worktree 清理未完成。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            "⚠️ Koda 已把任务分支合并到 `main`，但自动清理没有完全成功："
+            f"{cleanup_warning_text}\n"
+            "任务仍会标记为完成，请按日志提示手动处理残留 worktree/branch。",
             "BUG",
         )
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        return
-
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        "✅ Codex 已在任务 worktree 中完成 Git 收尾：已提交当前改动，并执行 `git rebase main`。任务已标记为完成。",
-        "FIXED",
-    )
-    await asyncio.to_thread(_advance_stage_in_db, task_id_str, "done")
-    logger.info(f"Task {task_id_str[:8]}... completion flow finished successfully.")
+        await asyncio.to_thread(
+            _finalize_completion_in_db,
+            task_id_str,
+            completion_result.worktree_removed,
+        )
+        logger.info(
+            "Task %s... completion flow merged successfully but cleanup needs attention.",
+            task_id_str[:8],
+        )
+    finally:
+        _running_background_task_ids.discard(task_id_str)

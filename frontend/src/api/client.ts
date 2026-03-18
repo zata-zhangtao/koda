@@ -133,7 +133,7 @@ export const taskApi = {
       method: "POST",
     }),
 
-  /** 触发任务进入完成收尾阶段（先 commit，再 git rebase main） */
+  /** 触发任务进入完成收尾阶段（summary commit + rebase + Codex conflict fix + merge + cleanup） */
   complete: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/complete`, {
       method: "POST",

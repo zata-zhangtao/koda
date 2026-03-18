@@ -76,7 +76,7 @@ just dsl-dev
 需要明确区分“已实现”和“路线图”：
 
 - 已实现的自动化主链路是：创建任务、生成 PRD、等待用户确认 PRD、触发编码、自动进入 AI 自检并写回执行日志。
-- 默认不会在实现阶段自动执行 `git commit`；只有用户点击 `Complete` 后，系统才会让 Codex 在任务 worktree 中执行先 `commit`、再 `git rebase main` 的收尾动作。
+- 默认不会在实现阶段自动执行 `git commit`；只有用户点击 `Complete` 后，系统才会在任务 worktree 中执行 `git add .`、基于任务摘要的 `git commit -m ...`、`git rebase main`，必要时自动调用 Codex 修复 rebase / merge 冲突，然后复用当前持有 `main` 分支的工作区完成 merge，最后清理 task worktree / branch。
 - `WorkflowStage` 中的 `pr_preparing` 现在已接入真实自动化：`Complete` 会先进入该阶段，成功后自动推进到 `done`；`test_in_progress` 与 `acceptance_in_progress` 仍主要是预留阶段。
 - `ai_agent/` 当前是工具库，不是 DSL 请求链路中的主处理器。
 

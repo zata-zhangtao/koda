@@ -40,12 +40,13 @@
 
 1. 前端点击“Complete”
 2. 后端将任务推进到 `pr_preparing`
-3. `run_codex_completion` 组装完成阶段 Prompt
-4. 后端调用 `codex exec`
-5. Codex 在任务 worktree 中按顺序执行：先 `commit`，再 `git rebase main`
-6. 输出继续实时写入 `DevLog`
-7. 若收尾成功，任务自动推进到 `done`
-8. 若收尾失败，任务回退到 `changes_requested`
+3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`、`git commit -m "<task summary>"`、`git rebase main`
+4. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
+5. 后端会复用当前持有 `main` 分支的工作区完成 `git merge <task branch>`
+6. merge 成功后继续清理 task worktree 与本地任务分支
+7. 日志继续写入 `DevLog`
+8. 若收尾成功，任务自动推进到 `done`
+9. 若在合并到 `main` 前失败，任务回退到 `changes_requested`
 
 ## Prompt 来源
 
@@ -89,20 +90,20 @@
 - 审查需求覆盖、明显回归、文档同步和错误路径
 - 输出结构化标记 `SELF_REVIEW_SUMMARY` 与 `SELF_REVIEW_STATUS`
 
-### 完成阶段 Prompt
+### 完成阶段说明文本
 
-由 `build_codex_completion_prompt` 构造，输入包括：
+`build_codex_completion_prompt` 现在主要作为完成链路的人类可读说明，输入包括：
 
 - 任务标题
 - 最近最多 8 条历史日志
 - 必填的 worktree 路径
 
-当前 Prompt 会显式要求：
+它描述的真实后台行为是：
 
-- 所有 Git 操作都发生在当前任务 worktree
-- 严格按顺序先执行 `commit`，再执行 `git rebase main`
-- 不要 push、不要 merge、不要删除分支
-- 若无可提交改动、缺少 `main` 或 rebase 冲突，要明确报告失败原因
+- 当前 task worktree 中执行 `git add .`、基于任务摘要的 `git commit -m ...`、`git rebase main`
+- 优先复用已经持有 `main` 分支的工作区，而不是假定可以随时 `checkout main`
+- 若 `rebase` / `merge` 冲突，则自动调用 Codex 修复并继续
+- merge 成功后清理 worktree 与本地任务分支，不会 push
 
 ## 实际调用特征
 

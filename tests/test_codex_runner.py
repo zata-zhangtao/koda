@@ -84,15 +84,18 @@ def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
     assert "git add -A" not in implementation_prompt_text
 
 
-def test_build_codex_completion_prompt_orders_commit_before_rebase() -> None:
-    """Completion prompt should tell Codex to commit before rebasing main."""
+def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
+    """Completion text should describe commit, rebase, merge, and cleanup order."""
     completion_prompt_text = codex_runner.build_codex_completion_prompt(
         task_title="Finalize branch",
         dev_log_text_list=["Implementation already passed review."],
         worktree_path_str="/tmp/project-wt-12345678",
     )
 
-    assert "先完成一次 `commit`，再执行 `git rebase main`" in completion_prompt_text
+    assert "`git add .`" in completion_prompt_text
+    assert "承载 `main` 的工作区" in completion_prompt_text
+    assert "`git merge <task branch>`" in completion_prompt_text
+    assert "任务摘要 / requirement brief" in completion_prompt_text
     assert "不要 push" in completion_prompt_text
 
 
@@ -258,20 +261,32 @@ def test_run_codex_task_moves_to_changes_requested_on_review_findings(
 def test_run_codex_completion_advances_task_to_done_on_success(
     tmp_path: Path,
 ) -> None:
-    """A successful completion flow should close the task after commit and rebase."""
-    recorded_prompt_text_list: list[str] = []
+    """A successful completion flow should finalize the task after merge and cleanup."""
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
+    recorded_finalize_call_list: list[tuple[str, bool]] = []
 
-    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
-        recorded_prompt_text_list.append(kwargs["codex_prompt_text_str"])
-        return FakeCodexProcess(
-            output_line_list=[
-                "Created commit abc123",
-                "Successfully rebased onto main",
-            ],
-            planned_return_code_int=0,
-            pid_int=5555,
+    def fake_execute_git_completion_flow(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        task_summary_str: str | None,
+        dev_log_text_list: list[str],
+        worktree_path_str: str,
+    ) -> codex_runner.GitCompletionExecutionResult:
+        assert task_id_str == "12345678-done-case"
+        assert run_account_id_str == "run-account-3"
+        assert task_title_str == "Finalize branch"
+        assert task_summary_str == "Implement the reviewed branch flow"
+        assert dev_log_text_list == ["Implementation already passed review."]
+        assert worktree_path_str == str(tmp_path / "repo-wt-12345678")
+        return codex_runner.GitCompletionExecutionResult(
+            merged_to_main=True,
+            cleanup_succeeded=True,
+            output_lines=["Merged feature branch into main."],
+            feature_branch_name="task/12345678",
+            worktree_removed=True,
         )
 
     def fake_write_log_to_db(
@@ -285,46 +300,126 @@ def test_run_codex_completion_advances_task_to_done_on_success(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
-    original_which = codex_runner.shutil.which
-    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    def fake_finalize_completion_in_db(
+        task_id_str: str,
+        clear_worktree_path_bool: bool,
+    ) -> None:
+        recorded_finalize_call_list.append((task_id_str, clear_worktree_path_bool))
+
+    original_execute_git_completion_flow = codex_runner._execute_git_completion_flow
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
-    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+    original_finalize_completion_in_db = codex_runner._finalize_completion_in_db
 
     try:
-        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
-        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._execute_git_completion_flow = fake_execute_git_completion_flow
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
-        codex_runner._CODEX_LOG_DIR = tmp_path
+        codex_runner._finalize_completion_in_db = fake_finalize_completion_in_db
 
         asyncio.run(
             codex_runner.run_codex_completion(
                 task_id_str="12345678-done-case",
                 run_account_id_str="run-account-3",
                 task_title_str="Finalize branch",
+                task_summary_str="Implement the reviewed branch flow",
                 dev_log_text_list=["Implementation already passed review."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path / "repo-wt-12345678"),
             )
         )
     finally:
-        codex_runner.shutil.which = original_which
-        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._execute_git_completion_flow = original_execute_git_completion_flow
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
-        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._finalize_completion_in_db = original_finalize_completion_in_db
+        codex_runner._running_background_task_ids.clear()
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
 
-    assert len(recorded_prompt_text_list) == 1
-    assert "先完成一次 `commit`，再执行 `git rebase main`" in recorded_prompt_text_list[0]
-    assert recorded_stage_value_list == ["done"]
-    assert any("Codex 正在当前 worktree 中执行" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("任务已标记为完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert recorded_stage_value_list == []
+    assert recorded_finalize_call_list == [("12345678-done-case", True)]
+    assert any("git add ." in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("合并到 `main`" in log_text for log_text, _ in recorded_log_entry_list)
 
-    task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
-    assert "=== Koda codex-complete" in task_log_text
+
+def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
+    tmp_path: Path,
+) -> None:
+    """A merge success with cleanup failure should still finalize the task with a warning."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_finalize_call_list: list[tuple[str, bool]] = []
+
+    def fake_execute_git_completion_flow(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        task_summary_str: str | None,
+        dev_log_text_list: list[str],
+        worktree_path_str: str,
+    ) -> codex_runner.GitCompletionExecutionResult:
+        return codex_runner.GitCompletionExecutionResult(
+            merged_to_main=True,
+            cleanup_succeeded=False,
+            output_lines=["Merged feature branch into main."],
+            feature_branch_name="task/12345678",
+            failure_reason_text="cleanup script failed",
+            worktree_removed=False,
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_finalize_completion_in_db(
+        task_id_str: str,
+        clear_worktree_path_bool: bool,
+    ) -> None:
+        recorded_finalize_call_list.append((task_id_str, clear_worktree_path_bool))
+
+    original_execute_git_completion_flow = codex_runner._execute_git_completion_flow
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_finalize_completion_in_db = codex_runner._finalize_completion_in_db
+
+    try:
+        codex_runner._execute_git_completion_flow = fake_execute_git_completion_flow
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._finalize_completion_in_db = fake_finalize_completion_in_db
+
+        asyncio.run(
+            codex_runner.run_codex_completion(
+                task_id_str="12345678-clean-warn",
+                run_account_id_str="run-account-5",
+                task_title_str="Finalize branch",
+                task_summary_str="Implement the reviewed branch flow",
+                dev_log_text_list=["Implementation already passed review."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner._execute_git_completion_flow = original_execute_git_completion_flow
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._finalize_completion_in_db = original_finalize_completion_in_db
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == []
+    assert recorded_finalize_call_list == [("12345678-clean-warn", False)]
+    assert any("自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list)
 
 
 def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
@@ -333,12 +428,23 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
     """A failed completion flow should regress the task to changes requested."""
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
+    recorded_finalize_call_list: list[tuple[str, bool]] = []
 
-    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
-        return FakeCodexProcess(
-            output_line_list=["Rebase conflict on app.py"],
-            planned_return_code_int=1,
-            pid_int=6666,
+    def fake_execute_git_completion_flow(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        task_summary_str: str | None,
+        dev_log_text_list: list[str],
+        worktree_path_str: str,
+    ) -> codex_runner.GitCompletionExecutionResult:
+        return codex_runner.GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=["Rebase conflict on app.py"],
+            feature_branch_name="task/12345678",
+            failure_reason_text="rebase conflict on app.py",
         )
 
     def fake_write_log_to_db(
@@ -352,37 +458,43 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
-    original_which = codex_runner.shutil.which
-    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    def fake_finalize_completion_in_db(
+        task_id_str: str,
+        clear_worktree_path_bool: bool,
+    ) -> None:
+        recorded_finalize_call_list.append((task_id_str, clear_worktree_path_bool))
+
+    original_execute_git_completion_flow = codex_runner._execute_git_completion_flow
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
-    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+    original_finalize_completion_in_db = codex_runner._finalize_completion_in_db
 
     try:
-        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
-        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._execute_git_completion_flow = fake_execute_git_completion_flow
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
-        codex_runner._CODEX_LOG_DIR = tmp_path
+        codex_runner._finalize_completion_in_db = fake_finalize_completion_in_db
 
         asyncio.run(
             codex_runner.run_codex_completion(
                 task_id_str="12345678-finish-fail",
                 run_account_id_str="run-account-4",
                 task_title_str="Finalize branch",
+                task_summary_str="Implement the reviewed branch flow",
                 dev_log_text_list=["Implementation already passed review."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path / "repo-wt-12345678"),
             )
         )
     finally:
-        codex_runner.shutil.which = original_which
-        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._execute_git_completion_flow = original_execute_git_completion_flow
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
-        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._finalize_completion_in_db = original_finalize_completion_in_db
+        codex_runner._running_background_task_ids.clear()
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
 
     assert recorded_stage_value_list == ["changes_requested"]
-    assert any("未能完成 worktree 收尾" in log_text for log_text, _ in recorded_log_entry_list)
+    assert recorded_finalize_call_list == []
+    assert any("未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list)

@@ -333,13 +333,18 @@ def complete_task(
     background_tasks: BackgroundTasks,
     db_session: Annotated[Session, Depends(get_db)],
 ) -> Task:
-    """触发任务进入完成收尾阶段，并在 worktree 中执行 Git 收尾动作.
+    """触发任务进入完成收尾阶段，并执行确定性的 Git 收尾与合并动作.
 
-    收尾动作由 Codex 在任务 worktree 中执行，顺序固定为：
-    1. 先提交当前改动
-    2. 再执行 `git rebase main`
+    顺序固定为：
+    1. 在任务 worktree 中执行 `git add .`
+    2. 在任务 worktree 中执行 `git commit -m "<task summary>"`
+    3. 在任务 worktree 中执行 `git rebase main`
+    4. 若 rebase 冲突，自动调用 Codex 修复冲突并继续 rebase
+    5. 在当前持有 `main` 分支的工作区执行 `git merge <task branch>`
+    6. 清理 task worktree 与本地任务分支
 
-    若收尾成功，任务自动推进到 `done`；若失败，则回退到 `changes_requested`。
+    若在合并到 `main` 前失败，任务回退到 `changes_requested`。
+    若已成功合并到 `main` 但清理失败，任务仍会进入 `done`，同时记录人工清理提示。
 
     Args:
         task_id: 任务 ID
@@ -351,12 +356,12 @@ def complete_task(
 
     Raises:
         HTTPException: 当任务不存在时返回 404；阶段不合法、worktree 缺失或目录不存在时返回 422；
-            若当前任务已存在运行中的 Codex 进程则返回 409
+            若当前任务已存在运行中的后台执行则返回 409
     """
     if is_codex_task_running(task_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Codex is already running for this task.",
+            detail="Task automation is already running for this task.",
         )
 
     try:
@@ -392,6 +397,7 @@ def complete_task(
         dev_log_item.text_content for dev_log_item in completion_task.dev_logs
     ]
     task_title_snapshot_str: str = completion_task.task_title
+    task_summary_snapshot_str: str | None = completion_task.requirement_brief
     run_account_id_snapshot_str: str = completion_task.run_account_id
     worktree_path_snapshot_str: str = completion_task.worktree_path
 
@@ -400,6 +406,7 @@ def complete_task(
         task_id_str=task_id,
         run_account_id_str=run_account_id_snapshot_str,
         task_title_str=task_title_snapshot_str,
+        task_summary_str=task_summary_snapshot_str,
         dev_log_text_list=dev_log_text_snapshot_list,
         work_dir_path=worktree_dir_path,
         worktree_path_str=worktree_path_snapshot_str,

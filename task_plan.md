@@ -105,3 +105,57 @@ All phases complete with one unrelated residual test hang noted below ✅
   - `dsl/app.py` - startup now reuses the shared bootstrap helper
   - `tests/test_database.py` - regression coverage for fresh SQLite session bootstrap
   - `docs/getting-started.md`, `docs/database/migrations.md`, `docs/database/schema.md`, `docs/guides/dsl-development.md` - synchronized bootstrap documentation
+
+---
+
+# Task Plan: Deterministic Complete Flow With Git Merge And Worktree Cleanup
+
+**Goal**: Change the `Complete` action so Koda performs a deterministic Git sequence for worktree-backed tasks: `git add .`, `git commit -m "<task summary>"`, `git rebase main`, automatically let Codex resolve rebase/merge conflicts when they happen, then merge via the worktree that already holds `main`, and finally clean up the task worktree and branch. Align worktree lifecycle behavior with the reference scripts in `~/code/zata_code_template/scripts`.
+**Started**: 2026-03-18
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Inspect the current `Complete` flow and confirm it only asks Codex to commit then rebase
+- [x] Inspect task worktree creation behavior and current script detection
+- [x] Review the reference worktree create/merge-cleanup scripts in `~/code/zata_code_template/scripts`
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Introduce shared worktree helpers for task branch naming and creation
+- [x] Replace prompt-driven completion with backend-controlled Git commands and merge cleanup
+- [x] Add Codex-assisted conflict resolution for `git rebase main` / merge conflicts
+- [x] Update API/frontend copy and docs to reflect the new sequence
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Add or update regression tests for completion success/failure and worktree creation
+- [x] Run focused backend tests and `uv run mkdocs build`
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Make `Complete` backend-driven instead of relying on Codex prompt execution | The requested Git order is exact and should be deterministic rather than prompt-dependent |
+| Keep commit/rebase inside the task worktree but merge from whichever worktree already has `main` checked out | A Git worktree setup may not allow arbitrary `checkout main` in another worktree |
+| Reuse the reference script pattern for cleanup when available, but keep a built-in fallback | The template repo already encodes worktree cleanup behavior, but Koda still needs to work when those scripts are absent |
+| Use task summary / requirement brief as the primary commit subject source | The user explicitly asked not to reuse the raw task title as the commit message |
+| Invoke Codex only when `rebase` / `merge` actually enters conflict state | Deterministic Git should remain the default, while Codex handles the ambiguous conflict-resolution step |
+
+## Completion Summary
+- **Status:** Complete (2026-03-18)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py dsl/services/task_service.py dsl/services/codex_runner.py dsl/api/tasks.py tests/test_codex_runner.py tests/test_git_worktree_service.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_codex_runner.py tests/test_git_worktree_service.py tests/test_task_service.py -q` -> PASS (`14 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS (upstream Material 2.0 warning only)
+- **Deliverables:**
+  - `dsl/services/git_worktree_service.py` - shared task branch naming, worktree creation, and cleanup-script discovery
+  - `dsl/services/task_service.py` - task start flow now uses the shared worktree creation helper
+  - `dsl/services/codex_runner.py` - deterministic completion flow, main-worktree merge routing, and Codex-assisted conflict resolution
+  - `dsl/api/tasks.py` - completion API now passes task summary / requirement brief into the background Git flow
+  - `frontend/src/App.tsx`, `frontend/src/api/client.ts` - updated user-facing completion messaging
+  - `tests/test_codex_runner.py`, `tests/test_git_worktree_service.py` - regression coverage for completion orchestration and real Git worktree merge/cleanup
+  - `docs/index.md`, `docs/architecture/system-design.md`, `docs/guides/codex-cli-automation.md`, `docs/core/prompt-management.md` - synchronized operator documentation

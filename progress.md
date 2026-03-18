@@ -59,3 +59,33 @@
 |-------|------------|
 | Initial smoke test script failed with `KeyError: 'TEMP_REPO_PATH'` | Exported the temp shell variables before invoking Python |
 | Full `pytest -q` did not terminate once it reached `tests/test_codex_runner.py` | Isolated the DB-related suites and recorded the remaining hang as unrelated residual risk |
+
+## Session: 2026-03-18 Deterministic Complete Flow
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-18
+
+### Actions Taken
+- Confirmed that `Complete` currently relies on a Codex prompt and only covers `commit` plus `git rebase main`.
+- Inspected `TaskService.start_task` and verified worktree creation only probes a narrow subset of script names.
+- Reviewed `~/code/zata_code_template/scripts/git_worktree.sh` and `git_worktree_merge.sh` to mirror their create/cleanup patterns without introducing an unwanted push step.
+- Chose to move completion into backend-controlled Git commands so the requested sequence is exact and testable.
+- Added `dsl/services/git_worktree_service.py` to centralize task branch naming, worktree creation, and cleanup-script lookup.
+- Switched `TaskService.start_task` to the shared worktree helper so repo-local template-style scripts can be reused consistently.
+- Replaced prompt-driven completion with deterministic Git automation: `git add .`, summary-based `git commit -m ...`, `git rebase main`, merge through the worktree already holding `main`, then cleanup.
+- Added automatic Codex conflict resolution when `git rebase main` or the final merge enters a real conflict state.
+- Updated the completion API, UI copy, and operator docs to reflect summary-based commits, main-worktree merging, and Codex conflict repair.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py dsl/services/task_service.py dsl/services/codex_runner.py dsl/api/tasks.py tests/test_codex_runner.py tests/test_git_worktree_service.py` | Edited backend files and tests compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_codex_runner.py tests/test_git_worktree_service.py tests/test_task_service.py -q` | Completion orchestration, real Git worktree flow, and task stage regressions pass | `14 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` | Documentation remains valid after completion-flow updates | Build succeeded; Material 2.0 upstream warning only | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| Original design assumed Koda could always `checkout main` in a chosen worktree | Switched merge execution to reuse the worktree that already has `main` checked out, with checkout only as a fallback |
+| Initial completion design used the raw task title as the commit message | Changed commit-subject generation to prefer `requirement_brief` / task summary, then fall back through recent logs only if needed |

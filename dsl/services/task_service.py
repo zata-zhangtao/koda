@@ -203,7 +203,6 @@ class TaskService:
         Raises:
             ValueError: 任务不在 BACKLOG 阶段，或 worktree 创建失败
         """
-        import subprocess
         from pathlib import Path
 
         task_obj = TaskService.get_task_by_id(db_session, task_id)
@@ -250,47 +249,18 @@ class TaskService:
                         "关联项目当前绑定到错误的代码仓库。"
                         "请先把项目重绑到与已同步指纹一致的 Git remote。"
                     )
-                task_short_id_str = task_id[:8]
-                branch_name_str = f"task/{task_short_id_str}"
-                worktree_path_str = str(
-                    repo_path_obj.parent / f"{repo_path_obj.name}-wt-{task_short_id_str}"
-                )
+                from dsl.services.git_worktree_service import GitWorktreeService
 
-                # 优先查找项目内的 worktree 创建脚本
-                worktree_script_candidates = [
-                    repo_path_obj / "scripts" / "new-worktree.sh",
-                    repo_path_obj / "scripts" / "create-worktree.sh",
-                    repo_path_obj / "new-worktree.sh",
-                ]
-                worktree_script_path = next(
-                    (p for p in worktree_script_candidates if p.exists()), None
+                branch_name_str = GitWorktreeService.build_task_branch_name(task_id)
+                created_worktree_path = GitWorktreeService.create_task_worktree(
+                    repo_root_path=repo_path_obj,
+                    task_id=task_id,
                 )
-
-                try:
-                    if worktree_script_path:
-                        subprocess.run(
-                            [str(worktree_script_path), worktree_path_str, branch_name_str],
-                            cwd=str(repo_path_obj),
-                            check=True,
-                            capture_output=True,
-                        )
-                    else:
-                        subprocess.run(
-                            ["git", "worktree", "add", worktree_path_str, "-b", branch_name_str],
-                            cwd=str(repo_path_obj),
-                            check=True,
-                            capture_output=True,
-                        )
-                    task_obj.worktree_path = worktree_path_str
-                    logger.info(
-                        f"Task {task_id[:8]}... worktree created: {worktree_path_str} "
-                        f"(branch: {branch_name_str})"
-                    )
-                except subprocess.CalledProcessError as git_error:
-                    stderr_text = git_error.stderr.decode("utf-8", errors="replace").strip()
-                    raise ValueError(
-                        f"创建 git worktree 失败：{stderr_text}"
-                    ) from git_error
+                task_obj.worktree_path = str(created_worktree_path)
+                logger.info(
+                    f"Task {task_id[:8]}... worktree created: {created_worktree_path} "
+                    f"(branch: {branch_name_str})"
+                )
 
         db_session.commit()
         db_session.refresh(task_obj)
@@ -386,8 +356,8 @@ class TaskService:
     ) -> Task | None:
         """将任务推进到完成收尾阶段（pr_preparing）.
 
-        仅允许已经拥有 worktree 的任务进入该阶段。进入后，后台会触发
-        Codex 在该 worktree 中执行 Git 收尾动作。
+        仅允许已经拥有 worktree 的任务进入该阶段。进入后，后台会执行
+        确定性的 Git 收尾与合并动作。
 
         Args:
             db_session: 数据库会话
