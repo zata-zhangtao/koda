@@ -3,9 +3,27 @@
 提供常用的纯函数工具，保持无状态、可复用。
 """
 
-from datetime import datetime
-from typing import Optional, Any, Dict, List
 import json
+from datetime import UTC, datetime
+from typing import Any, Dict, List, Optional
+
+
+def utc_now_naive() -> datetime:
+    """返回去掉时区信息的 UTC 当前时间.
+
+    该项目当前的 SQLAlchemy `DateTime` 字段以 naive datetime 持久化，
+    因此这里显式基于 UTC 生成时间，再移除 tzinfo，避免继续使用
+    已弃用的 `datetime.utcnow()`.
+
+    Returns:
+        datetime: 以 UTC 为语义的 naive datetime
+
+    Examples:
+        >>> current_utc_datetime = utc_now_naive()
+        >>> current_utc_datetime.tzinfo is None
+        True
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def parse_datetime(date_str: str, fmt: str = "%Y/%m/%d %H:%M") -> Optional[datetime]:

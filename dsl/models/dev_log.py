@@ -11,6 +11,7 @@ from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
+from utils.helpers import utc_now_naive
 
 from dsl.models.enums import AIProcessingStatus, DevLogStateTag
 
@@ -58,7 +59,7 @@ class DevLog(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
     )
     text_content: Mapped[str] = mapped_column(Text, default="")
     state_tag: Mapped[DevLogStateTag] = mapped_column(

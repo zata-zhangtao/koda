@@ -3,8 +3,6 @@
 提供 Task 的 CRUD 操作、生命周期管理和工作流阶段推进功能.
 """
 
-from datetime import datetime
-
 from sqlalchemy.orm import Session
 
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
@@ -15,6 +13,7 @@ from dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
+from utils.helpers import utc_now_naive
 from utils.logger import logger
 
 
@@ -133,7 +132,7 @@ class TaskService:
 
         # 如果关闭任务，记录关闭时间并同步 workflow_stage
         if status_update.lifecycle_status == TaskLifecycleStatus.CLOSED:
-            task_obj.closed_at = datetime.utcnow()
+            task_obj.closed_at = utc_now_naive()
             task_obj.workflow_stage = WorkflowStage.DONE
         else:
             task_obj.closed_at = None
@@ -174,7 +173,7 @@ class TaskService:
         # 阶段为 DONE 时同步关闭任务
         if stage_update.workflow_stage == WorkflowStage.DONE:
             task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
-            task_obj.closed_at = datetime.utcnow()
+            task_obj.closed_at = utc_now_naive()
         # 阶段非终态且任务处于 PENDING，推进为 OPEN
         elif task_obj.lifecycle_status == TaskLifecycleStatus.PENDING:
             task_obj.lifecycle_status = TaskLifecycleStatus.OPEN

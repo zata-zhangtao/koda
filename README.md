@@ -91,11 +91,11 @@ just dev
 - 放置无状态、可复用的小工具，方便不同项目直接复制使用。
 - 可以按需补充，如格式化时间、批量重试等。示例：
   ```python
-  from datetime import datetime
+  from datetime import UTC, datetime
 
   def utc_ts() -> str:
       """返回 ISO8601 UTC 时间戳，便于日志或文件名统一。"""
-      return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+      return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
   ```
 - 建议保持函数粒度小且有良好 docstring，方便团队快速查阅。
 

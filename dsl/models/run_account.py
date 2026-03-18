@@ -11,6 +11,7 @@ from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
+from utils.helpers import utc_now_naive
 
 if TYPE_CHECKING:
     from dsl.models.dev_log import DevLog
@@ -45,7 +46,7 @@ class RunAccount(Base):
     git_branch_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean,

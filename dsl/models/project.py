@@ -12,6 +12,7 @@ from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
+from utils.helpers import utc_now_naive
 
 if TYPE_CHECKING:
     from dsl.models.task import Task
@@ -40,7 +41,7 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
     )
 
     tasks: Mapped[list["Task"]] = relationship(

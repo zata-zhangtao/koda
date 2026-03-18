@@ -11,6 +11,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
+from utils.helpers import utc_now_naive
 
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 
@@ -73,7 +74,7 @@ class Task(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
     )
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime,
