@@ -22,6 +22,7 @@
 5. 后端调用 `codex exec`
 6. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
 7. 成功后任务推进到 `prd_waiting_confirmation`
+8. 默认停在确认阶段，等待用户确认 PRD；不会自动继续执行代码实现，也不会默认提交代码
 
 ### 编码执行链路
 
@@ -30,7 +31,10 @@
 3. `run_codex_task` 组装实现 Prompt
 4. 后端调用 `codex exec`
 5. 输出继续实时写入 `DevLog`
-6. 成功后任务推进到 `self_review_in_progress`
+6. 实现成功后任务推进到 `self_review_in_progress`
+7. 后端立即启动 `run_codex_review` 执行 AI 自检与代码评审
+8. 若 review 发现阻塞问题，任务回退到 `changes_requested`
+9. 若 review 通过，任务保持在 `self_review_in_progress`，等待后续测试自动化或人工推进
 
 ## Prompt 来源
 
@@ -58,6 +62,21 @@
 - 在现有代码风格内修改
 - Python 保持 Google Style Docstring
 - 文件读写显式使用 `encoding="utf-8"`
+- 不要默认执行 `git commit`，必须等待用户确认
+
+### 自检 Prompt
+
+由 `build_codex_review_prompt` 构造，输入包括：
+
+- 任务标题
+- 最近最多 12 条历史日志
+- 可选的 worktree 路径
+
+当前 Prompt 会显式要求：
+
+- 这是 review-only 阶段，不修改文件
+- 审查需求覆盖、明显回归、文档同步和错误路径
+- 输出结构化标记 `SELF_REVIEW_SUMMARY` 与 `SELF_REVIEW_STATUS`
 
 ## 实际调用特征
 

@@ -112,6 +112,8 @@ flowchart TD
 - `backlog -> prd_generating -> prd_waiting_confirmation`
 - `prd_waiting_confirmation -> implementation_in_progress -> self_review_in_progress`
 
+其中 `self_review_in_progress` 不再只是状态切换：`run_codex_task` 在实现完成后会立即触发一次独立的 Codex review，review 输出继续写回 `DevLog`；若发现阻塞问题，任务会回退到 `changes_requested`。
+
 `test_in_progress`、`pr_preparing`、`acceptance_in_progress` 目前主要是为后续自动化预留的阶段定义。
 
 ## 任务与时间线的数据回路

@@ -249,7 +249,8 @@ def execute_task(
     原子操作：
     1. 将 workflow_stage 更新为 implementation_in_progress
     2. 在后台异步启动 codex exec，输出实时写入 DevLog 时间线
-    3. codex 完成后自动推进至 self_review_in_progress（或失败时回退至 changes_requested）
+    3. 实现完成后自动推进至 self_review_in_progress，并立即执行 AI 自检 / 代码评审
+    4. 若自检发现阻塞问题或执行失败，则回退至 changes_requested
 
     仅允许从 prd_waiting_confirmation 或 changes_requested 阶段触发.
 
@@ -304,7 +305,7 @@ def execute_task(
         if project_obj:
             effective_work_dir_path = _Path(project_obj.repo_path)
 
-    # 在后台异步运行 codex exec（FastAPI BackgroundTasks 原生支持 async 函数）
+    # 在后台异步运行实现阶段；成功后会继续进入真实的 self-review 阶段
     background_tasks.add_task(
         run_codex_task,
         task_id_str=task_id,

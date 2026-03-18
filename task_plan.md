@@ -1,6 +1,6 @@
-# Task Plan: Fix Incorrect Task-to-Project Linking
+# Task Plan: Execute Real Self Review in `self_review_in_progress`
 
-**Goal**: Ensure that when a user selects `project2` while creating a task, the task persists and later resolves against `project2` instead of being associated with `project1`.
+**Goal**: Ensure that after implementation finishes, Koda actually runs a Codex-powered code review during `self_review_in_progress` instead of only flipping the workflow stage.
 **Started**: 2026-03-18
 
 ## Current Phase
@@ -9,20 +9,21 @@ All phases complete ✅
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Inspect the task creation API and service path
-- [x] Inspect the frontend create-task form state and payload
-- [x] Reproduce the fault domain and isolate the stale-selection risk
-- [x] Identify the exact layers that needed protection
+- [x] Inspect the current implementation-to-review handoff
+- [x] Identify the safest place to trigger a dedicated review run
+- [x] Define review outcomes and their stage/log effects
 - **Status:** complete
 
 ### Phase 2: Implementation
-- [x] Patch the frontend create-task form to avoid stale project selection
-- [x] Patch the backend task creation path to validate submitted project IDs
-- [x] Preserve existing task creation behavior for unlinked tasks
+- [x] Add a dedicated self-review Codex prompt and runner
+- [x] Reuse existing retry, logging, and cancellation behavior
+- [x] Ensure implementation success transitions into a real review run
+- [x] Keep failure behavior coherent for review findings vs execution failures
+- [x] Remove default auto-commit instructions and require user confirmation before commit
 - **Status:** complete
 
 ### Phase 3: Verification
-- [x] Add focused regression tests
+- [x] Add focused tests for review execution and outcome handling
 - [x] Run relevant automated checks
 - [x] Run `uv run mkdocs build --strict`
 - **Status:** complete
@@ -30,18 +31,19 @@ All phases complete ✅
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Reset the create-task draft whenever the panel is reopened or dismissed | Prevents a prior project choice from silently carrying into a new task |
-| Auto-select a newly created project only when the create-task panel is already open | Matches the active user flow without changing behavior for unrelated cases |
-| Validate `project_id` in `TaskService.create_task` | Rejects stale or deleted project IDs instead of persisting invalid foreign-key-like references |
+| Reuse the existing Codex subprocess pattern for self review | Keeps cancellation, retry, stdout streaming, and DevLog behavior consistent across phases |
+| Treat implementation and self review as separate phase executions | Preserves the semantics of `self_review_in_progress` as an actual running phase instead of a passive label |
+| Keep successful reviews in `self_review_in_progress` and only auto-regress on blocking findings | Avoids pretending that tests are running before the project has a real automated `test_in_progress` executor |
+| Remove default `git commit` instructions from the implementation prompt | PRD completion and implementation output should still require explicit user confirmation before code submission |
 
 ## Completion Summary
 - **Status:** Complete (2026-03-18)
 - **Tests:**
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_task_service.py tests/test_terminal_launcher.py` -> PASS
-  - `npm run build` (in `frontend/`) -> PASS
+  - `uv run python -m py_compile dsl/services/codex_runner.py dsl/api/tasks.py tests/test_codex_runner.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python - <<'PY' ... pytest.main(['tests/test_codex_runner.py', 'tests/test_task_service.py', '-vv', '-s']) ... PY` -> PASS
   - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
 - **Deliverables:**
-  - `frontend/src/App.tsx` - create-task form now resets stale project state and syncs with newly added projects
-  - `dsl/services/task_service.py` - validates submitted project IDs before persisting tasks
-  - `dsl/api/tasks.py` - returns `422` for invalid project IDs during task creation
-  - `tests/test_task_service.py` - regression coverage for valid, invalid, and unlinked task creation
+  - `dsl/services/codex_runner.py` - real self-review phase runner, structured review status parsing, no default auto-commit instruction
+  - `tests/test_codex_runner.py` - regression coverage for passing and failing self-review flows plus prompt confirmation requirements
+  - `dsl/api/tasks.py` - updated execute-task contract comments/docstring
+  - `docs/guides/codex-cli-automation.md`, `docs/guides/dsl-development.md`, `docs/architecture/system-design.md`, `docs/index.md` - synchronized workflow and confirmation docs

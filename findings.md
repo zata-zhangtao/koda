@@ -1,26 +1,32 @@
 # Findings & Decisions
 
 ## Requirements
-- Creating a task with a selected project must persist the exact selected `project_id`.
-- The UI must not silently carry an older project selection into a new task.
-- The backend must reject nonexistent project IDs instead of storing stale values.
+- `self_review_in_progress` must represent an actual review activity, not only a stage update.
+- The review should run automatically after implementation succeeds.
+- Review output must be visible in the existing DevLog timeline.
+- The implementation phase must not default to `git commit`; code submission requires user confirmation.
+- Documentation must reflect the new runtime behavior.
 
 ## Research Findings
-- `frontend/src/App.tsx` submitted `newRequirementProjectId` directly, but the create-task draft was never reset when reopening or dismissing the create panel.
-- The create-task panel and the project-management panel can be used in the same session, which makes stale `newRequirementProjectId` state a realistic failure mode.
-- `dsl/api/tasks.py` and `dsl/services/task_service.py` previously accepted any `project_id` string without validating that the project still existed.
-- The backend create path had no logic that intentionally remapped `project2` to `project1`; the credible bug source was stale frontend state plus missing backend validation.
+- `dsl/services/codex_runner.py` currently advances the task to `self_review_in_progress` immediately after `run_codex_task` exits successfully, but it does not start any follow-up review executor.
+- `docs/architecture/system-design.md` and `docs/guides/dsl-development.md` already describe `self_review_in_progress` as part of the automated mainline, which makes the missing review runner a real behavior/documentation mismatch.
+- `docs/architecture/technical-route-20260317.md` defines the intended self-review scope as PRD coverage, regressions, documentation sync, and error-path checks.
+- `build_codex_prompt` previously told Codex to commit after implementation inside a worktree, which conflicts with the requirement that submission must wait for user confirmation.
+- There are no existing tests for `dsl/services/codex_runner.py`, so this change needs new focused coverage around subprocess orchestration and stage/log side effects.
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Reset the create-task draft on open/close and when task context changes | Removes stale project carry-over between different task creation attempts |
-| Clear `newRequirementProjectId` when the selected project disappears from `projectList` | Prevents the UI from holding invalid project references |
-| After creating a project, select it in the create-task form only if that form is already open | Aligns with the in-progress user flow without surprising users elsewhere |
-| Validate project existence in `TaskService.create_task` | Ensures persistence matches real project records and surfaces bad state as `422` |
+| Add a dedicated self-review prompt builder | Keeps implementation instructions separate from review instructions and makes review behavior testable |
+| Run self review automatically after implementation succeeds | Makes `self_review_in_progress` correspond to real work in the backend |
+| Parse a structured review status marker from Codex output | Allows review findings to influence stage handling without needing JSON event streaming |
+| Keep review output in the same task log stream | Preserves the existing operator workflow based on DevLog plus `/tmp/koda-<task>.log` |
+| Leave passing tasks in `self_review_in_progress` for now | Prevents a false transition to `test_in_progress` before test automation exists |
+| Make PRD completion and implementation completion separate from code submission | Matches the requirement that users confirm before any commit-style handoff |
 
 ## Resources
-- `frontend/src/App.tsx`
+- `dsl/services/codex_runner.py`
 - `dsl/api/tasks.py`
-- `dsl/services/task_service.py`
-- `tests/test_task_service.py`
+- `docs/guides/codex-cli-automation.md`
+- `docs/architecture/system-design.md`
+- `docs/guides/dsl-development.md`

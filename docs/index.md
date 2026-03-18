@@ -75,7 +75,8 @@ just dsl-dev
 
 需要明确区分“已实现”和“路线图”：
 
-- 已实现的自动化主链路是：创建任务、生成 PRD、确认 PRD、触发编码、写回执行日志。
+- 已实现的自动化主链路是：创建任务、生成 PRD、等待用户确认 PRD、触发编码、自动进入 AI 自检并写回执行日志。
+- 默认不会在实现阶段自动执行 `git commit`；代码提交需要等待用户确认后的后续动作。
 - `WorkflowStage` 中的 `test_in_progress`、`pr_preparing`、`acceptance_in_progress` 已进入枚举与前端显示，但当前仓库还没有完整自动推进逻辑。
 - `ai_agent/` 当前是工具库，不是 DSL 请求链路中的主处理器。
 

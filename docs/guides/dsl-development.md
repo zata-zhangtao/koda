@@ -56,9 +56,11 @@
 
 1. 创建任务，默认进入 `backlog`
 2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
-3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后推进到 `prd_waiting_confirmation`
+3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后推进到 `prd_waiting_confirmation`，等待用户确认
 4. 点击“开始执行”，后端进入 `implementation_in_progress`
-5. `run_codex_task` 调起 `codex exec`，成功后推进到 `self_review_in_progress`
+5. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
+6. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
+7. 自检若发现阻塞问题，任务自动回退到 `changes_requested`
 
 ### 已建模但尚未自动化闭环的阶段
 
