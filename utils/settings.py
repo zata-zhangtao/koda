@@ -19,6 +19,7 @@ class Config:
         LOG_FILE (Path): 日志文件路径
         LOG_LEVEL (str): 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
         APP_NAME (str): 应用名称，用于日志记录器命名
+        TERMINAL_OPEN_COMMAND_TEMPLATE (str | None): 终端打开命令模板（可选）
     """
 
     # 目录配置
@@ -42,6 +43,11 @@ class Config:
     # AI 置信度阈值 (Phase 2)
     AI_CONFIDENCE_THRESHOLD: ClassVar[float] = float(
         os.getenv("AI_CONFIDENCE_THRESHOLD", "0.85")
+    )
+
+    # 终端打开命令模板（用于 Linux/WSL 覆盖默认行为）
+    TERMINAL_OPEN_COMMAND_TEMPLATE: ClassVar[str | None] = os.getenv(
+        "KODA_OPEN_TERMINAL_COMMAND"
     )
 
     @classmethod

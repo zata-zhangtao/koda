@@ -9,7 +9,7 @@
 - 后端默认用 `uvicorn` 开发模式启动
 - 数据库默认是本地 SQLite
 - 媒体文件落在本机目录
-- `codex`、`trae-cn`、`osascript` 等能力都依赖开发机环境
+- `codex`、`trae-cn`、终端启动器等能力都依赖开发机环境
 
 因此本页更准确的定位是“现状说明 + 最小可运行部署建议”，而不是成熟的生产手册。
 
@@ -75,7 +75,7 @@ just dsl-dev
 ### 自动化执行
 
 - `open-in-trae` 依赖本机存在 `trae-cn`
-- `open-terminal` 依赖 macOS `osascript`
+- `open-terminal` 依赖本机可用的终端启动器；Linux/WSL 可通过 `KODA_OPEN_TERMINAL_COMMAND` 覆盖
 - `codex exec` 在本机代码仓库中直接执行，适合受控开发环境，不适合无隔离多租户环境
 
 ## 如果要走向生产

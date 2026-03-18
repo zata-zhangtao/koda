@@ -17,6 +17,7 @@ from dsl.schemas.task_schema import (
     TaskUpdateSchema,
 )
 from dsl.services.codex_runner import cancel_codex_task, get_task_log_path, run_codex_prd, run_codex_task
+from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
 from utils.database import get_db
 from utils.settings import config
@@ -452,10 +453,11 @@ def open_task_in_trae(
 def open_task_terminal(
     task_id: str,
 ) -> dict:
-    """使用 Terminal.app 实时查看该任务的 codex 输出日志.
+    """打开一个新的终端窗口，实时查看该任务的 codex 输出日志.
 
-    通过 osascript 打开一个新的 Terminal 窗口，执行 tail -f 跟踪日志文件。
-    日志文件由 codex_runner 在任务执行时自动写入 /tmp/koda-{task_id[:8]}.log。
+    默认支持 macOS、WSL 与常见 Linux 桌面终端；也可通过
+    `KODA_OPEN_TERMINAL_COMMAND` 自定义启动命令。日志文件由
+    codex_runner 在任务执行时自动写入 `/tmp/koda-{task_id[:8]}.log`。
 
     Args:
         task_id: 任务 ID
@@ -464,10 +466,8 @@ def open_task_terminal(
         dict: 包含日志文件路径的确认信息
 
     Raises:
-        HTTPException: 日志文件不存在（404）或 osascript 不可用（500）
+        HTTPException: 日志文件不存在（404）或终端无法打开（500）
     """
-    import subprocess
-
     log_file_path = get_task_log_path(task_id)
 
     if not log_file_path.exists():
@@ -477,20 +477,12 @@ def open_task_terminal(
         )
 
     try:
-        subprocess.Popen(
-            [
-                "osascript",
-                "-e", f'tell application "Terminal" to do script "tail -f {log_file_path}"',
-                "-e", 'tell application "Terminal" to activate',
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
+        open_log_tail_terminal(log_file_path)
+    except TerminalLaunchError as launch_error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="osascript 不可用（仅支持 macOS）。",
-        )
+            detail=str(launch_error),
+        ) from launch_error
 
     return {"log_file": str(log_file_path)}
 

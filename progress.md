@@ -7,25 +7,27 @@
 - **Started:** 2026-03-18
 
 ### Actions Taken
-- Read the `planning-with-files` skill instructions and confirmed planning files were required.
-- Inspected `Justfile` and confirmed `dsl-dev` backgrounds both services and uses `wait` without cleanup handling.
-- Inspected `main.py` and confirmed the backend always binds to port `8000`.
-- Checked active listeners with `lsof` and found existing processes on `8000` and `5173`.
-- Patched `Justfile` to add port preflight checks, lifecycle cleanup, and early shutdown when one dev process exits.
-- Updated startup/configuration docs to match the new `dsl-dev` behavior.
-- Ran `just dsl-dev` and confirmed it now exits immediately with a clear `8000` listener report.
-- Ran `uv run mkdocs build --strict` successfully.
+- Read the `planning-with-files` skill instructions and refreshed the planning files for the current task.
+- Located the current `open-terminal` endpoint and confirmed it only invokes `osascript`.
+- Confirmed the red UI error comes from raw FastAPI JSON being surfaced by `frontend/src/api/client.ts`.
+- Reviewed `utils/settings.py` and confirmed there is no existing terminal-launch override.
+- Collected all docs that describe the current macOS-only behavior.
+- Added `dsl/services/terminal_launcher.py` to centralize terminal command resolution.
+- Wired `dsl/api/tasks.py` to the launcher service and replaced the macOS-only error path.
+- Updated `frontend/src/api/client.ts` so JSON error responses display only the `detail` message.
+- Added focused pytest coverage for macOS, WSL, Linux, override-template, and no-launcher cases.
+- Updated docs for configuration, deployment, getting started, automation, and API references.
+- Ran focused pytest and a strict MkDocs build successfully.
 
 ### Test Results
 | Test | Expected | Actual | Status |
 |------|----------|--------|--------|
-| `lsof -nP -iTCP:8000 -sTCP:LISTEN` | No stale listener or identifiable cause | Existing listener found | observed |
-| `lsof -nP -iTCP:5173 -sTCP:LISTEN` | No stale listener or identifiable cause | Existing listener found | observed |
-| `just dsl-dev` | Fail fast with actionable output when required ports are occupied | Exited with listener details for `8000` and code `1` | passed |
-| `uv run mkdocs build --strict` | Documentation builds without warnings/errors that fail strict mode | Build succeeded | passed |
+| Source inspection of `dsl/api/tasks.py` | Identify platform-specific failure point | `osascript` hardcoded in endpoint | observed |
+| Source inspection of `frontend/src/api/client.ts` | Identify raw error rendering cause | Response body text is thrown directly | observed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_terminal_launcher.py` | New launcher selection tests pass | 5 tests passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | Documentation builds without strict-mode failures | Build succeeded | passed |
 
 ### Errors
 | Error | Resolution |
 |-------|------------|
-| `ps` denied in sandbox | Continued with `lsof` and source inspection |
-| Existing port listeners blocked a clean full-start verification | Left listener cleanup as a manual user step to avoid killing unrelated processes |
+| `uv run pytest ...` initially failed because sandboxed `~/.cache/uv` was read-only | Re-ran with `UV_CACHE_DIR=/tmp/uv-cache` |

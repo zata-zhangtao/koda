@@ -1,36 +1,35 @@
 # Findings & Decisions
 
 ## Requirements
-- `just dsl-dev` should start the backend and frontend dev servers reliably for local development.
-- The fix should avoid destructive behavior against unrelated local processes.
-- Documentation must stay in sync with behavior changes.
+- `POST /api/tasks/{task_id}/open-terminal` should stop failing on non-macOS environments.
+- WSL/Linux users need a way to define their own terminal command when the default launcher is not available.
+- Documentation must explain both the default behavior and the override path.
 
 ## Research Findings
-- `Justfile` currently starts both services in the background and then `wait`s, but it does not install any `trap`/cleanup logic.
-- `main.py` binds Uvicorn to fixed port `8000` with `reload=True`.
-- Active listeners were present on both `8000` and `5173` during investigation:
-  - `lsof -nP -iTCP:8000 -sTCP:LISTEN`
-  - `lsof -nP -iTCP:5173 -sTCP:LISTEN`
-- This strongly suggests previous `dsl-dev` runs can leave child processes alive, causing the next run to collide with its own stale listeners.
-- After the patch, `just dsl-dev` now stops immediately during preflight when `8000` is occupied and prints the owning listeners instead of leaving the frontend running.
-- Documentation build passed with `uv run mkdocs build --strict`.
+- `dsl/api/tasks.py` currently shells out only to `osascript`, so the endpoint is hard-failed outside macOS.
+- The frontend API client currently throws the raw response body text, which is why FastAPI JSON errors appear in the UI as `{"detail":"..."}`.
+- Project/worktree opening already uses `trae-cn`; the platform gap is isolated to the terminal-launch path.
+- `utils/settings.py` currently has no runtime setting for terminal launch customization.
+- Docs mention `osascript` in multiple places:
+  - `docs/getting-started.md`
+  - `docs/guides/deployment.md`
+  - `docs/guides/codex-cli-automation.md`
+  - `docs/architecture/system-design.md`
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Add explicit port-availability checks to the launcher | Users get an immediate actionable error instead of partial startup then opaque bind failures |
-| Add `trap`-driven cleanup for recipe-owned child processes | Solves the likely stale-process root cause without killing unrelated apps |
-| Keep port numbers unchanged | Frontend proxy, CORS, and docs already assume `8000`/`5173`; changing ports would create unnecessary config churn |
-
-## Issues Encountered
-| Issue | Resolution |
-|-------|------------|
-| Sandbox denied `ps` during process inspection | Used `lsof` evidence and code inspection instead; no blocker |
-| Existing local listeners prevented a full clean boot verification run | Verified the fail-fast path instead and documented the remaining manual cleanup step |
+| Add a small `terminal_launcher` service module | Makes platform detection and subprocess command building independently testable |
+| Support `KODA_OPEN_TERMINAL_COMMAND` with placeholders | Lets WSL/Linux users set a launcher without patching source code |
+| Detect WSL separately from generic Linux | WSL often has no local X terminal, so it needs a different default strategy than desktop Linux |
+| Improve frontend error parsing while touching this flow | Prevents raw JSON blobs from being shown to users for this and other API errors |
 
 ## Resources
-- `Justfile`
-- `main.py`
-- `docs/guides/dsl-development.md`
+- `dsl/api/tasks.py`
+- `frontend/src/api/client.ts`
+- `utils/settings.py`
 - `docs/getting-started.md`
 - `docs/guides/configuration.md`
+- `docs/guides/deployment.md`
+- `docs/guides/codex-cli-automation.md`
+- `docs/architecture/system-design.md`

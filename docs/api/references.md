@@ -168,6 +168,14 @@
         - get_task_chronicle
         - export_markdown
 
+::: dsl.services.terminal_launcher
+    handler: python
+    options:
+      members:
+        - TerminalLaunchError
+        - build_log_tail_terminal_command
+        - open_log_tail_terminal
+
 ::: dsl.services.codex_runner
     handler: python
     options:

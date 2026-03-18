@@ -10,7 +10,7 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | --- | --- | --- |
 | `pyproject.toml` | Python 依赖定义 | FastAPI、SQLAlchemy、LangChain、MkDocs、Pytest |
 | `justfile` | 命令入口 | `run`、`dsl-dev`、`docs-serve`、`docs-build` |
-| `utils/settings.py` | 后端运行配置 | 日志、数据库、媒体目录、AI 阈值 |
+| `utils/settings.py` | 后端运行配置 | 日志、数据库、媒体目录、AI 阈值、终端启动命令 |
 | `frontend/vite.config.ts` | 前端开发服务器配置 | 端口 `5173`、`/api` 与 `/media` 代理 |
 | `ai_agent/.env.example` | AI 服务凭据示例 | `DASHSCOPE_API_KEY`、`OPENROUTER_API_KEY` 等 |
 | `ai_agent/utils/models.json` | 模型注册表 | 提供商、基础 URL、模型分类 |
@@ -29,12 +29,14 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | `DATABASE_URL` | `sqlite:///.../data/dsl.db` | 默认 SQLite 数据库 |
 | `MEDIA_STORAGE_PATH` | `<repo>/data/media` | 图片与附件目录 |
 | `AI_CONFIDENCE_THRESHOLD` | `0.85` | AI 解析置信度阈值预留值 |
+| `KODA_OPEN_TERMINAL_COMMAND` | 未设置 | 覆盖“打开终端”按钮的启动命令模板 |
 
 ### 注意点
 
 - `MEDIA_STORAGE_PATH` 当前不是环境变量，而是直接由项目根路径推导。
 - 如果你切换到 MySQL，`utils/database.py` 会自动把 `mysql://` 替换成 `mysql+pymysql://`。
 - SQLite 模式下启用了 `check_same_thread=False` 与 `NullPool`。
+- `KODA_OPEN_TERMINAL_COMMAND` 支持 `{log_file}`、`{log_file_shell}`、`{tail_command}`、`{tail_command_shell}` 四个占位符。
 
 ## 前端配置
 

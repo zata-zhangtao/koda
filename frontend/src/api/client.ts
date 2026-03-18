@@ -16,6 +16,33 @@ import { type WorkflowStage } from "../types";
 
 const API_BASE = "/api";
 
+type ApiErrorPayload = {
+  detail?: string;
+};
+
+function extractApiErrorMessage(
+  responseText: string,
+  statusCode: number
+): string {
+  if (!responseText) {
+    return `HTTP ${statusCode}`;
+  }
+
+  try {
+    const parsedErrorPayload = JSON.parse(responseText) as ApiErrorPayload;
+    if (
+      typeof parsedErrorPayload.detail === "string" &&
+      parsedErrorPayload.detail.trim().length > 0
+    ) {
+      return parsedErrorPayload.detail;
+    }
+  } catch {
+    // Ignore JSON parse errors and fall back to the raw response text.
+  }
+
+  return responseText;
+}
+
 /** 通用请求封装 */
 async function fetchApi<T>(
   endpoint: string,
@@ -29,8 +56,8 @@ async function fetchApi<T>(
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(error || `HTTP ${response.status}`);
+    const responseText = await response.text();
+    throw new Error(extractApiErrorMessage(responseText, response.status));
   }
 
   return response.json() as Promise<T>;
@@ -121,7 +148,7 @@ export const taskApi = {
       method: "POST",
     }),
 
-  /** 打开 Terminal.app 实时查看 codex 输出 */
+  /** 打开终端实时查看 codex 输出 */
   openTerminal: (id: string) =>
     fetchApi<{ log_file: string }>(`/tasks/${id}/open-terminal`, {
       method: "POST",

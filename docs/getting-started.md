@@ -13,7 +13,20 @@
 
 - `codex` CLI：用于任务启动后的 PRD 生成与编码执行
 - `trae-cn`：用于从 Web 界面直接打开项目目录或 worktree
-- `osascript`：仅在 macOS 上用于打开新的 Terminal 窗口跟踪任务日志
+- 终端启动器：`open-terminal` 默认支持 macOS、WSL 和常见 Linux 桌面终端
+
+如果默认终端启动器不适合你的环境，可以在根目录 `.env` 中设置：
+
+```bash
+KODA_OPEN_TERMINAL_COMMAND='cmd.exe /c start "" wsl.exe bash -lc {tail_command_shell}'
+```
+
+可用占位符：
+
+- `{log_file}`：原始日志路径
+- `{log_file_shell}`：Shell 转义后的日志路径
+- `{tail_command}`：原始 `tail -f ...` 命令
+- `{tail_command_shell}`：Shell 转义后的 `tail -f ...` 命令
 
 ## 安装依赖
 
@@ -109,6 +122,10 @@ just docs-build
 ### 任务点击“开始任务”后没有自动生成 PRD
 
 优先检查开发机上是否安装了 `codex` CLI。当前实现中，如果找不到 `codex`，后端会写入一条 `BUG` 类型的 DevLog，并把阶段回退到 `changes_requested`。
+
+### 点击“打开终端”没有反应或报错
+
+优先确认任务日志文件已经生成。若你在 Linux/WSL 下使用了非常规终端，请设置 `KODA_OPEN_TERMINAL_COMMAND` 指向可用的启动命令。
 
 ### 图片或附件上传失败
 

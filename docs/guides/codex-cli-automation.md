@@ -88,7 +88,7 @@ Codex 的输出不是单独存放在某个审计表中，而是直接写回 `Dev
 /tmp/koda-<task短ID>.log
 ```
 
-你可以通过后端接口 `POST /api/tasks/{task_id}/open-terminal` 在 macOS 上打开一个新的 Terminal 窗口执行 `tail -f`。
+你可以通过后端接口 `POST /api/tasks/{task_id}/open-terminal` 打开一个新的终端窗口执行 `tail -f`。默认支持 macOS、WSL 与常见 Linux 桌面终端；如果默认命令不适合当前环境，可通过 `KODA_OPEN_TERMINAL_COMMAND` 覆盖。
 
 ### PRD 文件定位
 
