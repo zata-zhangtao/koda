@@ -53,6 +53,12 @@ export interface RunAccount {
   is_active: boolean;
 }
 
+/** 前端运行时配置 */
+export interface AppConfig {
+  app_timezone: string;
+  app_timezone_offset: string;
+}
+
 /** Project 类型 */
 export interface Project {
   id: string;

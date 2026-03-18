@@ -5,6 +5,7 @@
 
 import { LogCard } from "./LogCard";
 import type { DevLog } from "../types";
+import { formatDateGroupLabel, groupItemsByAppDate } from "../utils/datetime";
 
 interface StreamViewProps {
   logs: DevLog[];
@@ -51,40 +52,11 @@ export function StreamView({ logs, view }: StreamViewProps) {
 }
 
 function groupLogsByDate(logs: DevLog[]): [string, DevLog[]][] {
-  const groups = new Map<string, DevLog[]>();
-
-  for (const log of logs) {
-    const date = log.created_at.split("T")[0];
-    if (!groups.has(date)) {
-      groups.set(date, []);
-    }
-    groups.get(date)!.push(log);
-  }
-
-  return Array.from(groups.entries()).sort(
-    (a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()
-  );
+  return groupItemsByAppDate(logs, (log) => log.created_at);
 }
 
 function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  if (dateStr === today.toISOString().split("T")[0]) {
-    return "Today";
-  }
-  if (dateStr === yesterday.toISOString().split("T")[0]) {
-    return "Yesterday";
-  }
-
-  return date.toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "long",
-  });
+  return formatDateGroupLabel(dateStr);
 }
 
 const styles: Record<string, React.CSSProperties> = {

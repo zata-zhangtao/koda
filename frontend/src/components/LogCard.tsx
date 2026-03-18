@@ -6,6 +6,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DevLogStateTag, type DevLog } from "../types";
+import { formatMonthDayTime } from "../utils/datetime";
 
 interface LogCardProps {
   log: DevLog;
@@ -32,12 +33,7 @@ const STATE_CONFIG: Record<
 
 export function LogCard({ log }: LogCardProps) {
   const stateConfig = STATE_CONFIG[log.state_tag];
-  const formattedTime = new Date(log.created_at).toLocaleString("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const formattedTime = formatMonthDayTime(log.created_at);
   const thumbnailSrc = mapMediaPathToPublicUrl(log.media_thumbnail_path);
   const originalImageSrc = mapMediaPathToPublicUrl(log.media_original_image_path);
 

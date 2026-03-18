@@ -152,3 +152,73 @@
 |-------|------------|
 | Original design assumed Koda could always `checkout main` in a chosen worktree | Switched merge execution to reuse the worktree that already has `main` checked out, with checkout only as a fallback |
 | Initial completion design used the raw task title as the commit message | Changed commit-subject generation to prefer `requirement_brief` / task summary, then fall back through recent logs only if needed |
+
+## Session: 2026-03-19 Timezone Contract To UTC+8
+
+### Current Status
+- **Phase:** blocker-fix implementation
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the confirmed PRD in `tasks/prd-6c3896dc.md` and extracted the core contract: DB keeps UTC-semantic naive datetimes while all application-facing output moves to `Asia/Shanghai`.
+- Scanned backend code for datetime serialization, timezone usage, and API response models.
+- Identified `dsl/services/chronicle_service.py` as the main high-risk path because it mixes raw `isoformat()` output with manual string slicing for dates and timestamps.
+- Identified fragmented frontend time handling in `App.tsx`, `LogCard.tsx`, `StreamView.tsx`, and `ChronicleView.tsx`, including raw `split("T")[0]` grouping.
+- Confirmed `utils/settings.py` does not yet define `APP_TIMEZONE`.
+- Added `APP_TIMEZONE` config validation plus shared backend helpers for UTC naive <-> app-timezone conversion, API serialization, and export formatting.
+- Introduced `dsl/schemas/base.py` so API response schemas now emit explicit-offset ISO 8601 strings in JSON mode.
+- Reworked `dsl/services/chronicle_service.py` to serialize timeline/task timestamps via helpers and export Markdown using timezone-aware labels instead of string slicing.
+- Normalized chronicle query inputs in `dsl/api/chronicle.py` from app-timezone datetimes back to UTC naive before hitting the database.
+- Switched application logging to an `AppTimezoneFormatter`, and updated `dsl/services/codex_runner.py` task log headers to include explicit-offset timestamps.
+- Added `frontend/src/utils/datetime.ts` and replaced ad-hoc parsing/formatting/grouping/duration logic in `App.tsx`, `LogCard.tsx`, `StreamView.tsx`, and `ChronicleView.tsx`.
+- Updated configuration, database, development, and release-note docs to document the UTC storage / UTC+8 display contract.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Discovery scan only | Establish implementation surface before edits | Completed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile utils/settings.py utils/helpers.py utils/logger.py dsl/schemas/base.py dsl/schemas/task_schema.py dsl/schemas/dev_log_schema.py dsl/schemas/project_schema.py dsl/schemas/run_account_schema.py dsl/schemas/email_settings_schema.py dsl/schemas/webdav_settings_schema.py dsl/services/codex_runner.py dsl/services/chronicle_service.py dsl/api/chronicle.py tests/test_logger.py tests/test_timezone_contract.py` | Edited backend files and tests compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_timezone_contract.py tests/test_logger.py tests/test_project_service.py tests/test_task_service.py tests/test_codex_runner.py -q` | Timezone regressions and affected backend suites pass | `25 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` | Full Python suite passes | `38 passed, 1 warning` | passed |
+| `cd frontend && npm install && npm run build` | Frontend compiles with shared timezone utility | Build succeeded after installing local dependencies | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` | Docs remain valid after timezone contract updates | Build succeeded; Material 2.0 upstream warning only | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| Initial `cd frontend && npm run build` failed with `sh: tsc: command not found` because local dependencies were not installed | Ran `npm install` in `frontend/`, then reran the build successfully |
+
+## Session: 2026-03-19 Timezone Contract Blocker Fixes
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Re-read the existing timezone task plan, findings, and progress logs to reconcile them with the `changes_requested` self-review state.
+- Confirmed that the repository already contains the initial timezone refactor, but the planning files still reported the task as fully complete.
+- Recorded the reopened blockers so subsequent code changes and verification runs are tracked against the correct task state.
+- Searched the backend and frontend for timezone/config plumbing and confirmed there is no API route or frontend env injection that exposes `APP_TIMEZONE` to the UI.
+- Identified the smallest safe fix path as: add a read-only app-config route, consume it in the frontend API layer, and switch the shared datetime utility from hard-coded literals to runtime configuration.
+- Added `tzdata` to `pyproject.toml` so import-time `ZoneInfo(APP_TIMEZONE)` validation remains portable on Windows and hosts without system IANA timezone data.
+- Added `/api/app-config` plus `AppConfigResponseSchema`, then registered the route in the main FastAPI application.
+- Added `get_app_timezone_display_label()` and switched chronicle Markdown timezone copy to the shared helper instead of hard-coded `Asia/Shanghai`.
+- Updated the frontend API/types layer and `frontend/src/utils/datetime.ts` so runtime timezone formatting is configurable, validated, and no longer depends on `+08:00` literals for date-group labels.
+- Switched `frontend/src/App.tsx` startup to fetch runtime config before the first dashboard data load.
+- Added a backend regression test for `/api/app-config` and synchronized timezone docs/release notes with the new runtime-config path.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Planning file refresh only | Reconcile task state before code changes | Completed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv lock` | Refresh lockfile after adding runtime dependency | Added `tzdata v2025.3` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile utils/settings.py utils/helpers.py dsl/api/app_config.py dsl/app.py dsl/schemas/app_config_schema.py dsl/services/chronicle_service.py tests/test_timezone_contract.py` | Edited backend files and tests compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_timezone_contract.py tests/test_logger.py -q` | Timezone contract regressions pass | `8 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` | Full Python suite still passes | `39 passed, 1 warning` | passed |
+| `cd frontend && npm run build` | Frontend compiles after runtime timezone config changes | Build succeeded | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` | Docs remain valid after config/runtime timezone updates | Build succeeded; upstream Material 2.0 warning only | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| Existing `task_plan.md` still marked the timezone task as complete despite the self-review rollback | Reopened the task in planning files and added an explicit blocker-fix phase |

@@ -35,6 +35,12 @@
 4. 在前端 `api/client.ts` 对接接口
 5. 更新文档并执行验证
 
+### 时间处理约定
+
+- 后端统一复用 `utils/helpers.py` 中的时间 helper，不要在服务层直接对业务时间做 `isoformat()` 或字符串切片。
+- 前端统一复用 `frontend/src/utils/datetime.ts`，不要在组件里直接用浏览器本地时区做业务分组或显示。
+- `utils/logger.py` 现在也按 `APP_TIMEZONE` 输出显式偏移时间，便于把日志、导出和 UI 对齐。
+
 ## 前端结构
 
 前端主入口集中在 `frontend/src/App.tsx`，它承担了三个关键职责：

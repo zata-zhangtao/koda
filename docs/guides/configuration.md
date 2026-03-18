@@ -10,7 +10,7 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | --- | --- | --- |
 | `pyproject.toml` | Python 依赖定义 | FastAPI、SQLAlchemy、LangChain、MkDocs、Pytest |
 | `justfile` | 命令入口 | `run`、`dsl-dev`、`docs-serve`、`docs-build` |
-| `utils/settings.py` | 后端运行配置 | 日志、数据库、媒体目录、AI 阈值、终端启动命令 |
+| `utils/settings.py` | 后端运行配置 | 日志、数据库、应用时区、媒体目录、AI 阈值、终端启动命令 |
 | `frontend/vite.config.ts` | 前端开发服务器配置 | 端口 `5173`、`/api` 与 `/media` 代理 |
 | `ai_agent/.env.example` | AI 服务凭据示例 | `DASHSCOPE_API_KEY`、`OPENROUTER_API_KEY` 等 |
 | `ai_agent/utils/models.json` | 模型注册表 | 提供商、基础 URL、模型分类 |
@@ -26,6 +26,7 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | --- | --- | --- |
 | `LOG_LEVEL` | `INFO` | Python 日志级别 |
 | `APP_NAME` | `app` | 日志记录器名称 |
+| `APP_TIMEZONE` | `Asia/Shanghai` | 应用展示时区，控制 API 时间输出、Markdown 导出与业务日志时间 |
 | `DATABASE_URL` | `sqlite:///.../data/dsl.db` | 默认 SQLite 数据库 |
 | `MEDIA_STORAGE_PATH` | `<repo>/data/media` | 图片与附件目录 |
 | `AI_CONFIDENCE_THRESHOLD` | `0.85` | AI 解析置信度阈值预留值 |
@@ -36,6 +37,8 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 - `MEDIA_STORAGE_PATH` 当前不是环境变量，而是直接由项目根路径推导。
 - 如果你切换到 MySQL，`utils/database.py` 会自动把 `mysql://` 替换成 `mysql+pymysql://`。
 - SQLite 模式下启用了 `check_same_thread=False` 与 `NullPool`。
+- 业务时间采用“双层契约”：数据库继续存 UTC 语义的 naive datetime，API/UI/Markdown 导出统一转换为 `APP_TIMEZONE`，并带显式偏移输出。
+- 前端启动时会请求只读接口 `/api/app-config`，用它同步 `APP_TIMEZONE`，避免 UI 与后端配置漂移。
 - `KODA_OPEN_TERMINAL_COMMAND` 支持 `{log_file}`、`{log_file_shell}`、`{tail_command}`、`{tail_command_shell}` 四个占位符。
 
 ## 前端配置

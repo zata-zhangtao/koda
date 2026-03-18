@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { chronicleApi } from "../api/client";
 import { LogCard } from "./LogCard";
 import type { TaskChronicle } from "../types";
+import { calculateDuration } from "../utils/datetime";
 
 interface ChronicleViewProps {
   taskId: string;
@@ -98,25 +99,6 @@ export function ChronicleView({ taskId }: ChronicleViewProps) {
     </div>
   );
 }
-
-function calculateDuration(start: string, end: string | null): string {
-  const startDate = new Date(start);
-  const endDate = end ? new Date(end) : new Date();
-  const diff = endDate.getTime() - startDate.getTime();
-
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-  if (days > 0) {
-    return `${days}d ${hours}h`;
-  }
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
-}
-
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: "flex",

@@ -8,6 +8,8 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dsl.schemas.base import DSLResponseSchema
+
 
 class RunAccountCreateSchema(BaseModel):
     """创建 RunAccount 的请求模式.
@@ -49,7 +51,7 @@ class RunAccountUpdateSchema(BaseModel):
     )
 
 
-class RunAccountResponseSchema(BaseModel):
+class RunAccountResponseSchema(DSLResponseSchema):
     """RunAccount 响应模式.
 
     Attributes:

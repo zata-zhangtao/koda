@@ -4,6 +4,7 @@
  */
 
 import type {
+  AppConfig,
   CommandParseResult,
   DevLog,
   EmailSettings,
@@ -93,6 +94,12 @@ export const runAccountApi = {
     fetchApi<RunAccount>(`/run-accounts/${id}/activate`, {
       method: "PUT",
     }),
+};
+
+/** App Config API */
+export const appConfigApi = {
+  /** 获取前端运行时配置 */
+  get: () => fetchApi<AppConfig>("/app-config"),
 };
 
 /** Task API */

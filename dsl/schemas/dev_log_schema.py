@@ -9,6 +9,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from dsl.models.enums import AIProcessingStatus, DevLogStateTag
+from dsl.schemas.base import DSLResponseSchema
 
 
 class DevLogCreateSchema(BaseModel):
@@ -39,7 +40,7 @@ class DevLogCreateSchema(BaseModel):
     )
 
 
-class DevLogResponseSchema(BaseModel):
+class DevLogResponseSchema(DSLResponseSchema):
     """DevLog 响应模式.
 
     Attributes:

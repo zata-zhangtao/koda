@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from dsl.schemas.base import DSLResponseSchema
+
 
 class WebDAVSettingsUpdate(BaseModel):
     """更新 WebDAV 设置的请求体.
@@ -26,7 +28,7 @@ class WebDAVSettingsUpdate(BaseModel):
     is_enabled: bool = Field(True, description="是否启用 WebDAV 同步")
 
 
-class WebDAVSettingsResponse(BaseModel):
+class WebDAVSettingsResponse(DSLResponseSchema):
     """WebDAV 设置响应体（密码脱敏）.
 
     Attributes:
@@ -48,9 +50,6 @@ class WebDAVSettingsResponse(BaseModel):
     is_enabled: bool
     created_at: datetime
     updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
 
 class WebDAVSyncResult(BaseModel):
     """WebDAV 同步操作结果.

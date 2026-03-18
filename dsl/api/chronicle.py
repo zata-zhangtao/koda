@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from dsl.services.chronicle_service import ChronicleService
 from utils.database import get_db
+from utils.helpers import app_aware_to_utc_naive, app_now_aware
 
 router = APIRouter(prefix="/api/chronicle", tags=["chronicle"])
 
@@ -60,7 +61,15 @@ def get_timeline(
         list[dict[str, Any]]: 时间线数据列表
     """
     run_account_id = _get_current_run_account_id(db_session)
-    return ChronicleService.get_timeline(db_session, run_account_id, start_date, end_date, limit)
+    normalized_start_date = app_aware_to_utc_naive(start_date) if start_date else None
+    normalized_end_date = app_aware_to_utc_naive(end_date) if end_date else None
+    return ChronicleService.get_timeline(
+        db_session,
+        run_account_id,
+        normalized_start_date,
+        normalized_end_date,
+        limit,
+    )
 
 
 @router.get("/task/{task_id}")
@@ -119,17 +128,21 @@ def export_chronicle(
         )
 
     run_account_id = _get_current_run_account_id(db_session)
+    normalized_start_date = app_aware_to_utc_naive(start_date) if start_date else None
+    normalized_end_date = app_aware_to_utc_naive(end_date) if end_date else None
     markdown_content = ChronicleService.export_markdown(
-        db_session, run_account_id, task_id, start_date, end_date
+        db_session,
+        run_account_id,
+        task_id,
+        normalized_start_date,
+        normalized_end_date,
     )
 
-    # 生成文件名
-    from datetime import datetime as dt
-
+    export_date_str = app_now_aware().strftime("%Y%m%d")
     if task_id:
-        filename = f"chronicle-task-{task_id[:8]}-{dt.now().strftime('%Y%m%d')}.md"
+        filename = f"chronicle-task-{task_id[:8]}-{export_date_str}.md"
     else:
-        filename = f"chronicle-{dt.now().strftime('%Y%m%d')}.md"
+        filename = f"chronicle-{export_date_str}.md"
 
     return PlainTextResponse(
         content=markdown_content,

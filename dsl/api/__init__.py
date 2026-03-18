@@ -7,8 +7,10 @@
 - media: 图片上传和服务
 - chronicle: 编年史视图和导出
 - projects: 项目管理
+- app_config: 前端运行时配置
 """
 
+from dsl.api.app_config import router as app_config_router
 from dsl.api.run_accounts import router as run_accounts_router
 from dsl.api.tasks import router as tasks_router
 from dsl.api.logs import router as logs_router
@@ -19,6 +21,7 @@ from dsl.api.email_settings import router as email_settings_router
 from dsl.api.webdav_settings import router as webdav_settings_router
 
 __all__ = [
+    "app_config_router",
     "run_accounts_router",
     "tasks_router",
     "logs_router",

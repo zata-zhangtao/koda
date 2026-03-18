@@ -13,8 +13,22 @@ import type {
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { logApi, mediaApi, projectApi, runAccountApi, taskApi } from "./api/client";
+import {
+  appConfigApi,
+  logApi,
+  mediaApi,
+  projectApi,
+  runAccountApi,
+  taskApi,
+} from "./api/client";
 import { SettingsModal } from "./components/SettingsModal";
+import {
+  configureAppTimezone,
+  formatDateTime,
+  formatHourMinute,
+  formatMonthDay,
+  toTimestampValue,
+} from "./utils/datetime";
 import {
   AIProcessingStatus,
   DevLogStateTag,
@@ -132,6 +146,7 @@ function App() {
   const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
   const [expandedTurnIdSet, setExpandedTurnIdSet] = useState<Set<string>>(new Set());
+  const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
@@ -162,7 +177,7 @@ function App() {
   }
 
   useEffect(() => {
-    void loadDashboardData();
+    void initializeDashboard();
   }, []);
 
   useEffect(() => {
@@ -497,6 +512,21 @@ function App() {
 
     setErrorMessage(dashboardErrors.length > 0 ? dashboardErrors.join(" ") : null);
     setIsDashboardLoading(false);
+  }
+
+  async function initializeDashboard(): Promise<void> {
+    await loadAppConfig();
+    await loadDashboardData();
+  }
+
+  async function loadAppConfig(): Promise<void> {
+    try {
+      const appConfig = await appConfigApi.get();
+      configureAppTimezone(appConfig.app_timezone);
+      setAppTimezoneRevision((previousRevision) => previousRevision + 1);
+    } catch (appConfigError) {
+      console.error("Failed to load app config:", appConfigError);
+    }
   }
 
   async function handleCreateRequirement(): Promise<void> {
@@ -2536,31 +2566,6 @@ function formatStageLabel(stage: RequirementStage): string {
   return stageLabelMap[stage] ?? stage.replace(/_/g, " ");
 }
 
-function formatMonthDay(rawDateText: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(rawDateText));
-}
-
-function formatHourMinute(rawDateText: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(rawDateText));
-}
-
-function formatDateTime(rawDateText: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(rawDateText));
-}
-
 function formatFileSize(fileSizeBytes: number): string {
   if (fileSizeBytes < 1024) {
     return `${fileSizeBytes} B`;
@@ -2585,11 +2590,6 @@ function sortDevLogListByCreatedAt(devLogList: DevLog[]): DevLog[] {
     (leftDevLog, rightDevLog) =>
       toTimestampValue(leftDevLog.created_at) - toTimestampValue(rightDevLog.created_at)
   );
-}
-
-function toTimestampValue(rawDateText: string): number {
-  const parsedTimestamp = Date.parse(rawDateText);
-  return Number.isNaN(parsedTimestamp) ? 0 : parsedTimestamp;
 }
 
 function mapMediaPathToPublicUrl(rawMediaPath: string | null): string | null {

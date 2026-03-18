@@ -260,3 +260,79 @@ All phases complete ✅
   - `frontend/src/App.tsx`, `frontend/src/api/client.ts` - updated user-facing completion messaging
   - `tests/test_codex_runner.py`, `tests/test_git_worktree_service.py` - regression coverage for completion orchestration and real Git worktree merge/cleanup
   - `docs/index.md`, `docs/architecture/system-design.md`, `docs/guides/codex-cli-automation.md`, `docs/core/prompt-management.md` - synchronized operator documentation
+
+---
+
+# Task Plan: Application Timezone Contract To UTC+8
+
+**Goal**: Keep database timestamps as UTC-semantic naive datetimes while making backend API output, frontend rendering/grouping, chronicle export, and related docs consistently use `APP_TIMEZONE=Asia/Shanghai` with explicit `+08:00` offsets.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Read the confirmed PRD and extract the storage-vs-display timezone contract
+- [x] Locate backend time helpers, chronicle service, and response schema/API serialization points
+- [x] Locate frontend task/log/timeline/chronicle time formatting and grouping logic
+- [x] Confirm test/doc surfaces that must move with the code changes
+- **Status:** complete
+
+### Phase 2: Backend Implementation
+- [x] Add `APP_TIMEZONE` setting and shared timezone conversion/serialization helpers
+- [x] Route API-facing datetime fields through explicit `+08:00` serialization
+- [x] Replace direct `isoformat()` / string slicing in `dsl/services/chronicle_service.py`
+- [x] Decide and implement run-log timezone formatter or explicit documentation
+- **Status:** complete
+
+### Phase 3: Frontend Implementation
+- [x] Add shared datetime utility for parsing, formatting, day grouping, and duration calculation
+- [x] Replace time formatting logic in task cards, log cards, stream view, and chronicle view
+- [x] Ensure grouping uses UTC+8 natural days instead of raw string prefixes
+- **Status:** complete
+
+### Phase 4: Verification
+- [x] Add regression coverage for legacy UTC naive records, cross-day boundaries, export formatting, and sorting/grouping stability
+- [x] Update docs and release-facing notes for the UTC storage / UTC+8 display contract
+- [x] Run focused backend tests, frontend build, and `uv run mkdocs build`
+- **Status:** complete
+
+### Phase 5: Blocking Review Fixes
+- [x] Add missing timezone data/runtime compatibility for Windows or hosts without a system IANA database
+- [x] Remove remaining hard-coded `Asia/Shanghai` / `+08:00` assumptions outside the configuration contract
+- [x] Re-run focused verification for backend tests, frontend build, and MkDocs build after the fixes
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Preserve UTC-semantic naive datetimes in the database | Existing models and helper semantics already rely on this contract; bulk-shifting stored data would corrupt history |
+| Centralize timezone handling in shared backend/frontend utilities | Current formatting/grouping logic is duplicated and inconsistent across APIs, markdown export, and UI components |
+| Treat explicit offset serialization as the API contract | Avoids browser/host locale guessing and gives the frontend deterministic input |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile utils/settings.py utils/helpers.py utils/logger.py dsl/schemas/base.py dsl/schemas/task_schema.py dsl/schemas/dev_log_schema.py dsl/schemas/project_schema.py dsl/schemas/run_account_schema.py dsl/schemas/email_settings_schema.py dsl/schemas/webdav_settings_schema.py dsl/services/codex_runner.py dsl/services/chronicle_service.py dsl/api/chronicle.py tests/test_logger.py tests/test_timezone_contract.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_timezone_contract.py tests/test_logger.py tests/test_project_service.py tests/test_task_service.py tests/test_codex_runner.py -q` -> PASS (`25 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` -> PASS (`38 passed, 1 warning`)
+  - `cd frontend && npm run build` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS (upstream Material 2.0 warning only)
+- **Deliverables:**
+  - `utils/settings.py`, `utils/helpers.py`, `utils/logger.py` - app timezone config, shared datetime conversion helpers, and explicit-offset log formatter
+  - `dsl/schemas/base.py`, `dsl/schemas/*.py` - shared response datetime serialization for API models
+  - `dsl/api/chronicle.py`, `dsl/services/chronicle_service.py`, `dsl/services/codex_runner.py` - timezone-normalized chronicle filters/export and task log headers
+  - `frontend/src/utils/datetime.ts`, `frontend/src/App.tsx`, `frontend/src/components/*.tsx` - shared UTC+8 parsing/display/grouping/duration logic
+
+## Reopened Notes (2026-03-19)
+- Self-review found two blocking gaps after the initial completion record:
+  1. `APP_TIMEZONE` validation depends on `zoneinfo` data, but `tzdata` was not declared for Windows / stripped environments.
+  2. The configuration contract is not fully end-to-end because some frontend utilities and chronicle export copy still hard-code `Asia/Shanghai` or `+08:00`.
+- Resolution:
+  - Added `tzdata` to runtime dependencies and refreshed `uv.lock`.
+  - Added a read-only `/api/app-config` route, switched chronicle timezone copy to shared helpers, and made the frontend datetime utility consume runtime timezone config.
+  - Reran backend tests, full `pytest`, frontend build, and MkDocs build successfully.
+  - `tests/test_timezone_contract.py`, `tests/test_logger.py` - regression coverage for UTC storage semantics, cross-day export/grouping, and log formatter offsets
+  - `docs/guides/configuration.md`, `docs/database/schema.md`, `docs/guides/dsl-development.md`, `docs/dev/release-notes.md`, `mkdocs.yml` - synchronized contract and release documentation

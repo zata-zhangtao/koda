@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from dsl.api import (
+    app_config_router,
     chronicle_router,
     email_settings_router,
     logs_router,
@@ -90,6 +91,7 @@ def create_application() -> FastAPI:
     )
 
     # 注册 API 路由
+    application.include_router(app_config_router)
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)

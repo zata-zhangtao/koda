@@ -3,11 +3,31 @@
 import os
 from pathlib import Path
 from typing import ClassVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()
+
+
+def _load_app_timezone_name() -> str:
+    """加载并验证应用时区配置.
+
+    Returns:
+        str: 合法的 IANA 时区名称
+
+    Raises:
+        ValueError: 当 `APP_TIMEZONE` 不是合法时区名称时抛出
+    """
+    app_timezone_name = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
+    try:
+        ZoneInfo(app_timezone_name)
+    except ZoneInfoNotFoundError as timezone_error:
+        raise ValueError(
+            f"Invalid APP_TIMEZONE value: {app_timezone_name}"
+        ) from timezone_error
+    return app_timezone_name
 
 
 class Config:
@@ -19,6 +39,7 @@ class Config:
         LOG_FILE (Path): 日志文件路径
         LOG_LEVEL (str): 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
         APP_NAME (str): 应用名称，用于日志记录器命名
+        APP_TIMEZONE (str): 应用级展示时区（IANA 名称）
         TERMINAL_OPEN_COMMAND_TEMPLATE (str | None): 终端打开命令模板（可选）
     """
 
@@ -30,6 +51,7 @@ class Config:
     # 日志配置
     LOG_LEVEL: ClassVar[str] = os.getenv("LOG_LEVEL", "INFO")
     APP_NAME: ClassVar[str] = os.getenv("APP_NAME", "app")
+    APP_TIMEZONE: ClassVar[str] = _load_app_timezone_name()
 
     # 数据库配置
     DATABASE_URL: ClassVar[str] = os.getenv(

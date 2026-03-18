@@ -5,10 +5,38 @@
 
 import logging
 import sys
+from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any, Optional
 
+from utils.helpers import get_app_timezone
 from utils.settings import config
+
+
+class AppTimezoneFormatter(logging.Formatter):
+    """显式使用应用时区输出日志时间的 Formatter."""
+
+    def formatTime(
+        self,
+        record: logging.LogRecord,
+        datefmt: str | None = None,
+    ) -> str:
+        """按应用时区格式化日志时间.
+
+        Args:
+            record: 日志记录对象
+            datefmt: 可选的时间格式
+
+        Returns:
+            str: 已按 `APP_TIMEZONE` 格式化的时间字符串
+        """
+        log_created_at_datetime = datetime.fromtimestamp(
+            record.created,
+            tz=get_app_timezone(),
+        )
+        if datefmt:
+            return log_created_at_datetime.strftime(datefmt)
+        return log_created_at_datetime.isoformat(timespec="seconds")
 
 
 class Logger:
@@ -55,9 +83,9 @@ class Logger:
             return
 
         # 创建格式化器
-        formatter = logging.Formatter(
+        formatter = AppTimezoneFormatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+            datefmt="%Y-%m-%d %H:%M:%S %z",
         )
 
         # 控制台处理器 - 处理Unicode编码问题

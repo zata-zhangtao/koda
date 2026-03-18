@@ -10,9 +10,16 @@ from sqlalchemy.orm import Session
 
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag
-from dsl.models.task import Task
-from dsl.services.log_service import LogService
 from dsl.services.task_service import TaskService
+from utils.helpers import (
+    format_date_in_app_timezone,
+    format_datetime_in_app_timezone,
+    format_time_in_app_timezone,
+    get_app_timezone_display_label,
+    get_app_timezone_offset_label,
+    parse_iso_datetime_text,
+    serialize_datetime_for_api,
+)
 
 
 class ChronicleService:
@@ -102,8 +109,8 @@ class ChronicleService:
                 "id": task.id,
                 "title": task.task_title,
                 "status": task.lifecycle_status.value,
-                "created_at": task.created_at.isoformat(),
-                "closed_at": task.closed_at.isoformat() if task.closed_at else None,
+                "created_at": serialize_datetime_for_api(task.created_at),
+                "closed_at": serialize_datetime_for_api(task.closed_at),
             },
             "logs": [ChronicleService._format_log_for_timeline(log) for log in logs],
             "stats": {
@@ -152,7 +159,7 @@ class ChronicleService:
         """
         return {
             "id": log.id,
-            "created_at": log.created_at.isoformat(),
+            "created_at": serialize_datetime_for_api(log.created_at),
             "text_content": log.text_content,
             "state_tag": log.state_tag.value,
             "state_icon": ChronicleService.STATE_TAG_ICONS.get(log.state_tag, ""),
@@ -192,15 +199,19 @@ class ChronicleService:
             f"# {task['title']}",
             "",
             f"**Status:** {task['status']}",
-            f"**Created:** {task['created_at'][:10]}",
+            f"**Created:** {ChronicleService._format_markdown_datetime_label(task['created_at'])}",
+            f"**Timezone:** {ChronicleService._get_markdown_timezone_note()}",
             f"**Total Logs:** {len(logs)}",
             "",
             "---",
             "",
         ]
 
+        if task["closed_at"]:
+            lines.insert(4, f"**Closed:** {ChronicleService._format_markdown_datetime_label(task['closed_at'])}")
+
         for log in logs:
-            timestamp = log['created_at'][:19].replace("T", " ")
+            timestamp = ChronicleService._format_markdown_datetime_label(log["created_at"])
             icon = ChronicleService.STATE_TAG_ICONS.get(
                 DevLogStateTag(log['state_tag']), ""
             )
@@ -214,7 +225,6 @@ class ChronicleService:
 
             if log['has_media'] and log['media_original_path']:
                 # 使用相对路径引用图片
-                filename = log['media_original_path'].split("/")[-1]
                 lines.append(f"![Screenshot]({log['media_original_path']})")
                 lines.append("")
 
@@ -255,7 +265,8 @@ class ChronicleService:
         lines: list[str] = [
             "# Development Chronicle",
             "",
-            f"**Period:** {start_date.isoformat()[:10] if start_date else 'All time'} - {end_date.isoformat()[:10] if end_date else 'Now'}",
+            f"**Period:** {ChronicleService._format_markdown_period(start_date, end_date)}",
+            f"**Timezone:** {ChronicleService._get_markdown_timezone_note()}",
             f"**Total Logs:** {len(timeline)}",
             "",
             "---",
@@ -265,13 +276,14 @@ class ChronicleService:
         # 按日期分组
         current_date: str | None = None
         for log in timeline:
-            log_date = log['created_at'][:10]
+            log_created_at = parse_iso_datetime_text(log["created_at"])
+            log_date = format_date_in_app_timezone(log_created_at)
             if log_date != current_date:
                 current_date = log_date
                 lines.append(f"# {log_date}")
                 lines.append("")
 
-            timestamp = log['created_at'][11:19]
+            timestamp = ChronicleService._format_markdown_time_label(log["created_at"])
             icon = ChronicleService.STATE_TAG_ICONS.get(
                 DevLogStateTag(log['state_tag']), ""
             )
@@ -291,3 +303,64 @@ class ChronicleService:
             lines.append("")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_markdown_datetime_label(raw_datetime_text: str | None) -> str:
+        """格式化 Markdown 用的完整时间标签.
+
+        Args:
+            raw_datetime_text: API 时间字符串
+
+        Returns:
+            str: 形如 `2026-03-19 08:36:23 UTC+08:00` 的标签
+        """
+        parsed_datetime = parse_iso_datetime_text(raw_datetime_text)
+        if parsed_datetime is None:
+            return "N/A"
+        formatted_datetime = format_datetime_in_app_timezone(parsed_datetime)
+        timezone_label = get_app_timezone_offset_label(parsed_datetime)
+        return f"{formatted_datetime} {timezone_label}"
+
+    @staticmethod
+    def _format_markdown_time_label(raw_datetime_text: str | None) -> str:
+        """格式化 Markdown 用的时间标签.
+
+        Args:
+            raw_datetime_text: API 时间字符串
+
+        Returns:
+            str: 形如 `08:36:23 UTC+08:00` 的标签
+        """
+        parsed_datetime = parse_iso_datetime_text(raw_datetime_text)
+        if parsed_datetime is None:
+            return "N/A"
+        formatted_time = format_time_in_app_timezone(parsed_datetime)
+        timezone_label = get_app_timezone_offset_label(parsed_datetime)
+        return f"{formatted_time} {timezone_label}"
+
+    @staticmethod
+    def _format_markdown_period(
+        start_date: datetime | None,
+        end_date: datetime | None,
+    ) -> str:
+        """格式化导出文档中的时间区间.
+
+        Args:
+            start_date: 开始时间
+            end_date: 结束时间
+
+        Returns:
+            str: 形如 `2026-03-18 - 2026-03-19` 的区间描述
+        """
+        start_label = format_date_in_app_timezone(start_date) if start_date else "All time"
+        end_label = format_date_in_app_timezone(end_date) if end_date else "Now"
+        return f"{start_label} - {end_label}"
+
+    @staticmethod
+    def _get_markdown_timezone_note() -> str:
+        """返回 Markdown 导出的时区说明.
+
+        Returns:
+            str: 人类可读的时区说明
+        """
+        return get_app_timezone_display_label()

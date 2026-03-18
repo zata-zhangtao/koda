@@ -64,5 +64,6 @@ nav:
       - 迁移策略: database/migrations.md
   - 开发:
       - 评测与验证: dev/evaluation.md
+      - 发布说明: dev/release-notes.md
   - API:
       - 参考: api/references.md

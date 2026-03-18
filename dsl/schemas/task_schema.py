@@ -9,6 +9,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from dsl.schemas.base import DSLResponseSchema
 
 
 class TaskCreateSchema(BaseModel):
@@ -73,7 +74,7 @@ class TaskUpdateSchema(BaseModel):
     requirement_brief: str | None = Field(None, description="更新后的需求描述文本")
 
 
-class TaskResponseSchema(BaseModel):
+class TaskResponseSchema(DSLResponseSchema):
     """Task 响应模式.
 
     Attributes:

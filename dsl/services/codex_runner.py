@@ -14,10 +14,10 @@ import signal
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from utils.database import SessionLocal
+from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
 from utils.settings import config
 
@@ -267,7 +267,7 @@ def _write_phase_log_header(
     """
     header_text_str = (
         f"=== Koda {phase_log_label_str} | task {task_id_str[:8]} | "
-        f"{datetime.now(UTC).replace(tzinfo=None).isoformat()} ===\n"
+        f"{serialize_datetime_for_api(utc_now_naive())} ===\n"
     )
 
     if overwrite_existing_log_bool:
@@ -1283,7 +1283,7 @@ def _write_log_to_db(
             run_account_id=run_account_id_str,
             text_content=text_content_str,
             state_tag=DevLogStateTag(state_tag_value),
-            created_at=datetime.now(UTC).replace(tzinfo=None),
+            created_at=utc_now_naive(),
         )
         db_session.add(new_dev_log)
         db_session.commit()

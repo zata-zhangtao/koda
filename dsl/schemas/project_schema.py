@@ -8,6 +8,8 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dsl.schemas.base import DSLResponseSchema
+
 
 class ProjectCreateSchema(BaseModel):
     """创建 Project 的请求模式.
@@ -41,7 +43,7 @@ class ProjectUpdateSchema(BaseModel):
     description: str | None = Field(None, description="项目描述")
 
 
-class ProjectResponseSchema(BaseModel):
+class ProjectResponseSchema(DSLResponseSchema):
     """Project 响应模式.
 
     Attributes:

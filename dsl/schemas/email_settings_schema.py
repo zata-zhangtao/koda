@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from dsl.schemas.base import DSLResponseSchema
+
 
 class EmailSettingsUpdate(BaseModel):
     """更新邮件设置的请求体.
@@ -30,7 +32,7 @@ class EmailSettingsUpdate(BaseModel):
     is_enabled: bool = Field(True, description="是否启用邮件通知")
 
 
-class EmailSettingsResponse(BaseModel):
+class EmailSettingsResponse(DSLResponseSchema):
     """邮件设置的响应体（密码脱敏）.
 
     Attributes:
@@ -56,9 +58,6 @@ class EmailSettingsResponse(BaseModel):
     is_enabled: bool
     created_at: datetime
     updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
 
 class EmailTestRequest(BaseModel):
     """发送测试邮件的请求体.
