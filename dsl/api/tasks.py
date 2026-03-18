@@ -359,9 +359,9 @@ def get_task_prd_file(
     task_id: str,
     db_session: Annotated[Session, Depends(get_db)],
 ) -> dict:
-    """读取任务 worktree 中最新的 PRD 文件内容.
+    """读取任务 worktree 中该任务专属的 PRD 文件内容.
 
-    在 worktree 的 tasks/ 目录下查找最新的 *-prd-*.md 文件。
+    固定文件名为 tasks/prd-{task_id[:8]}.md，避免读到其他任务遗留的 PRD 文件。
 
     Args:
         task_id: 任务 ID
@@ -370,7 +370,6 @@ def get_task_prd_file(
     Returns:
         dict: {"content": str, "path": str} 或 {"content": null, "path": null}
     """
-    import glob as _glob
     from pathlib import Path as _Path
 
     task_obj = TaskService.get_task_by_id(db_session, task_id)
@@ -381,16 +380,10 @@ def get_task_prd_file(
     if not worktree_dir.exists():
         return {"content": None, "path": None}
 
-    # 查找 tasks/*-prd-*.md，取最新的
-    prd_file_candidates = sorted(
-        _glob.glob(str(worktree_dir / "tasks" / "*-prd-*.md")),
-        reverse=True,
-    )
-
-    if not prd_file_candidates:
+    prd_file_path = worktree_dir / "tasks" / f"prd-{task_id[:8]}.md"
+    if not prd_file_path.exists():
         return {"content": None, "path": None}
 
-    prd_file_path = _Path(prd_file_candidates[0])
     try:
         prd_content = prd_file_path.read_text(encoding="utf-8")
         return {"content": prd_content, "path": str(prd_file_path)}

@@ -280,7 +280,7 @@ async def run_codex_prd(
 使用 `/prd` skill 生成 PRD，将需求标题和上下文作为输入。
 
 生成完成后，将 PRD 内容保存到文件：
-`tasks/{{当前时间 YYYYMMDD-HHMMSS}}-prd-{{需求名称 kebab-case}}.md`
+`tasks/prd-{task_id_str[:8]}.md`
 
 **重要**：必须真正写入文件，不只是输出到终端。写完后输出文件路径。"""
 
@@ -295,15 +295,14 @@ async def run_codex_prd(
         encoding="utf-8",
     )
 
-    # 清理 worktree 中的旧 PRD 文件，确保显示的是本次生成的最新 PRD
-    import glob as _glob
-    old_prd_files = _glob.glob(str(work_dir_path / "tasks" / "*-prd-*.md"))
-    for old_prd_file_str in old_prd_files:
+    # 清理该任务的旧 PRD 文件，确保显示的是本次生成的最新内容
+    task_prd_file_path = work_dir_path / "tasks" / f"prd-{task_id_str[:8]}.md"
+    if task_prd_file_path.exists():
         try:
-            Path(old_prd_file_str).unlink()
-            logger.info(f"Removed old PRD file: {old_prd_file_str}")
+            task_prd_file_path.unlink()
+            logger.info(f"Removed old PRD file: {task_prd_file_path}")
         except OSError as cleanup_err:
-            logger.warning(f"Could not remove old PRD file {old_prd_file_str}: {cleanup_err}")
+            logger.warning(f"Could not remove old PRD file {task_prd_file_path}: {cleanup_err}")
 
     for attempt_index in range(_MAX_AUTO_RETRY + 1):
         codex_process: asyncio.subprocess.Process | None = None
