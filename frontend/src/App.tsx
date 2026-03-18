@@ -457,33 +457,29 @@ function App() {
       projectApi.list(),
     ]);
 
-    const nextRunAccount =
-      runAccountResult.status === "fulfilled" ? runAccountResult.value : null;
-    const nextTaskList =
-      taskListResult.status === "fulfilled"
-        ? sortTaskListByCreatedAt(taskListResult.value)
-        : [];
-    const nextAllDevLogList =
-      devLogListResult.status === "fulfilled"
-        ? sortDevLogListByCreatedAt(devLogListResult.value)
-        : [];
-    const nextProjectList =
-      projectListResult.status === "fulfilled" ? projectListResult.value : [];
-
-    setCurrentRunAccount(nextRunAccount);
-    setTaskList(nextTaskList);
-    setAllDevLogList(nextAllDevLogList);
-    setProjectList(nextProjectList);
-    setSelectedTaskId((previousSelectedTaskId) => {
-      if (!previousSelectedTaskId) {
-        return previousSelectedTaskId;
-      }
-
-      const hasMatchingTask = nextTaskList.some(
-        (taskItem) => taskItem.id === previousSelectedTaskId
-      );
-      return hasMatchingTask ? previousSelectedTaskId : null;
-    });
+    // On fetch failure, preserve previous state rather than wiping to empty.
+    // This prevents the UI from going blank during transient server restarts
+    // (e.g. hot-reload after a task branch merges changes into main).
+    if (runAccountResult.status === "fulfilled") {
+      setCurrentRunAccount(runAccountResult.value);
+    }
+    if (taskListResult.status === "fulfilled") {
+      const nextTaskList = sortTaskListByCreatedAt(taskListResult.value);
+      setTaskList(nextTaskList);
+      setSelectedTaskId((previousSelectedTaskId) => {
+        if (!previousSelectedTaskId) return previousSelectedTaskId;
+        const hasMatchingTask = nextTaskList.some(
+          (taskItem) => taskItem.id === previousSelectedTaskId
+        );
+        return hasMatchingTask ? previousSelectedTaskId : null;
+      });
+    }
+    if (devLogListResult.status === "fulfilled") {
+      setAllDevLogList(sortDevLogListByCreatedAt(devLogListResult.value));
+    }
+    if (projectListResult.status === "fulfilled") {
+      setProjectList(projectListResult.value);
+    }
 
     const dashboardErrors: string[] = [];
     if (runAccountResult.status === "rejected") {
