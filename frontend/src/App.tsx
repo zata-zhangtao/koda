@@ -133,6 +133,26 @@ function App() {
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
 
+  function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
+    setNewRequirementTitle("");
+    setNewRequirementDescription("");
+    setNewRequirementProjectId(nextProjectId);
+  }
+
+  function openCreateRequirementPanel(): void {
+    resetCreateRequirementDraft();
+    setIsCreatePanelOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function closeCreateRequirementPanel(): void {
+    setIsCreatePanelOpen(false);
+    resetCreateRequirementDraft();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
   useEffect(() => {
     void loadDashboardData();
   }, []);
@@ -144,6 +164,17 @@ function App() {
       }
     };
   }, [feedbackAttachmentDraft]);
+
+  useEffect(() => {
+    if (
+      newRequirementProjectId &&
+      !projectList.some(
+        (projectItem) => projectItem.id === newRequirementProjectId
+      )
+    ) {
+      setNewRequirementProjectId(null);
+    }
+  }, [newRequirementProjectId, projectList]);
 
   const devLogsByTaskId = buildDevLogsByTaskId(allDevLogList);
   const activeTaskList = taskList.filter(
@@ -256,6 +287,7 @@ function App() {
 
   useEffect(() => {
     setIsCreatePanelOpen(false);
+    resetCreateRequirementDraft();
     setIsEditPanelOpen(false);
     setFeedbackInputText("");
     setFeedbackAttachmentDraft(null);
@@ -415,15 +447,12 @@ function App() {
 
       setWorkspaceView("active");
       setSelectedTaskId(createdTask.id);
-      setNewRequirementTitle("");
-      setNewRequirementDescription("");
-      setNewRequirementProjectId(null);
+      resetCreateRequirementDraft();
       setSuccessMessage("Requirement created successfully.");
       await loadDashboardData(true);
 
       window.setTimeout(() => {
-        setIsCreatePanelOpen(false);
-        setSuccessMessage(null);
+        closeCreateRequirementPanel();
       }, 1200);
     } catch (creationError) {
       console.error(creationError);
@@ -886,7 +915,7 @@ function App() {
     setActiveMutationName("create");
     setErrorMessage(null);
     try {
-      await projectApi.create({
+      const createdProject = await projectApi.create({
         display_name: trimmedName,
         repo_path: trimmedPath,
         description: newProjectDescription.trim() || null,
@@ -896,6 +925,9 @@ function App() {
       setNewProjectDescription("");
       setSuccessMessage(`项目「${trimmedName}」已创建。`);
       await loadDashboardData(true);
+      if (isCreatePanelOpen) {
+        setNewRequirementProjectId(createdProject.id);
+      }
       window.setTimeout(() => {
         setIsProjectPanelOpen(false);
         setSuccessMessage(null);
@@ -1091,11 +1123,7 @@ function App() {
                 <ActionButton
                   variant="outline"
                   className="devflow-icon-button"
-                  onClick={() => {
-                    setIsCreatePanelOpen(true);
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                  }}
+                  onClick={openCreateRequirementPanel}
                 >
                   <PlusIcon className="devflow-icon devflow-icon--small" />
                 </ActionButton>
@@ -1156,11 +1184,7 @@ function App() {
                 <div className="devflow-create-panel__actions">
                   <ActionButton
                     variant="ghost"
-                    onClick={() => {
-                      setIsCreatePanelOpen(false);
-                      setErrorMessage(null);
-                      setSuccessMessage(null);
-                    }}
+                    onClick={closeCreateRequirementPanel}
                   >
                     Cancel
                   </ActionButton>
@@ -1193,7 +1217,7 @@ function App() {
                     <ActionButton
                       variant="ghost"
                       className="devflow-empty-card__action"
-                      onClick={() => setIsCreatePanelOpen(true)}
+                      onClick={openCreateRequirementPanel}
                     >
                       Create First Task
                     </ActionButton>

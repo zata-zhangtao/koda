@@ -86,9 +86,18 @@ def create_task(
 
     Returns:
         Task: 新创建的任务
+
+    Raises:
+        HTTPException: 当关联的 Project 不存在时返回 422
     """
     run_account_id = _get_current_run_account_id(db_session)
-    new_task = TaskService.create_task(db_session, task_create_schema, run_account_id)
+    try:
+        new_task = TaskService.create_task(db_session, task_create_schema, run_account_id)
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(validation_error),
+        ) from validation_error
     new_task.log_count = 0
     return new_task
 

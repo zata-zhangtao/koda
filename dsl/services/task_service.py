@@ -39,13 +39,30 @@ class TaskService:
 
         Returns:
             Task: 新创建的任务对象
+
+        Raises:
+            ValueError: 当关联的 Project 不存在时
         """
+        normalized_project_id: str | None = None
+        if task_create_schema.project_id:
+            from dsl.services.project_service import ProjectService
+
+            linked_project_obj = ProjectService.get_project_by_id(
+                db_session,
+                task_create_schema.project_id,
+            )
+            if linked_project_obj is None:
+                raise ValueError(
+                    f"Project with id {task_create_schema.project_id} not found"
+                )
+            normalized_project_id = linked_project_obj.id
+
         new_task = Task(
             run_account_id=run_account_id,
             task_title=task_create_schema.task_title,
             lifecycle_status=TaskLifecycleStatus.PENDING,
             workflow_stage=WorkflowStage.BACKLOG,
-            project_id=task_create_schema.project_id,
+            project_id=normalized_project_id,
             requirement_brief=task_create_schema.requirement_brief,
         )
 
