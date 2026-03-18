@@ -47,8 +47,11 @@ just dsl-dev
 这个命令会做以下事情：
 
 1. 创建 `data/media/original` 与 `data/media/thumbnail`
-2. 启动 FastAPI 后端
-3. 启动 Vite 前端
+2. 先检查 `8000` 和 `5173` 端口是否空闲
+3. 启动 FastAPI 后端
+4. 启动 Vite 前端
+
+如果任一端口已被占用，`just dsl-dev` 会立即退出并打印当前监听进程，避免出现“前端还在跑、后端已启动失败”这类半启动状态。命令退出时，也会主动清理本次启动的子进程。
 
 如果你需要分别调试前后端，可以拆开运行：
 
@@ -98,6 +101,10 @@ just docs-build
 ### 前端能打开，但接口请求失败
 
 优先确认后端是否已经启动，并检查 `http://localhost:8000/health` 是否返回 JSON。
+
+### `just dsl-dev` 提示 `Address already in use`
+
+这通常表示 `8000` 或 `5173` 上已经有旧的开发进程在监听。先根据命令输出里打印的监听进程定位并停止它，再重新运行 `just dsl-dev`。
 
 ### 任务点击“开始任务”后没有自动生成 PRD
 

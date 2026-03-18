@@ -126,6 +126,12 @@ export const taskApi = {
     fetchApi<{ log_file: string }>(`/tasks/${id}/open-terminal`, {
       method: "POST",
     }),
+
+  /** 中断正在运行的 codex 进程并将任务回退至 changes_requested */
+  cancel: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/cancel`, {
+      method: "POST",
+    }),
 };
 
 /** Project API */

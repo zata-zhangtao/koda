@@ -16,7 +16,7 @@ from dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.codex_runner import get_task_log_path, run_codex_prd, run_codex_task
+from dsl.services.codex_runner import cancel_codex_task, get_task_log_path, run_codex_prd, run_codex_task
 from dsl.services.task_service import TaskService
 from utils.database import get_db
 from utils.settings import config
@@ -307,6 +307,51 @@ def execute_task(
 
     executed_task.log_count = len(executed_task.dev_logs)
     return executed_task
+
+
+@router.post("/{task_id}/cancel", response_model=TaskResponseSchema)
+def cancel_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """中断正在运行的 codex 进程并将任务回退至 changes_requested 阶段.
+
+    若该任务没有正在运行的 codex 进程，仍会将 workflow_stage 强制回退至
+    changes_requested，确保 UI 可以解除阻塞。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已回退为 changes_requested 的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404
+    """
+    from dsl.schemas.task_schema import TaskStageUpdateSchema
+    from dsl.models.enums import WorkflowStage
+
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    # 尝试终止正在运行的 codex 进程
+    cancel_codex_task(task_id)
+
+    # 强制将阶段回退至 changes_requested，解除 UI 阻塞
+    stage_update_schema = TaskStageUpdateSchema(workflow_stage=WorkflowStage.CHANGES_REQUESTED)
+    updated_task = TaskService.update_workflow_stage(db_session, task_id, stage_update_schema)
+    if not updated_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+    updated_task.log_count = len(updated_task.dev_logs)
+    return updated_task
 
 
 @router.get("/{task_id}/prd-file")

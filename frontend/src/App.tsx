@@ -79,11 +79,29 @@ type MutationName =
   | "delete"
   | "open_trae"
   | "open_terminal"
+  | "cancel"
   | null;
 
 const GUEST_USER_LABEL = "Guest User";
 const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
+
+const CONTINUE_COMMAND_PATTERNS = [
+  /^go\s+on$/i,
+  /^continue$/i,
+  /^继续$/,
+  /^继续执行$/,
+  /^retry$/i,
+  /^重试$/,
+  /^proceed$/i,
+  /^go$/i,
+  /^resume$/i,
+];
+
+function _isContinueCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return CONTINUE_COMMAND_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
 
 function App() {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
@@ -270,21 +288,31 @@ function App() {
     WorkflowStage.CHANGES_REQUESTED,
   ]);
 
+  // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
-    // 切换任务时立即清空，防止残留
     setPrdFileContent(null);
+  }, [selectedTaskId]);
 
-    if (!selectedTaskId) return;
-    const task = taskList.find((t) => t.id === selectedTaskId);
-    if (!task?.worktree_path) return;
-    const stage = deriveRequirementStage(task, devLogsByTaskId[task.id] ?? []);
-    if (!prdRelevantStageSet.has(stage)) return;
+  // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
+  const _prdPollTask = taskList.find((t) => t.id === selectedTaskId);
+  const _prdWorktreePath = _prdPollTask?.worktree_path ?? null;
+  const _prdPollStage = _prdPollTask
+    ? deriveRequirementStage(_prdPollTask, devLogsByTaskId[_prdPollTask.id] ?? [])
+    : null;
+  const _prdPollActive =
+    _prdWorktreePath !== null &&
+    _prdPollStage !== null &&
+    prdRelevantStageSet.has(_prdPollStage);
+
+  useEffect(() => {
+    if (!selectedTaskId || !_prdPollActive) return;
 
     const loadPrd = () => {
       taskApi
         .getPrdFile(selectedTaskId)
         .then((result) => {
-          setPrdFileContent(result.content ?? null);
+          const nextContent = result.content ?? null;
+          setPrdFileContent((prev) => (prev === nextContent ? prev : nextContent));
         })
         .catch(() => {});
     };
@@ -292,7 +320,8 @@ function App() {
     loadPrd();
     const prdPollId = window.setInterval(loadPrd, 2000);
     return () => window.clearInterval(prdPollId);
-  }, [selectedTaskId, taskList]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTaskId, _prdPollActive, _prdWorktreePath]);
 
   async function loadDashboardData(silent = false): Promise<void> {
     if (!silent) {
@@ -567,6 +596,24 @@ function App() {
     }
   }
 
+  async function handleCancelTask(taskItem: Task): Promise<void> {
+    setActiveMutationName("cancel");
+    setErrorMessage(null);
+    try {
+      const updatedTask = await taskApi.cancel(taskItem.id);
+      setTaskList((prev) =>
+        prev.map((t) => (t.id === updatedTask.id ? updatedTask : t))
+      );
+    } catch (err) {
+      console.error(err);
+      setErrorMessage(
+        err instanceof Error ? err.message : "中断失败，请手动刷新页面。"
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   function handleOpenRequirementEditor(): void {
     if (!selectedTask || !selectedTaskSnapshot) {
       return;
@@ -739,6 +786,33 @@ function App() {
       if (attachmentInputRef.current) {
         attachmentInputRef.current.value = "";
       }
+
+      // 若用户输入了继续指令，根据当前阶段自动恢复执行
+      const isContinueCommand = _isContinueCommand(nextFeedbackInputText);
+      if (isContinueCommand && !feedbackAttachmentDraft) {
+        const stage = selectedTask.workflow_stage;
+        if (stage === WorkflowStage.CHANGES_REQUESTED) {
+          // 正常重试：直接触发执行
+          const resumedTask = await taskApi.execute(selectedTask.id);
+          setTaskList((prev) =>
+            prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
+          );
+        } else if (
+          stage === WorkflowStage.IMPLEMENTATION_IN_PROGRESS ||
+          stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS
+        ) {
+          // 进程已死但阶段未更新：先取消（强制回到 changes_requested），再重新执行
+          const cancelledTask = await taskApi.cancel(selectedTask.id);
+          setTaskList((prev) =>
+            prev.map((t) => (t.id === cancelledTask.id ? cancelledTask : t))
+          );
+          const resumedTask = await taskApi.execute(selectedTask.id);
+          setTaskList((prev) =>
+            prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
+          );
+        }
+      }
+
       await loadDashboardData(true);
     } catch (feedbackError) {
       console.error(feedbackError);
@@ -1435,6 +1509,15 @@ function App() {
                             >
                               <TerminalIcon className="devflow-icon devflow-icon--tiny" />
                               <span>打开终端</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="devflow-execution-banner__cancel-btn"
+                              title="中断 codex 并回退至修改请求阶段"
+                              disabled={activeMutationName === "cancel"}
+                              onClick={() => { void handleCancelTask(selectedTask); }}
+                            >
+                              <span>⏹ 中断</span>
                             </button>
                           </div>
                         ) : null}

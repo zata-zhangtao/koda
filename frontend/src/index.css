@@ -94,7 +94,7 @@ img {
 }
 
 .devflow-shell {
-  width: min(1248px, calc(100vw - 48px));
+  width: min(1440px, calc(100vw - 32px));
   margin: 0 auto;
 }
 
@@ -209,8 +209,8 @@ img {
 }
 
 .devflow-main {
-  padding-top: 24px;
-  padding-bottom: 104px;
+  padding-top: 12px;
+  padding-bottom: 72px;
 }
 
 .devflow-alert {
@@ -232,8 +232,8 @@ img {
 
 .devflow-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.7fr);
-  gap: 32px;
+  grid-template-columns: minmax(220px, 0.6fr) minmax(0, 1.7fr);
+  gap: 16px;
   align-items: start;
 }
 
@@ -281,8 +281,8 @@ img {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
-  gap: 12px;
+  margin-bottom: 10px;
+  gap: 8px;
 }
 
 .devflow-section-heading__title,
@@ -306,8 +306,8 @@ img {
 }
 
 .devflow-create-panel {
-  margin-bottom: 16px;
-  padding: 18px;
+  margin-bottom: 8px;
+  padding: 12px;
   border-color: rgba(16, 185, 129, 0.2);
   background: rgba(16, 185, 129, 0.045);
 }
@@ -379,7 +379,7 @@ img {
 .devflow-requirement-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .devflow-loading-card,
@@ -431,7 +431,7 @@ img {
 }
 
 .devflow-requirement-card {
-  padding: 16px;
+  padding: 10px 12px;
   border-left: 4px solid transparent;
   transition:
     border-color 160ms ease,
@@ -486,20 +486,20 @@ img {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: 24px;
+  gap: 12px;
 }
 
 .devflow-detail__body {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 16px;
 }
 
 .devflow-detail__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
+  gap: 12px;
 }
 
 .devflow-detail__copy {
@@ -516,7 +516,7 @@ img {
 
 .devflow-detail__title {
   margin: 0;
-  font-size: clamp(2.2rem, 4.6vw, 3.15rem);
+  font-size: clamp(1.6rem, 3.2vw, 2.2rem);
   font-weight: 900;
   line-height: 0.96;
   letter-spacing: -0.07em;
@@ -558,7 +558,7 @@ img {
 .devflow-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 32px;
+  gap: 16px;
 }
 
 .devflow-detail-section {
@@ -710,10 +710,10 @@ img {
 }
 
 .devflow-document-card {
-  min-height: 600px;
-  max-height: 600px;
+  min-height: 520px;
+  max-height: 520px;
   overflow: auto;
-  padding: 24px 26px;
+  padding: 16px 18px;
   box-shadow: var(--devflow-shadow);
 }
 
@@ -800,7 +800,7 @@ img {
 
 .devflow-feedback {
   flex: none;
-  padding-top: 18px;
+  padding-top: 10px;
   background: linear-gradient(180deg, rgba(245, 245, 240, 0), var(--devflow-bg) 28%);
   border-top: 1px solid var(--devflow-line);
 }
@@ -1398,6 +1398,30 @@ img {
 }
 
 .devflow-execution-banner__terminal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.devflow-execution-banner__cancel-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: rgba(185, 28, 28, 0.08);
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b91c1c;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.devflow-execution-banner__cancel-btn:hover {
+  background: rgba(185, 28, 28, 0.15);
+}
+
+.devflow-execution-banner__cancel-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
