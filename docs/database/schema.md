@@ -122,6 +122,8 @@ erDiagram
 - `workflow_stage`：前端按钮和状态展示的唯一依据
 - `worktree_path`：决定 Codex 实际工作目录
 
+新的任务型 worktree 默认会写成仓库同级 `task/` 目录下的绝对路径。例如项目仓库是 `/Users/zata/code/my-app` 时，新任务通常会保存为 `/Users/zata/code/task/my-app-wt-12345678`。已经落库的历史 `worktree_path` 不会被系统自动改写。
+
 ### DevLog
 
 `DevLog` 是最细粒度的时间线记录。无论是用户反馈、附件、系统提示还是 Codex 输出，最终都汇聚到这里。

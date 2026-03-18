@@ -14,7 +14,7 @@ Koda 当前的真实主线不是“通用 Python 模板”，而是一套围绕 
 
 - **需求卡片工作流**：`backlog`、`prd_generating`、`implementation_in_progress` 等阶段已经进入数据模型与前端展示。
 - **任务时间线**：文本日志、图片附件、状态标记和 AI 输出统一归档到同一条需求历史里。
-- **项目绑定与 Worktree**：任务可关联本地 Git 仓库，并在启动时创建独立 worktree。
+- **项目绑定与 Worktree**：任务可关联本地 Git 仓库，并在启动时创建独立 worktree。新 worktree 默认创建在仓库同级的 `task/` 目录下，例如项目仓库是 `/Users/zata/code/my-app` 时，任务 worktree 默认会落到 `/Users/zata/code/task/my-app-wt-12345678`。
 - **Codex 自动化**：后端通过 `dsl/services/codex_runner.py` 构造 Prompt、调用 `codex exec`、写回日志并推进阶段。
 - **媒体与导出**：支持图片上传、缩略图生成、Markdown 编年史导出。
 - **AI 模型配置工具**：`ai_agent/` 中保留了可复用的模型注册与凭据解析能力。

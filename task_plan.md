@@ -1,3 +1,53 @@
+# Task Plan: Put All New Worktrees Under ../task
+
+**Goal**: Change new task worktree creation so the default root is always `repo_root_path.parent / "task"`, while keeping downstream consumers on `Task.worktree_path`, preserving branch-only script compatibility, and aligning tests/docs with the new path rule.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Inspect the current worktree path builder and creation strategies
+- [x] Identify downstream flows that depend on stored `Task.worktree_path`
+- [x] Confirm which docs and tests must change with the new root rule
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Add a shared helper for the `../task` root and ensure the directory exists before creation
+- [x] Update fallback, path-aware script, and branch-only script behaviors to use or validate the new root
+- [x] Keep `TaskService.start_task()` persisting the returned absolute path without schema changes
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Add regression coverage for fallback, path-aware script, and branch-only path validation behavior
+- [x] Run focused backend tests for worktree/task flows
+- [x] Run `uv run mkdocs build`
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Treat `dsl/services/git_worktree_service.py` as the single path-policy source | The PRD explicitly keeps downstream APIs and completion logic transparent to the root-directory strategy |
+| Keep `Task.worktree_path` unchanged as the stored field | Existing APIs, completion flow, and historical records already depend on this absolute path |
+| Resolve branch-only script results from `git worktree list --porcelain` instead of guessing a path | Compatibility scripts may choose their own child directory names, so Koda must validate the real created path rather than infer one |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` -> PASS (`10 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py tests/test_codex_runner.py -q` -> PASS (`17 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS (Material 2.0 upstream warning banner only)
+- **Deliverables:**
+  - `dsl/services/git_worktree_service.py` - centralized `../task` root helper, pre-create root directory, branch-only runtime path resolution, and containment validation
+  - `tests/test_git_worktree_service.py` - fallback, path-aware script, branch-only path validation, and real Git completion regressions
+  - `tests/test_task_service.py` - `TaskService.start_task()` persistence coverage for the new `../task/...` path
+  - `docs/index.md`, `docs/architecture/system-design.md`, `docs/database/schema.md`, `docs/dev/evaluation.md` - synchronized path examples and manual verification guidance
+
+---
+
 # Task Plan: Preserve Repo Fingerprints Across WebDAV Restore
 
 **Goal**: Make cross-computer WebDAV restores verify more than `repo_path` by persisting project Git fingerprints (`origin` remote + `HEAD` commit), comparing them against the current machine, and surfacing actionable repair states in the UI.

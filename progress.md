@@ -1,5 +1,36 @@
 # Progress Log
 
+## Session: 2026-03-19 Worktree Root Migration
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the current planning skill instructions and confirmed the project already has persistent planning files.
+- Scanned the repo for all worktree-related code paths, tests, API consumers, and docs references.
+- Verified the current implementation centralizes worktree creation in `dsl/services/git_worktree_service.py`.
+- Confirmed the only uncommitted workspace file before changes is the new PRD `tasks/prd-7e932cad.md`.
+- Verified that no existing docs already describe `../task`, so the new root rule must be introduced explicitly rather than corrected in place.
+- Added a new `build_task_worktree_root_path()` helper and changed the default task worktree path to `<repo-parent>/task/<repo>-wt-<task8>`.
+- Updated `create_task_worktree()` to pre-create `../task/`, keep path-aware script arguments aligned with the new root, and resolve branch-only results from `git worktree list --porcelain`.
+- Added containment validation so branch-only scripts now fail with a direct error when the actual created path is outside `../task/`.
+- Added real Git regressions for fallback creation, path-aware script invocation, branch-only invalid path rejection, and `TaskService.start_task()` path persistence.
+- Synchronized docs with the new default path example and explicit manual verification guidance.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` | Edited backend files and tests compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` | Worktree creation + task persistence regressions pass | `10 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py tests/test_codex_runner.py -q` | Worktree path change does not regress completion/task orchestration flows | `17 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` | Docs remain valid after path-rule updates | Build succeeded; Material 2.0 upstream warning banner only | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| None | N/A |
+
 ## Session: 2026-03-18
 
 ### Current Status
