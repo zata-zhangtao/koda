@@ -51,3 +51,57 @@ All phases complete ✅
   - `frontend/src/App.tsx`, `frontend/src/types/index.ts`, `frontend/src/index.css` - UI states for relink / wrong repo / commit drift
   - `tests/test_project_service.py` - Git-backed regression coverage for normalized remote, relink validation, commit drift, and fingerprint refresh
   - `docs/database/schema.md`, `docs/database/migrations.md`, `docs/guides/configuration.md` - synchronized operator docs
+
+---
+
+# Task Plan: Defensive SQLite Bootstrap For Empty Databases
+
+**Goal**: Prevent API requests such as `POST /api/projects` and `GET /api/email-settings` from failing with `sqlite3.OperationalError: no such table ...` when a fresh SQLite file exists before the FastAPI lifespan hook creates tables.
+**Started**: 2026-03-18
+
+## Current Phase
+All phases complete with one unrelated residual test hang noted below ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Confirm the live SQLite file was empty and missing all tables
+- [x] Verify the ORM models were registered and the failure was bootstrap timing, not missing model definitions
+- [x] Decide to centralize schema initialization instead of relying only on FastAPI lifespan
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Move reusable schema initialization and lightweight column patches into `utils.database`
+- [x] Make `SessionLocal` self-bootstrap via a custom `DatabaseSession`
+- [x] Reuse the shared initializer from `dsl.app` startup
+- [x] Update operator documentation to reflect the new fallback path
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Add regression coverage for opening a session against a brand-new SQLite file
+- [x] Run targeted backend tests covering database, project, and task flows
+- [x] Run `uv run mkdocs build`
+- [ ] Get a clean completion from `tests/test_codex_runner.py` during full-suite execution
+- **Status:** complete with residual unrelated hang
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Put schema bootstrap in `utils.database` instead of only `dsl.app` | Direct `SessionLocal()` usage exists in multiple services, so a lifespan-only fix would stay fragile |
+| Keep the initialization idempotent and engine-scoped | Repeated calls from startup and session creation should be safe and cheap |
+| Reuse the same helper for lightweight `ALTER TABLE` patches | Prevents startup and fallback paths from drifting apart |
+| Add a regression test around a fresh SQLite file | This matches the reported failure mode more closely than unit-testing the helper in isolation |
+
+## Completion Summary
+- **Status:** Complete with residual unrelated test hang (2026-03-18)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile utils/database.py dsl/app.py tests/test_database.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_database.py tests/test_project_service.py tests/test_task_service.py -q` -> PASS (`12 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_terminal_launcher.py tests/test_logger.py -q` -> PASS (`7 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` -> HANGS while reaching `tests/test_codex_runner.py`; not traced to this database patch
+- **Deliverables:**
+  - `utils/database.py` - shared schema bootstrap, incremental patches, and `DatabaseSession`
+  - `dsl/app.py` - startup now reuses the shared bootstrap helper
+  - `tests/test_database.py` - regression coverage for fresh SQLite session bootstrap
+  - `docs/getting-started.md`, `docs/database/migrations.md`, `docs/database/schema.md`, `docs/guides/dsl-development.md` - synchronized bootstrap documentation

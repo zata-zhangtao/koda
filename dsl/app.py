@@ -19,49 +19,15 @@ from dsl.api import (
     tasks_router,
     webdav_settings_router,
 )
-from sqlalchemy import text
 
-from utils.database import Base, create_tables, engine
+from utils.database import SessionLocal, ensure_database_schema_ready
 from utils.logger import logger
 from utils.settings import config
-
-
-def _run_migrations() -> None:
-    """运行增量数据库迁移，确保新列存在于旧数据库中.
-
-    使用 ALTER TABLE ... ADD COLUMN IF NOT EXISTS（SQLite 3.37.0+）或
-    捕获异常的方式安全地添加新列。
-    """
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE tasks ADD COLUMN requirement_brief VARCHAR(5000)"))
-            conn.commit()
-            logger.info("Migration: added requirement_brief column to tasks")
-        except Exception:
-            # 列已存在时数据库会抛出异常，安全忽略
-            pass
-
-        try:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)"))
-            conn.commit()
-            logger.info("Migration: added repo_remote_url column to projects")
-        except Exception:
-            pass
-
-        try:
-            conn.execute(
-                text("ALTER TABLE projects ADD COLUMN repo_head_commit_hash VARCHAR(64)")
-            )
-            conn.commit()
-            logger.info("Migration: added repo_head_commit_hash column to projects")
-        except Exception:
-            pass
 
 
 def _backfill_missing_project_repo_fingerprints() -> None:
     """补全旧数据库中缺失的项目仓库指纹."""
     from dsl.services.project_service import ProjectService
-    from utils.database import SessionLocal
 
     db_session = SessionLocal()
     try:
@@ -90,9 +56,8 @@ async def lifespan(app: FastAPI):
     Yields:
         None
     """
-    # 启动时创建表
-    create_tables(Base)
-    _run_migrations()
+    # 启动时初始化数据库结构，并对旧数据执行轻量回填
+    ensure_database_schema_ready()
     _backfill_missing_project_repo_fingerprints()
     logger.info("DSL tables initialized")
 

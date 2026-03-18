@@ -82,7 +82,8 @@ cd frontend && npm run dev
 
 ## 首次启动后会发生什么
 
-- `dsl.app` 的 `lifespan` 会调用 `create_tables(Base)`，自动创建缺失的数据表。
+- `dsl.app` 的 `lifespan` 会调用共享的数据库初始化逻辑，自动创建缺失的数据表并补齐少量内置列补丁。
+- 即使某些调用路径绕过了 `lifespan`，首次创建数据库会话时也会再次执行同一套初始化逻辑，避免出现空 SQLite 文件但没有表结构的状态。
 - `/api/run-accounts/current` 首次访问时，如果数据库中还没有活跃账户，会自动创建一个默认 `RunAccount`。
 - 媒体目录会在应用启动或上传文件时自动补齐。
 

@@ -15,9 +15,10 @@
 
 1. `main.py` 调用 `uvicorn.run("dsl.app:app", ...)`
 2. `dsl.app.create_application()` 创建 FastAPI 应用
-3. `lifespan` 在启动时调用 `create_tables(Base)`
-4. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
-5. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
+3. `lifespan` 在启动时调用共享数据库初始化逻辑
+4. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
+5. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
+6. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
 ### 路由与服务分工
 

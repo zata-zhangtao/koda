@@ -12,6 +12,9 @@
 - WebDAV upload happens from the local DB file directly, which makes it the correct place to refresh project fingerprints before syncing.
 - The earlier relink flow only repaired paths; it had no way to reject a different remote or highlight a same-remote commit drift.
 - Existing project tests used fake `.git` directories, which are insufficient once fingerprint logic depends on real Git metadata.
+- A zero-byte `data/dsl.db` means SQLite created the file on first connect, but the schema bootstrap path never ran before request handling.
+- `Base.metadata` already contains `projects` and `email_settings`, so the production failure is not missing model imports inside the codebase; it is missing or bypassed initialization timing.
+- Multiple services instantiate `SessionLocal()` directly, so fixing only FastAPI `lifespan` would leave the database bootstrap path fragile.
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -22,6 +25,7 @@
 | Reject relink when remote mismatches, but allow commit drift with a warning | Wrong repo is unsafe; newer commit on the same repo can be intentional |
 | Backfill only missing fingerprints on startup | Avoids destroying the previously synced baseline while still upgrading old databases |
 | Replace fake-repo tests with real Git repos | Needed to validate remote normalization, HEAD drift, and refresh behavior accurately |
+| Centralize schema initialization in `utils.database` and reuse it from both startup and session creation | Prevents empty or partially initialized SQLite databases from reaching request handlers |
 
 ## Resources
 - `dsl/models/project.py`
