@@ -126,6 +126,7 @@ function App() {
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
   const [allDevLogList, setAllDevLogList] = useState<DevLog[]>([]);
+  const [selectedTaskLogList, setSelectedTaskLogList] = useState<DevLog[]>([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
@@ -244,7 +245,9 @@ function App() {
       ? taskList.find((taskItem) => taskItem.id === selectedTaskId) ?? null
       : null);
   const selectedTaskDevLogs = selectedTask
-    ? devLogsByTaskId[selectedTask.id] ?? []
+    ? (selectedTaskLogList.length > 0
+        ? selectedTaskLogList
+        : devLogsByTaskId[selectedTask.id] ?? [])
     : [];
   const selectedTaskSnapshot = selectedTask
     ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
@@ -362,6 +365,7 @@ function App() {
     setErrorMessage(null);
     setPrdFileContent(null);
     setExpandedTurnIdSet(new Set());
+    setSelectedTaskLogList([]);
   }, [workspaceView, selectedTaskId]);
 
   // 自动展开最新 AI 消息卡片
@@ -423,6 +427,26 @@ function App() {
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
     setPrdFileContent(null);
+  }, [selectedTaskId]);
+
+  // 按任务拉取完整日志列表，避免全局 100 条限制导致时间线空白
+  useEffect(() => {
+    if (!selectedTaskId) {
+      setSelectedTaskLogList([]);
+      return;
+    }
+    let cancelled = false;
+    const fetch = () => {
+      logApi.list(selectedTaskId, 2000).then((logs) => {
+        if (!cancelled) setSelectedTaskLogList(sortDevLogListByCreatedAt(logs));
+      }).catch(() => {});
+    };
+    fetch();
+    const pollId = window.setInterval(fetch, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
   }, [selectedTaskId]);
 
   // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
