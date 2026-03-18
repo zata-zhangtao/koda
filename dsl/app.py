@@ -17,6 +17,7 @@ from dsl.api import (
     projects_router,
     run_accounts_router,
     tasks_router,
+    webdav_settings_router,
 )
 from sqlalchemy import text
 
@@ -94,6 +95,7 @@ def create_application() -> FastAPI:
     application.include_router(media_router)
     application.include_router(chronicle_router)
     application.include_router(email_settings_router)
+    application.include_router(webdav_settings_router)
 
     # 挂载静态文件服务（媒体文件）
     media_path = config.MEDIA_STORAGE_PATH

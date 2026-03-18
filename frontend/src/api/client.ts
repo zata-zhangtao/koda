@@ -13,6 +13,9 @@ import type {
   Task,
   TaskChronicle,
   TimelineEntry,
+  WebDAVSettings,
+  WebDAVSettingsUpdate,
+  WebDAVSyncResult,
 } from "../types";
 import { type WorkflowStage } from "../types";
 
@@ -305,6 +308,28 @@ export const emailSettingsApi = {
       method: "POST",
       body: JSON.stringify({ subject, body }),
     }),
+};
+
+/** WebDAV Settings API */
+export const webdavSettingsApi = {
+  /** 获取 WebDAV 设置 */
+  get: () => fetchApi<WebDAVSettings>("/webdav-settings"),
+
+  /** 保存 WebDAV 设置（upsert） */
+  save: (data: WebDAVSettingsUpdate) =>
+    fetchApi<WebDAVSettings>("/webdav-settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /** 测试 WebDAV 连接 */
+  test: () => fetchApi<WebDAVSyncResult>("/webdav-settings/test", { method: "POST" }),
+
+  /** 上传数据库到 WebDAV */
+  upload: () => fetchApi<WebDAVSyncResult>("/webdav-settings/sync/upload", { method: "POST" }),
+
+  /** 从 WebDAV 下载数据库（覆盖本地） */
+  download: () => fetchApi<WebDAVSyncResult>("/webdav-settings/sync/download", { method: "POST" }),
 };
 
 /** Chronicle API */

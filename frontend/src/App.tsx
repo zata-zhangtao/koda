@@ -14,7 +14,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { logApi, mediaApi, projectApi, runAccountApi, taskApi } from "./api/client";
-import { EmailSettingsModal } from "./components/EmailSettingsModal";
+import { SettingsModal } from "./components/SettingsModal";
 import {
   AIProcessingStatus,
   DevLogStateTag,
@@ -1077,7 +1077,7 @@ function App() {
       </header>
 
       {isEmailSettingsOpen && (
-        <EmailSettingsModal onClose={() => setIsEmailSettingsOpen(false)} />
+        <SettingsModal onClose={() => setIsEmailSettingsOpen(false)} />
       )}
 
       <main className="devflow-shell devflow-main">

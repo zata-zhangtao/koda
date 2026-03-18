@@ -125,6 +125,34 @@ export interface EmailSettings {
   updated_at: string;
 }
 
+/** WebDAV 同步设置 */
+export interface WebDAVSettings {
+  id: number;
+  server_url: string;
+  username: string;
+  password_masked: string;
+  remote_path: string;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** WebDAV 设置保存请求体 */
+export interface WebDAVSettingsUpdate {
+  server_url: string;
+  username: string;
+  password: string;
+  remote_path: string;
+  is_enabled: boolean;
+}
+
+/** WebDAV 同步操作结果 */
+export interface WebDAVSyncResult {
+  success: boolean;
+  message: string;
+  remote_url?: string | null;
+}
+
 /** 邮件设置保存请求体 */
 export interface EmailSettingsUpdate {
   smtp_host: string;

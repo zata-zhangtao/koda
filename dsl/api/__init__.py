@@ -16,6 +16,7 @@ from dsl.api.media import router as media_router
 from dsl.api.chronicle import router as chronicle_router
 from dsl.api.projects import router as projects_router
 from dsl.api.email_settings import router as email_settings_router
+from dsl.api.webdav_settings import router as webdav_settings_router
 
 __all__ = [
     "run_accounts_router",
@@ -25,4 +26,5 @@ __all__ = [
     "chronicle_router",
     "projects_router",
     "email_settings_router",
+    "webdav_settings_router",
 ]
