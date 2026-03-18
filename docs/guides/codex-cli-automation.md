@@ -52,14 +52,20 @@
 
 ### PRD Prompt
 
-由 `run_codex_prd` 直接在代码中拼接，输入包括：
+由 `build_codex_prd_prompt` 构造，输入包括：
 
 - 任务标题
 - 最近几条任务日志
+- 任务 ID（用于目标文件名）
 - 当前 worktree 路径
-- 生成 PRD 的固定章节规范
+- 生成 PRD 的输出合同
 
-它会要求 Codex 真正在 `tasks/` 目录中写出 `*-prd-*.md` 文件，而不是只把内容打印到终端。
+当前 Prompt 会显式要求：
+
+- 在 PRD 顶部元数据区域，同时输出 `原始需求标题` 和 `需求名称（AI 归纳）`
+- `需求名称（AI 归纳）` 必须位于主要章节之前，且不能为空
+- 如果上下文不足，`需求名称（AI 归纳）` 必须回退为原始标题的规范化版本
+- 将完整 PRD 写入固定文件 `tasks/prd-{task_id[:8]}.md`，而不是只把内容打印到终端
 
 ### 实现 Prompt
 
@@ -141,10 +147,10 @@ Codex 的输出不是单独存放在某个审计表中，而是直接写回 `Dev
 后端读取 PRD 内容时，会在任务的 worktree 中查找：
 
 ```text
-tasks/*-prd-*.md
+tasks/prd-{task_id[:8]}.md
 ```
 
-并选择按名称逆序排序后的最新文件返回给前端。
+后端会直接读取该固定文件并返回给前端，不会按通配规则选“最新文件”。
 
 ## 故障处理
 
@@ -157,7 +163,7 @@ tasks/*-prd-*.md
 
 ### PRD 重新生成
 
-`run_codex_prd` 在执行前会清理 worktree `tasks/` 下旧的 `*-prd-*.md` 文件，避免前端读取到历史版本。
+`run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧文件 `tasks/prd-{task_id[:8]}.md`，避免前端读取到历史版本。
 
 ### Worktree 选择优先级
 

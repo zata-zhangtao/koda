@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session: 2026-03-19 PRD Output Contract
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the current planning files and confirmed they belonged to prior tasks, then initialized a new plan section for this PRD output-contract task.
+- Located the current PRD generation path in `dsl/services/codex_runner.py` and confirmed the prompt is built inline in `run_codex_prd`.
+- Confirmed the API compatibility point in `dsl/api/tasks.py:get_task_prd_file`, which reads `tasks/prd-{task_id[:8]}.md` with UTF-8 decoding.
+- Identified documentation areas that mention PRD prompt behavior but do not yet codify the new AI-summarized requirement name contract.
+- Verified that `tests/test_codex_runner.py` already covers prompt-builder helpers, making it the right place to add regression assertions for a new PRD prompt builder.
+- Found a doc drift in `docs/guides/codex-cli-automation.md`: it still claims wildcard PRD file discovery instead of the fixed filename contract used by the backend.
+- Confirmed a second doc drift in `docs/core/prompt-management.md`, which still treats the PRD prompt as inline-only and references wildcard PRD filenames.
+- Located an existing generated validation checklist in `frontend/src/App.tsx`; it is a low-risk place to add the manual check for `需求名称（AI 归纳）`.
+- Confirmed there is no direct test coverage yet for PRD prompt assembly or `get_task_prd_file`, so both need focused regression tests as part of the verification phase.
+- Chosen verification split: add prompt-contract assertions in `tests/test_codex_runner.py` and add a direct compatibility test around `dsl/api/tasks.py:get_task_prd_file`.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_codex_runner.py tests/test_tasks_api.py -q` | Prompt contract and PRD file lookup regressions pass | `9 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_task_service.py tests/test_codex_runner.py tests/test_tasks_api.py -q` | Prompt contract, task workflow compatibility, and PRD file lookup regressions pass | `14 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` | Documentation remains valid after contract updates | Build succeeded (upstream Material 2.0 warning only) | passed |
+| `npm ci` | Frontend dependencies install successfully | Installed 211 packages | passed |
+| `npm run build` | Frontend compiles after checklist update | Build succeeded | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `npm run build` initially failed with `sh: tsc: command not found` | Installed frontend dependencies with `npm ci` and reran the build successfully |
+
 ## Session: 2026-03-19 Worktree Root Migration
 
 ### Current Status

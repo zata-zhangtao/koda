@@ -2359,6 +2359,7 @@ function buildTaskDocumentMarkdown(
     "## Validation Checklist",
     "- [ ] Match the reference layout and spacing system",
     "- [ ] Validate the requirement list, timeline, and PRD panels",
+    "- [ ] Confirm PRD metadata includes `原始需求标题` and `需求名称（AI 归纳）`",
     "- [ ] Verify responsive behavior on narrow screens",
     "- [ ] Keep current backend task and log flows operational",
   ].join("\n");

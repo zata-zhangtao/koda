@@ -1079,6 +1079,66 @@ def build_codex_prompt(
     return constructed_prompt_text
 
 
+def build_codex_prd_prompt(
+    task_title: str,
+    dev_log_text_list: list[str],
+    task_id_str: str,
+    worktree_path_str: str | None = None,
+) -> str:
+    """根据任务标题和历史日志构建 PRD 生成 Prompt.
+
+    Args:
+        task_title: 需求卡片标题
+        dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
+        task_id_str: 任务 UUID 字符串
+        worktree_path_str: 预期的 git worktree 绝对路径（可选）
+
+    Returns:
+        str: 完整的 PRD 生成 Prompt 文本
+    """
+    prd_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=5,
+        separator_str="\n---\n",
+        empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
+    )
+    prd_output_relative_path_str = f"tasks/prd-{task_id_str[:8]}.md"
+
+    if worktree_path_str:
+        prd_worktree_instruction_block_str = f"""
+## Git Worktree 说明
+当前工作目录是 git worktree：`{worktree_path_str}`
+- 直接在此目录中生成并写入 PRD 文件，无需切换到其他目录
+"""
+    else:
+        prd_worktree_instruction_block_str = ""
+
+    constructed_prd_prompt_text = f"""请为以下需求生成 PRD 文档。
+
+## 原始需求标题
+{task_title}
+
+## 需求背景/上下文
+{prd_context_block_str}
+{prd_worktree_instruction_block_str}
+## PRD 输出合同
+1. 使用 `/prd` skill 生成 PRD，并将原始需求标题和上下文作为输入。
+2. 在 PRD 顶部的元数据区域（位于主要章节之前），必须同时包含以下字段：
+   - `原始需求标题`：保留用户提供的标题，不得省略。
+   - `需求名称（AI 归纳）`：基于任务标题和上下文总结出的规范化需求名称，不得为空。
+3. 不得只保留 `需求名称（AI 归纳）`；`原始需求标题` 必须与 AI 归纳名称同时出现。
+4. 当上下文不足时，`需求名称（AI 归纳）` 必须回退到原始需求标题的规范化版本，输出值不能为空。
+5. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
+
+## 文件输出要求
+1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
+2. 必须真正写入文件，不只是输出到终端。
+3. 写完后输出文件路径。
+"""
+
+    return constructed_prd_prompt_text
+
+
 def build_codex_review_prompt(
     task_title: str,
     dev_log_text_list: list[str],
@@ -1510,35 +1570,12 @@ async def run_codex_prd(
         work_dir_path: codex 工作目录
         worktree_path_str: git worktree 路径（可选）
     """
-    prd_context_block_str = _build_recent_context_block(
+    prd_prompt_text_str = build_codex_prd_prompt(
+        task_title=task_title_str,
         dev_log_text_list=dev_log_text_list,
-        max_items_int=5,
-        separator_str="\n---\n",
-        empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
+        task_id_str=task_id_str,
+        worktree_path_str=worktree_path_str,
     )
-
-    worktree_note_str = (
-        f"\n当前工作目录是 git worktree：`{worktree_path_str}`"
-        if worktree_path_str
-        else ""
-    )
-
-    prd_prompt_text_str = f"""请为以下需求生成 PRD 文档。{worktree_note_str}
-
-## 需求标题
-{task_title_str}
-
-## 需求背景/上下文
-{prd_context_block_str}
-
-## 执行步骤
-
-使用 `/prd` skill 生成 PRD，将需求标题和上下文作为输入。
-
-生成完成后，将 PRD 内容保存到文件：
-`tasks/prd-{task_id_str[:8]}.md`
-
-**重要**：必须真正写入文件，不只是输出到终端。写完后输出文件路径。"""
 
     task_prd_file_path = work_dir_path / "tasks" / f"prd-{task_id_str[:8]}.md"
     if task_prd_file_path.exists():

@@ -1,3 +1,54 @@
+# Task Plan: PRD Output Must Include AI-Summarized Requirement Name
+
+**Goal**: Make the PRD generation contract explicitly require both the original requirement title and an AI-summarized requirement name at the top of the generated PRD, with prompt logic that is testable, documented, and compatible with the existing `tasks/prd-{task_id[:8]}.md` file flow and stage transitions.
+**Started**: 2026-03-19
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Inspect the PRD generation entrypoint and current PRD file read path
+- [x] Identify the best extraction point for a testable prompt builder
+- [x] Locate docs and tests that define or should define the PRD output contract
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Add a dedicated PRD prompt builder that encodes AI-generated name, original title, fallback behavior, and fixed output path
+- [x] Switch PRD generation to reuse the prompt builder without changing stage flow
+- [x] Keep `get_task_prd_file` compatibility intact and add regression coverage around it
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Add regression tests for the prompt contract and PRD file path expectations
+- [x] Update operator docs and manual validation checklist
+- [x] Run focused tests and `uv run mkdocs build`
+- **Status:** complete
+
+## Current Phase
+All phases complete ✅
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Preserve the existing PRD file path contract `tasks/prd-{task_id[:8]}.md` | Frontend polling and API reading already depend on that exact location |
+| Make the new behavior prompt-contract based instead of adding structured persistence | The requirement explicitly says no new DB/API field is needed and no frontend structural change is required |
+| Validate compatibility by testing both the prompt builder and `get_task_prd_file` directly | This locks the new output contract and the unchanged read path without needing a full Codex integration test |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_codex_runner.py tests/test_tasks_api.py -q` -> PASS (`9 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_task_service.py tests/test_codex_runner.py tests/test_tasks_api.py -q` -> PASS (`14 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build` -> PASS (upstream Material 2.0 warning only)
+  - `npm ci` -> PASS
+  - `npm run build` -> PASS
+- **Deliverables:**
+  - `dsl/services/codex_runner.py` - extracted `build_codex_prd_prompt(...)` and wired `run_codex_prd` to reuse it
+  - `tests/test_codex_runner.py`, `tests/test_tasks_api.py` - regression coverage for prompt contract and fixed PRD file lookup
+  - `docs/guides/codex-cli-automation.md`, `docs/core/prompt-management.md`, `docs/core/ai-assets.md`, `docs/architecture/system-design.md`, `docs/dev/evaluation.md` - synchronized PRD output contract and manual verification guidance
+  - `frontend/src/App.tsx` - validation checklist now mentions `需求名称（AI 归纳）`
+
+---
+
 # Task Plan: Put All New Worktrees Under ../task
 
 **Goal**: Change new task worktree creation so the default root is always `repo_root_path.parent / "task"`, while keeping downstream consumers on `Task.worktree_path`, preserving branch-only script compatibility, and aligning tests/docs with the new path rule.

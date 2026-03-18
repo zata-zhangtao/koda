@@ -99,6 +99,24 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
     assert "不要 push" in completion_prompt_text
 
 
+def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
+    """PRD prompt should require both titles, fallback guidance, and the fixed file path."""
+    prd_prompt_text = codex_runner.build_codex_prd_prompt(
+        task_title="I hope the generated PRD simultaneously includes the name of the requirement",
+        dev_log_text_list=["Need the output contract captured in tests and docs."],
+        task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
+        worktree_path_str="/tmp/project-wt-cf2b9461",
+    )
+
+    assert "原始需求标题" in prd_prompt_text
+    assert "需求名称（AI 归纳）" in prd_prompt_text
+    assert "位于主要章节之前" in prd_prompt_text
+    assert "回退到原始需求标题的规范化版本" in prd_prompt_text
+    assert "不得为空" in prd_prompt_text
+    assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
+    assert "必须真正写入文件" in prd_prompt_text
+
+
 def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     tmp_path: Path,
 ) -> None:

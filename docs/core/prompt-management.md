@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | `build_codex_prompt` | 代码实现 Prompt | 点击“开始执行”后 |
 | `build_codex_completion_prompt` | 完成阶段说明文本（非执行入口） | 点击“Complete”后 |
-| `run_codex_prd` 内的 `prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
+| `build_codex_prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
 
 ## Prompt 输入来源
 
@@ -28,14 +28,20 @@
 
 ### PRD 生成 Prompt
 
-`run_codex_prd` 里的 Prompt 会使用：
+`build_codex_prd_prompt` 会使用：
 
 - 任务标题
 - 最近最多 5 条日志
+- 任务 ID
 - worktree 路径说明
-- 强制要求的 PRD 章节结构
+- 强制要求的 PRD 输出合同
 
-它不仅要求生成文案，还要求真正把 PRD 写到 `tasks/` 目录。
+它不仅要求生成文案，还要求：
+
+- 在顶部元数据区域保留 `原始需求标题`
+- 同时输出 `需求名称（AI 归纳）`
+- 在上下文不足时回退为原始标题的规范化版本
+- 真正把 PRD 写到固定文件 `tasks/prd-{task_id[:8]}.md`
 
 ### 完成阶段说明文本
 
@@ -69,7 +75,7 @@
 ### 保持输出可观察
 
 - Prompt 变更后，要确保 Codex 的关键输出仍然会写回 `DevLog`
-- PRD Prompt 变更后，要确认前端仍能通过 `tasks/*-prd-*.md` 读取结果
+- PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}.md` 读取结果
 
 ### 保持工程约束
 
@@ -84,11 +90,12 @@
 ## 推荐变更流程
 
 1. 修改 `dsl/services/codex_runner.py`
-2. 重新启动或重新触发对应任务
-3. 观察 `/tmp/koda-<task短ID>.log`
-4. 检查 `DevLog` 时间线是否仍然完整
-5. 如果改的是 PRD Prompt，检查 `tasks/*-prd-*.md` 是否按预期生成
-6. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
+2. 为 Prompt 合同补充或更新单元测试
+3. 重新启动或重新触发对应任务
+4. 观察 `/tmp/koda-<task短ID>.log`
+5. 检查 `DevLog` 时间线是否仍然完整
+6. 如果改的是 PRD Prompt，检查 `tasks/prd-{task_id[:8]}.md` 是否按预期生成，且顶部包含 `原始需求标题` 与 `需求名称（AI 归纳）`
+7. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
 
 ## 当前缺口
 
