@@ -275,3 +275,15 @@ export function toTimestampValue(rawDateText: string): number {
   const parsedDate = parseApiDate(rawDateText);
   return parsedDate ? parsedDate.getTime() : 0;
 }
+
+export function shiftApiDateByMilliseconds(
+  rawDateText: string,
+  deltaMilliseconds: number
+): string | null {
+  const parsedDate = parseApiDate(rawDateText);
+  if (!parsedDate) {
+    return null;
+  }
+
+  return new Date(parsedDate.getTime() + deltaMilliseconds).toISOString();
+}

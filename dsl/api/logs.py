@@ -3,6 +3,7 @@
 提供日志的创建、查询和 AI 校正功能.
 """
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +21,7 @@ from dsl.schemas.dev_log_schema import (
 from dsl.services.log_service import LogService
 from dsl.services.task_service import TaskService
 from utils.database import get_db
+from utils.helpers import parse_iso_datetime_text
 from utils.logger import logger
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -51,6 +53,7 @@ def list_logs(
     task_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    created_after: str | None = None,
     db_session: Session = Depends(get_db),
 ) -> list[DevLog]:
     """获取日志列表.
@@ -59,13 +62,30 @@ def list_logs(
         task_id: 按任务过滤（可选）
         limit: 返回数量限制
         offset: 分页偏移量
+        created_after: 仅返回该时间之后的新日志；支持带偏移的 ISO 8601 字符串
         db_session: 数据库会话
 
     Returns:
         list[DevLog]: 日志列表
     """
     run_account_id = _get_current_run_account_id(db_session)
-    logs = LogService.get_logs(db_session, task_id, run_account_id, limit, offset)
+    created_after_datetime: datetime | None = None
+    if created_after is not None:
+        created_after_datetime = parse_iso_datetime_text(created_after)
+        if created_after_datetime is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Invalid created_after timestamp. Expected an ISO 8601 datetime.",
+            )
+
+    logs = LogService.get_logs(
+        db_session,
+        task_id,
+        run_account_id,
+        limit,
+        offset,
+        created_after_datetime,
+    )
 
     # 填充 task_title
     for log in logs:

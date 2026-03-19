@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import pytest
 
+from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.project import Project
 from dsl.models.run_account import RunAccount
@@ -178,6 +179,60 @@ def test_create_task_allows_unlinked_tasks(db_session: Session) -> None:
 
     assert created_task.project_id is None
     assert created_task.lifecycle_status.value == "PENDING"
+
+
+def test_get_task_log_count_map_returns_grouped_counts(db_session: Session) -> None:
+    """Task log counts should be calculated with one grouped result map."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    first_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(task_title="First task"),
+        run_account_id=run_account_obj.id,
+    )
+    second_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(task_title="Second task"),
+        run_account_id=run_account_obj.id,
+    )
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=first_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="one",
+            ),
+            DevLog(
+                task_id=first_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="two",
+            ),
+            DevLog(
+                task_id=second_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="three",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    task_log_count_map = TaskService.get_task_log_count_map(
+        db_session,
+        [first_task.id, second_task.id, "missing-task-id"],
+    )
+
+    assert task_log_count_map[first_task.id] == 2
+    assert task_log_count_map[second_task.id] == 1
+    assert "missing-task-id" not in task_log_count_map
 
 
 def test_prepare_task_completion_moves_worktree_task_into_pr_preparing(

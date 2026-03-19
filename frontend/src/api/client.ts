@@ -26,6 +26,10 @@ type ApiErrorPayload = {
   detail?: string;
 };
 
+type LogListOptions = {
+  createdAfter?: string | null;
+};
+
 function extractApiErrorMessage(
   responseText: string,
   statusCode: number
@@ -231,10 +235,17 @@ export const projectApi = {
 /** DevLog API */
 export const logApi = {
   /** 列出日志 */
-  list: (taskId?: string, limit = 100) =>
-    fetchApi<DevLog[]>(
-      `/logs?${taskId ? `task_id=${taskId}&` : ""}limit=${limit}`
-    ),
+  list: (taskId?: string, limit = 100, options?: LogListOptions) => {
+    const searchParams = new URLSearchParams();
+    if (taskId) {
+      searchParams.set("task_id", taskId);
+    }
+    searchParams.set("limit", String(limit));
+    if (options?.createdAfter) {
+      searchParams.set("created_after", options.createdAfter);
+    }
+    return fetchApi<DevLog[]>(`/logs?${searchParams.toString()}`);
+  },
 
   /** 创建日志 */
   create: (data: {

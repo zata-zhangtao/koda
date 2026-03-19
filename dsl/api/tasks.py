@@ -69,9 +69,11 @@ def list_tasks(
     """
     run_account_id = _get_current_run_account_id(db_session)
     task_list = TaskService.get_tasks(db_session, run_account_id)
+    task_id_list = [task_item.id for task_item in task_list]
+    task_log_count_map = TaskService.get_task_log_count_map(db_session, task_id_list)
 
     for task_item in task_list:
-        task_item.log_count = len(task_item.dev_logs)
+        task_item.log_count = task_log_count_map.get(task_item.id, 0)
 
     return task_list
 

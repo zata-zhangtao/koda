@@ -30,6 +30,21 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "ALTER TABLE projects ADD COLUMN repo_head_commit_hash VARCHAR(64)",
         "Migration: added repo_head_commit_hash column to projects",
     ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_tasks_run_account_created_at "
+        "ON tasks (run_account_id, created_at)",
+        "Migration: ensured idx_tasks_run_account_created_at",
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_dev_logs_task_created_at "
+        "ON dev_logs (task_id, created_at)",
+        "Migration: ensured idx_dev_logs_task_created_at",
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_dev_logs_run_account_created_at "
+        "ON dev_logs (run_account_id, created_at)",
+        "Migration: ensured idx_dev_logs_run_account_created_at",
+    ),
 )
 _database_initialization_lock = Lock()
 _initialized_database_keys: set[tuple[int, int]] = set()

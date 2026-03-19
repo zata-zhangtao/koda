@@ -3,8 +3,10 @@
 提供 Task 的 CRUD 操作、生命周期管理和工作流阶段推进功能.
 """
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.task import Task
 from dsl.schemas.task_schema import (
@@ -94,6 +96,38 @@ class TaskService:
             query = query.filter(Task.lifecycle_status == status)
 
         return query.order_by(Task.created_at.desc()).all()
+
+    @staticmethod
+    def get_task_log_count_map(
+        db_session: Session,
+        task_id_list: list[str],
+    ) -> dict[str, int]:
+        """Build log counts for tasks in one aggregate query.
+
+        Args:
+            db_session: 数据库会话
+            task_id_list: 需要统计日志数量的任务 ID 列表
+
+        Returns:
+            dict[str, int]: `task_id -> log_count` 映射
+        """
+        if not task_id_list:
+            return {}
+
+        aggregated_count_row_list: list[tuple[str, int]] = (
+            db_session.query(
+                DevLog.task_id,
+                func.count(DevLog.id),
+            )
+            .filter(DevLog.task_id.in_(task_id_list))
+            .group_by(DevLog.task_id)
+            .all()
+        )
+
+        return {
+            task_id_str: int(log_count_int)
+            for task_id_str, log_count_int in aggregated_count_row_list
+        }
 
     @staticmethod
     def get_task_by_id(db_session: Session, task_id: str) -> Task | None:

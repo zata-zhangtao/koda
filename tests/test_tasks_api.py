@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.tasks import get_task_prd_file
+from dsl.api.tasks import get_task_prd_file, list_tasks
+from dsl.models.dev_log import DevLog
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
 from utils.database import Base
@@ -79,3 +80,51 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+
+
+def test_list_tasks_sets_log_count_without_loading_full_relationships(
+    db_session: Session,
+) -> None:
+    """Task list responses should expose grouped log counts for each task."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    first_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="First task",
+    )
+    second_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Second task",
+    )
+    db_session.add_all([first_task, second_task])
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=first_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="one",
+            ),
+            DevLog(
+                task_id=first_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="two",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    listed_task_list = list_tasks(db_session=db_session)
+    listed_task_by_id = {task_item.id: task_item for task_item in listed_task_list}
+
+    assert listed_task_by_id[first_task.id].log_count == 2
+    assert listed_task_by_id[second_task.id].log_count == 0

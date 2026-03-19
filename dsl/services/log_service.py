@@ -3,11 +3,12 @@
 提供 DevLog 的 CRUD 操作、状态转换和命令解析功能.
 """
 
+from datetime import UTC, datetime
 import re
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import AIProcessingStatus, DevLogStateTag
@@ -175,6 +176,7 @@ class LogService:
         run_account_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        created_after: datetime | None = None,
     ) -> list[DevLog]:
         """获取日志列表.
 
@@ -184,20 +186,36 @@ class LogService:
             run_account_id: 按运行账户过滤（可选）
             limit: 返回数量限制
             offset: 分页偏移量
+            created_after: 仅返回该时间之后的新日志（可选）
 
         Returns:
             list[DevLog]: 日志对象列表
         """
-        query = db_session.query(DevLog)
+        from dsl.models.task import Task
+
+        query = db_session.query(DevLog).options(
+            selectinload(DevLog.task).load_only(Task.id, Task.task_title)
+        )
 
         if task_id:
             query = query.filter(DevLog.task_id == task_id)
         if run_account_id:
             query = query.filter(DevLog.run_account_id == run_account_id)
+        if created_after is not None:
+            normalized_created_after = (
+                created_after.replace(tzinfo=None)
+                if created_after.tzinfo is None
+                else created_after.astimezone(UTC).replace(tzinfo=None)
+            )
+            query = query.filter(DevLog.created_at > normalized_created_after)
 
-        return (
-            query.order_by(DevLog.created_at.desc()).offset(offset).limit(limit).all()
+        ordered_query = (
+            query.order_by(DevLog.created_at.asc())
+            if created_after is not None
+            else query.order_by(DevLog.created_at.desc())
         )
+
+        return ordered_query.offset(offset).limit(limit).all()
 
     @staticmethod
     def get_log_by_id(db_session: Session, log_id: str) -> DevLog | None:
