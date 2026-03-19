@@ -16,6 +16,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from dsl.services.prd_file_service import (
+    build_task_prd_output_path_contract,
+    list_task_prd_file_paths,
+)
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
@@ -1157,7 +1161,7 @@ def build_codex_prd_prompt(
         separator_str="\n---\n",
         empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
     )
-    prd_output_relative_path_str = f"tasks/prd-{task_id_str[:8]}.md"
+    prd_output_relative_path_str = build_task_prd_output_path_contract(task_id_str)
 
     if worktree_path_str:
         prd_worktree_instruction_block_str = f"""
@@ -1187,8 +1191,12 @@ def build_codex_prd_prompt(
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
-2. 必须真正写入文件，不只是输出到终端。
-3. 写完后输出文件路径。
+2. 你必须把 `<english-requirement-slug>` 占位符替换成真实文件名片段，不要把尖括号占位符原样保留在文件名里。
+3. 替换后的英文 slug 必须基于需求语义生成英文短语，使用小写 kebab-case，例如 `user-login-redesign`。
+4. 文件名必须体现需求内容，不要使用 `random`、`temp`、`final`、`demo`、日期、task id 之外的随机串，或其他与需求无关的占位词。
+5. 如果原始需求是中文，先理解需求含义，再翻译/归纳为自然的英文 slug。
+6. 必须真正写入文件，不只是输出到终端。
+7. 写完后输出文件路径。
 """
 
     return constructed_prd_prompt_text
@@ -1648,14 +1656,19 @@ async def run_codex_prd(
         worktree_path_str=worktree_path_str,
     )
 
-    task_prd_file_path = work_dir_path / "tasks" / f"prd-{task_id_str[:8]}.md"
-    if task_prd_file_path.exists():
+    existing_task_prd_file_path_list = list_task_prd_file_paths(
+        worktree_dir_path=work_dir_path,
+        task_id_str=task_id_str,
+    )
+    for existing_task_prd_file_path in existing_task_prd_file_path_list:
         try:
-            task_prd_file_path.unlink()
-            logger.info(f"Removed old PRD file: {task_prd_file_path}")
+            existing_task_prd_file_path.unlink()
+            logger.info(f"Removed old PRD file: {existing_task_prd_file_path}")
         except OSError as cleanup_error:
             logger.warning(
-                f"Could not remove old PRD file {task_prd_file_path}: {cleanup_error}"
+                "Could not remove old PRD file %s: %s",
+                existing_task_prd_file_path,
+                cleanup_error,
             )
 
     prd_phase_result = await _run_codex_phase(

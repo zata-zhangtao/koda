@@ -100,7 +100,7 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
-    """PRD prompt should require both titles, fallback guidance, and the fixed file path."""
+    """PRD prompt should require both titles and a semantic English filename."""
     prd_prompt_text = codex_runner.build_codex_prd_prompt(
         task_title="I hope the generated PRD simultaneously includes the name of the requirement",
         dev_log_text_list=["Need the output contract captured in tests and docs."],
@@ -113,7 +113,10 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "位于主要章节之前" in prd_prompt_text
     assert "回退到原始需求标题的规范化版本" in prd_prompt_text
     assert "不得为空" in prd_prompt_text
-    assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
+    assert "`tasks/prd-cf2b9461-<english-requirement-slug>.md`" in prd_prompt_text
+    assert "不要把尖括号占位符原样保留在文件名里" in prd_prompt_text
+    assert "小写 kebab-case" in prd_prompt_text
+    assert "不要使用 `random`" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
 
 

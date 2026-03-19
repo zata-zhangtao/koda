@@ -41,7 +41,7 @@
 - 在顶部元数据区域保留 `原始需求标题`
 - 同时输出 `需求名称（AI 归纳）`
 - 在上下文不足时回退为原始标题的规范化版本
-- 真正把 PRD 写到固定文件 `tasks/prd-{task_id[:8]}.md`
+- 真正把 PRD 写到任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`
 
 ### 完成阶段说明文本
 
@@ -75,7 +75,7 @@
 ### 保持输出可观察
 
 - Prompt 变更后，要确保 Codex 的关键输出仍然会写回 `DevLog`
-- PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}.md` 读取结果
+- PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}*.md` 读取结果
 
 ### 保持工程约束
 
@@ -94,7 +94,7 @@
 3. 重新启动或重新触发对应任务
 4. 观察 `/tmp/koda-<task短ID>.log`
 5. 检查 `DevLog` 时间线是否仍然完整
-6. 如果改的是 PRD Prompt，检查 `tasks/prd-{task_id[:8]}.md` 是否按预期生成，且顶部包含 `原始需求标题` 与 `需求名称（AI 归纳）`
+6. 如果改的是 PRD Prompt，检查 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 是否按预期生成，且顶部包含 `原始需求标题` 与 `需求名称（AI 归纳）`
 7. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
 
 ## 当前缺口

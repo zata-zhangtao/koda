@@ -65,7 +65,8 @@
 - 在 PRD 顶部元数据区域，同时输出 `原始需求标题` 和 `需求名称（AI 归纳）`
 - `需求名称（AI 归纳）` 必须位于主要章节之前，且不能为空
 - 如果上下文不足，`需求名称（AI 归纳）` 必须回退为原始标题的规范化版本
-- 将完整 PRD 写入固定文件 `tasks/prd-{task_id[:8]}.md`，而不是只把内容打印到终端
+- 将完整 PRD 写入任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`，而不是只把内容打印到终端
+- 文件名中的 `<english-requirement-slug>` 必须是基于需求内容归纳出的英文 kebab-case 短语，不能使用随机值
 
 ### 实现 Prompt
 
@@ -147,10 +148,10 @@ Codex 的输出不是单独存放在某个审计表中，而是直接写回 `Dev
 后端读取 PRD 内容时，会在任务的 worktree 中查找：
 
 ```text
-tasks/prd-{task_id[:8]}.md
+tasks/prd-{task_id[:8]}-<english-requirement-slug>.md
 ```
 
-后端会直接读取该固定文件并返回给前端，不会按通配规则选“最新文件”。
+后端会按任务前缀 `tasks/prd-{task_id[:8]}*.md` 查找并返回最合适的文件，优先读取带英文语义 slug 的新命名，同时兼容旧的固定文件名。
 
 ## 故障处理
 
@@ -163,7 +164,7 @@ tasks/prd-{task_id[:8]}.md
 
 ### PRD 重新生成
 
-`run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧文件 `tasks/prd-{task_id[:8]}.md`，避免前端读取到历史版本。
+`run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧 PRD 文件 `tasks/prd-{task_id[:8]}*.md`，避免前端读取到历史版本。
 
 ### Worktree 选择优先级
 

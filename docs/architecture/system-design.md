@@ -132,7 +132,7 @@ flowchart TD
 4. `codex exec` 在项目根目录或 worktree 中执行
 5. 标准输出被批量写回 `DevLog`
 6. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志
-7. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取固定文件 `tasks/prd-{task_id[:8]}.md` 的内容
+7. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
 
 ## 外部依赖边界
 
