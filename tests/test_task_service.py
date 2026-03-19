@@ -244,8 +244,16 @@ def test_start_task_persists_created_worktree_path_under_task_root(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    """Starting a linked task should persist the created `../task/...` worktree path."""
+    """Starting a linked task should persist the created path and copy env files."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    source_env_file_path = repo_root_path / ".env"
+    source_env_file_path.write_text("API_KEY=demo\n", encoding="utf-8")
+    nested_source_env_file_path = repo_root_path / "frontend" / ".env.local"
+    nested_source_env_file_path.parent.mkdir(parents=True, exist_ok=True)
+    nested_source_env_file_path.write_text(
+        "VITE_API_URL=http://localhost\n",
+        encoding="utf-8",
+    )
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -289,3 +297,9 @@ def test_start_task_persists_created_worktree_path_under_task_root(
         )
         == f"task/{created_task.id[:8]}"
     )
+    assert (expected_worktree_path / ".env").read_text(encoding="utf-8") == (
+        source_env_file_path.read_text(encoding="utf-8")
+    )
+    assert (expected_worktree_path / "frontend" / ".env.local").read_text(
+        encoding="utf-8"
+    ) == nested_source_env_file_path.read_text(encoding="utf-8")

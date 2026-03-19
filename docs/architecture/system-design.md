@@ -52,13 +52,13 @@ flowchart LR
 
 ### 服务层
 
-- `TaskService`：任务创建、阶段推进、worktree 创建
+- `TaskService`：任务创建、阶段推进、worktree 创建与环境准备
 - `LogService`：命令解析与日志持久化
 - `MediaService`：文件落盘与缩略图
 - `ChronicleService`：时间线格式化与 Markdown 导出
 - `codex_runner`：Prompt 构造、`codex exec` 调用、日志回写与阶段推进
 
-当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。
+当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。`worktree_path` 写入任务前，系统还会补齐基础环境准备，包括复制仓库内 `.env*` 文件、按现有策略处理前端依赖，以及在存在 `pyproject.toml` 时执行 `uv sync --all-extras`。
 
 ### 数据层
 
@@ -118,7 +118,7 @@ flowchart TD
 
 `pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`、基于任务摘要生成 `git commit -m ...`、`git rebase main`，若 rebase / merge 冲突则自动调用 Codex 修复，然后复用当前持有 `main` 分支的工作区完成 merge 与清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。
 
-对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。
+对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
 
 `test_in_progress` 与 `acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
 

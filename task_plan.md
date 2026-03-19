@@ -48,6 +48,62 @@ All phases complete ✅
 
 ---
 
+# Task Plan: Bootstrap Environments For Task Worktrees
+
+**Goal**: Implement the PRD in `tasks/20260319-105937-prd-worktree-environment-bootstrap.md` so every task worktree created by Koda is returned in a ready-to-code state, with environment bootstrap behavior aligned to `scripts/git_worktree.sh` rather than limited to whichever creation path happened to run.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Re-read the current worktree creation code, shell script behavior, and affected tests/docs
+- [x] Confirm how much of the target behavior already exists and where logic is duplicated
+- [x] Identify a minimal integration approach that avoids breaking the `../task/` path contract
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Extract or introduce a reusable worktree-environment bootstrap entrypoint based on `scripts/git_worktree.sh`
+- [x] Wire `GitWorktreeService.create_task_worktree()` to enforce environment bootstrap for creation paths that do not already provide it
+- [x] Keep branch-only script compatibility and non-interactive backend behavior intact
+- [x] Update tests to cover bootstrap success/failure and environment side effects
+- [x] Update README and MkDocs pages that describe the worktree contract
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Run focused worktree/task tests
+- [x] Run `just docs-build`
+- [x] Record exact command outcomes and touched deliverables
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Preserve the existing `../task/<repo>-wt-<task_short_id>` task path contract | It is already enforced by code, tests, and docs, so changing it would expand scope and risk unrelated regressions |
+| Treat `scripts/git_worktree.sh` as the environment-bootstrap source of truth, not necessarily the only worktree entrypoint | The user clarified that `just` is optional; the actual requirement is parity of environment setup |
+| Keep repo-local branch-only `git_worktree.sh` as the self-bootstrapping path and add Koda-managed post-create bootstrap for path-aware/raw strategies | This preserves compatibility with the existing branch-only contract while guaranteeing environment setup for the other creation paths |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `bash -n scripts/bootstrap_worktree_env.sh` -> PASS
+  - `bash -n scripts/git_worktree.sh` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` -> PASS (`12 passed`)
+  - `git diff --check -- scripts/bootstrap_worktree_env.sh scripts/git_worktree.sh dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py README.md docs/architecture/system-design.md docs/guides/codex-cli-automation.md docs/database/schema.md task_plan.md findings.md progress.md` -> PASS
+  - `just docs-build` -> BLOCKED by sandboxed `~/.cache/uv` write
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
+- **Deliverables:**
+  - `scripts/bootstrap_worktree_env.sh` - shared worktree environment bootstrap entrypoint for `.env*`, frontend dependency preparation, and Python dependency sync
+  - `scripts/git_worktree.sh` - now delegates environment preparation to the shared bootstrap script
+  - `dsl/services/git_worktree_service.py` - enforces post-create bootstrap for path-aware and raw fallback strategies
+  - `tests/test_git_worktree_service.py`, `tests/test_task_service.py` - regression coverage for `.env` copying, fake dependency commands, bootstrap failure, and task-start integration
+  - `README.md`, `docs/architecture/system-design.md`, `docs/guides/codex-cli-automation.md`, `docs/database/schema.md` - synchronized worktree environment contract
+
+---
+
 # Task Plan: PRD Output Must Include AI-Summarized Requirement Name
 
 **Goal**: Make the PRD generation contract explicitly require both the original requirement title and an AI-summarized requirement name at the top of the generated PRD, with prompt logic that is testable, documented, and compatible with the existing `tasks/prd-{task_id[:8]}.md` file flow and stage transitions.

@@ -144,3 +144,24 @@
 - The narrowest end-to-end fix is to expose a read-only API config payload (timezone name plus current offset label) and let the frontend datetime utility use that as its runtime source of truth, while still defaulting to `Asia/Shanghai` during bootstrap.
 - Frontend day-group labels should treat `YYYY-MM-DD` keys as already-normalized calendar days; re-parsing those keys as timestamps reintroduces timezone drift and is the wrong abstraction boundary.
 - A lightweight `get_app_timezone_display_label()` helper keeps chronicle export copy aligned with the configured timezone without duplicating string formatting rules in service code.
+
+## 2026-03-19 Worktree Environment Bootstrap Findings
+- `dsl/services/git_worktree_service.py` currently guarantees only worktree creation plus path resolution. It does not bootstrap `.env*`, frontend dependencies, or Python dependencies after creation.
+- `scripts/git_worktree.sh` already implements the desired ready-to-code behavior: it copies `.env*`, honors `WORKTREE_FRONTEND_STRATEGY` and `WORKTREE_SKIP_FRONTEND_INSTALL`, and runs `uv sync --all-extras` when `pyproject.toml` exists.
+- The current service chooses among three create strategies: path-aware repo-local scripts, branch-only repo-local scripts, and raw `git worktree add` fallback. Only the branch-only script path can currently inherit the shell script's environment behavior.
+- The `../task/` worktree path rule is already encoded in `GitWorktreeService`, `TaskService`, tests, and docs, so the safest implementation path is to preserve it and layer bootstrap on top.
+- The current staged diffs for `dsl/services/git_worktree_service.py`, `tests/test_git_worktree_service.py`, and `tests/test_task_service.py` are formatting-only, so there is no conflicting in-progress logic change in those files for this task.
+
+## 2026-03-19 Worktree Environment Bootstrap Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Extract shared bootstrap behavior into a separate script instead of re-implementing it in Python | The existing shell script already defines the operational contract, especially around frontend package manager detection and symlink/install strategy |
+| Keep branch-only script invocation non-interactive from backend and avoid `just worktree` as a hard dependency | The user explicitly clarified that `just` is optional; the requirement is environment setup, not command branding |
+| Enforce fail-fast semantics when bootstrap fails | Returning a `worktree_path` that is not actually ready-to-code would violate the stated requirement and create ambiguous task state |
+| Treat repo-local branch-only `git_worktree.sh` as self-bootstrapping, while Koda adds post-create bootstrap to path-aware and raw fallback strategies | This guarantees environment setup where Koda has full control without inventing a new contract for arbitrary third-party branch-only scripts |
+
+## 2026-03-19 Worktree Environment Bootstrap Verification Findings
+- A dedicated shared script works cleanly as the single source of truth because `scripts/git_worktree.sh` can call it directly, while `GitWorktreeService` can invoke it with `bash` after any successful create command.
+- Using fake `npm` and fake `uv` binaries in `PATH` is sufficient to verify dependency bootstrap behavior without any network access or real package installs.
+- `TaskService.start_task()` integration can be validated cheaply by asserting untracked `.env*` files appear in the created worktree, which proves bootstrap happened after `git worktree add`.
+- `just docs-build` is not reliable under the default sandbox because `uv` tries to initialize `~/.cache/uv`; the equivalent `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` command succeeds and verifies the same MkDocs output.

@@ -1,5 +1,42 @@
 # Progress Log
 
+## Session: 2026-03-19 Worktree Environment Bootstrap
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Re-read the implementation PRD in `tasks/20260319-105937-prd-worktree-environment-bootstrap.md`.
+- Initialized the planning flow for this task without overwriting the existing planning files.
+- Checked repository status and confirmed the workspace is dirty, with many staged files unrelated to this specific task.
+- Inspected `dsl/services/git_worktree_service.py` and confirmed it currently stops at worktree creation plus path resolution.
+- Inspected `scripts/git_worktree.sh` and confirmed it already contains the required environment bootstrap behavior for `.env*`, frontend dependency preparation, and Python dependency sync.
+- Verified the staged diffs for the targeted worktree service and test files are formatting-only, so this task can build on the current content without reconciling semantic conflicts first.
+- Added `scripts/bootstrap_worktree_env.sh` as the shared bootstrap entrypoint and moved the reusable environment-preparation logic there.
+- Updated `scripts/git_worktree.sh` to delegate to the shared bootstrap script instead of carrying its own duplicate bootstrap implementation.
+- Extended `dsl/services/git_worktree_service.py` so path-aware script and raw fallback strategies run post-create bootstrap before returning `worktree_path`.
+- Added regression coverage for `.env` copying, fake `npm` / `uv` dependency bootstrap, bootstrap failure, and `TaskService.start_task()` integration.
+- Updated README and the core worktree-related docs to describe the ready-to-code worktree contract.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Discovery scan only | Establish implementation surface and conflict risk | Completed | passed |
+| `bash -n scripts/bootstrap_worktree_env.sh` | Shared bootstrap script is valid shell syntax | Passed | passed |
+| `bash -n scripts/git_worktree.sh` | Updated worktree helper remains valid shell syntax | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` | Edited Python files compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` | Worktree bootstrap and task-start regressions pass | `12 passed` | passed |
+| `git diff --check -- scripts/bootstrap_worktree_env.sh scripts/git_worktree.sh dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py README.md docs/architecture/system-design.md docs/guides/codex-cli-automation.md docs/database/schema.md task_plan.md findings.md progress.md` | No whitespace or patch-format issues in touched files | Passed | passed |
+| `just docs-build` | MkDocs strict build passes through the standard repo command | Failed because `uv` could not initialize `~/.cache/uv` under sandbox | blocked |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | MkDocs strict build passes with a writable cache directory | Passed; Material 2.0 upstream warning banner still appeared | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format ...` failed with `Failed to spawn: ruff` | Skipped formatter-specific verification and used `py_compile`, shell syntax checks, pytest, and `git diff --check` instead |
+| `just docs-build` failed because sandboxed `uv` could not write `~/.cache/uv` | Reran the equivalent command with `UV_CACHE_DIR=/tmp/uv-cache` and confirmed `mkdocs build --strict` succeeds |
+
 ## Session: 2026-03-19 PRD Output Contract
 
 ### Current Status

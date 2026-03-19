@@ -20,11 +20,14 @@ class WorktreeCreateCommandSpec:
         command_argument_list: Command to execute
         expected_worktree_path: Path expected to exist after success for path-aware strategies
         branch_name_for_lookup: Branch name used to resolve the real path for branch-only scripts
+        requires_post_create_bootstrap: Whether Koda should run the shared
+            environment bootstrap after the create command succeeds
     """
 
     command_argument_list: list[str]
     expected_worktree_path: Path | None
     branch_name_for_lookup: str | None = None
+    requires_post_create_bootstrap: bool = False
 
 
 class GitWorktreeService:
@@ -123,6 +126,12 @@ class GitWorktreeService:
                 "创建 git worktree 后未找到预期目录：" f"{created_worktree_path}"
             )
 
+        if command_spec_obj.requires_post_create_bootstrap:
+            GitWorktreeService._bootstrap_worktree_environment(
+                repo_root_path=repo_root_path,
+                created_worktree_path=created_worktree_path,
+            )
+
         return created_worktree_path
 
     @staticmethod
@@ -189,6 +198,7 @@ class GitWorktreeService:
                     task_branch_name_str,
                 ],
                 expected_worktree_path=default_worktree_path,
+                requires_post_create_bootstrap=True,
             )
 
         branch_only_script_candidates = [
@@ -224,6 +234,64 @@ class GitWorktreeService:
                 "main",
             ],
             expected_worktree_path=default_worktree_path,
+            requires_post_create_bootstrap=True,
+        )
+
+    @staticmethod
+    def _bootstrap_worktree_environment(
+        repo_root_path: Path,
+        created_worktree_path: Path,
+    ) -> None:
+        """Run the shared worktree environment bootstrap script.
+
+        Args:
+            repo_root_path: Source repository root path
+            created_worktree_path: Created worktree path
+
+        Raises:
+            ValueError: When the bootstrap script is missing or exits with failure
+        """
+        bootstrap_script_path = GitWorktreeService._resolve_bootstrap_script_path()
+        if not bootstrap_script_path.exists():
+            raise ValueError(
+                "创建 git worktree 后环境准备失败："
+                f"未找到环境准备脚本 {bootstrap_script_path}"
+            )
+
+        try:
+            subprocess.run(
+                [
+                    "bash",
+                    str(bootstrap_script_path),
+                    str(repo_root_path),
+                    str(created_worktree_path),
+                ],
+                cwd=str(created_worktree_path),
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except subprocess.CalledProcessError as bootstrap_error:
+            stderr_text = (bootstrap_error.stderr or "").strip()
+            stdout_text = (bootstrap_error.stdout or "").strip()
+            failure_reason_text = stderr_text or stdout_text or str(bootstrap_error)
+            raise ValueError(
+                "创建 git worktree 后环境准备失败：" f"{failure_reason_text}"
+            ) from bootstrap_error
+
+    @staticmethod
+    def _resolve_bootstrap_script_path() -> Path:
+        """Return Koda's shared worktree bootstrap script path.
+
+        Returns:
+            Path: Shared bootstrap script path
+        """
+        return (
+            Path(__file__).resolve().parents[2]
+            / "scripts"
+            / "bootstrap_worktree_env.sh"
         )
 
     @staticmethod

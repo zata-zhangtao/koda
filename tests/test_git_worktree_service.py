@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -74,6 +75,32 @@ def _write_shell_script(script_path: Path, script_content_text: str) -> Path:
     return script_path
 
 
+def _write_text_file(file_path: Path, file_content_text: str) -> Path:
+    """Write a UTF-8 text file, creating parent directories as needed.
+
+    Args:
+        file_path: Target file path
+        file_content_text: File content text
+
+    Returns:
+        Path: Written file path
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(file_content_text, encoding="utf-8")
+    return file_path
+
+
+def _commit_all_changes(repo_root_path: Path, commit_message_text: str) -> None:
+    """Commit all current repository changes in the temporary repo.
+
+    Args:
+        repo_root_path: Repository root path
+        commit_message_text: Git commit message
+    """
+    _run_git_command(repo_root_path, ["add", "."])
+    _run_git_command(repo_root_path, ["commit", "-m", commit_message_text])
+
+
 def test_create_task_worktree_uses_default_branch_and_path(tmp_path: Path) -> None:
     """Fallback worktree creation should create the expected task branch and path."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
@@ -100,6 +127,7 @@ def test_create_task_worktree_passes_task_root_to_path_aware_script(
 ) -> None:
     """Path-aware scripts should receive the new task-root worktree path explicitly."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    source_env_file_path = _write_text_file(repo_root_path / ".env", "TOKEN=demo\n")
     script_capture_path = repo_root_path / "script-invocation.txt"
     _write_shell_script(
         repo_root_path / "scripts" / "new-worktree.sh",
@@ -126,6 +154,121 @@ git worktree add "$target_path" -b "$branch_name" main >/dev/null
         str(created_worktree_path),
         "task/12345678",
     ]
+    assert (created_worktree_path / ".env").read_text(encoding="utf-8") == (
+        source_env_file_path.read_text(encoding="utf-8")
+    )
+
+
+def test_create_task_worktree_bootstraps_env_and_dependencies_for_raw_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw fallback should bootstrap env files and dependency commands."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    _write_text_file(
+        repo_root_path / "pyproject.toml",
+        '[project]\nname = "demo-repo"\nversion = "0.1.0"\nrequires-python = ">=3.13"\n',
+    )
+    _write_text_file(
+        repo_root_path / "frontend" / "package.json",
+        '{\n  "name": "demo-frontend",\n  "version": "0.1.0"\n}\n',
+    )
+    _write_text_file(
+        repo_root_path / "frontend" / "package-lock.json",
+        '{\n  "name": "demo-frontend",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": {\n    "": {\n      "name": "demo-frontend",\n      "version": "0.1.0"\n    }\n  }\n}\n',
+    )
+    _commit_all_changes(repo_root_path, "add bootstrap fixtures")
+
+    _write_text_file(repo_root_path / ".env", "API_KEY=secret\n")
+    _write_text_file(
+        repo_root_path / "frontend" / ".env.local",
+        "VITE_API_URL=http://localhost\n",
+    )
+
+    fake_bin_directory_path = tmp_path / "fake-bin"
+    fake_bin_directory_path.mkdir(parents=True, exist_ok=True)
+    npm_log_path = tmp_path / "npm.log"
+    uv_log_path = tmp_path / "uv.log"
+    _write_shell_script(
+        fake_bin_directory_path / "npm",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "{npm_log_path}"
+mkdir -p node_modules
+touch node_modules/.fake-installed
+""",
+    )
+    _write_shell_script(
+        fake_bin_directory_path / "uv",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "{uv_log_path}"
+""",
+    )
+    monkeypatch.setenv(
+        "PATH",
+        f"{fake_bin_directory_path}:{os.environ.get('PATH', '')}",
+    )
+
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+    )
+
+    assert (created_worktree_path / ".env").read_text(
+        encoding="utf-8"
+    ) == "API_KEY=secret\n"
+    assert (created_worktree_path / "frontend" / ".env.local").read_text(
+        encoding="utf-8"
+    ) == "VITE_API_URL=http://localhost\n"
+    assert (
+        created_worktree_path / "frontend" / "node_modules" / ".fake-installed"
+    ).exists()
+    assert npm_log_path.read_text(encoding="utf-8").strip() == "ci --ignore-scripts"
+    assert uv_log_path.read_text(encoding="utf-8").strip() == "sync --all-extras"
+
+
+def test_create_task_worktree_fails_when_post_create_bootstrap_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Path-aware create should fail fast when shared bootstrap exits non-zero."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    _write_text_file(
+        repo_root_path / "pyproject.toml",
+        '[project]\nname = "demo-repo"\nversion = "0.1.0"\nrequires-python = ">=3.13"\n',
+    )
+    _commit_all_changes(repo_root_path, "add pyproject")
+    _write_shell_script(
+        repo_root_path / "scripts" / "new-worktree.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+target_path="$1"
+branch_name="$2"
+git worktree add "$target_path" -b "$branch_name" main >/dev/null
+""",
+    )
+
+    fake_bin_directory_path = tmp_path / "fake-bin"
+    fake_bin_directory_path.mkdir(parents=True, exist_ok=True)
+    _write_shell_script(
+        fake_bin_directory_path / "uv",
+        """#!/usr/bin/env bash
+set -euo pipefail
+echo "uv sync failed in test" >&2
+exit 1
+""",
+    )
+    monkeypatch.setenv(
+        "PATH",
+        f"{fake_bin_directory_path}:{os.environ.get('PATH', '')}",
+    )
+
+    with pytest.raises(ValueError, match="环境准备失败"):
+        GitWorktreeService.create_task_worktree(
+            repo_root_path=repo_root_path,
+            task_id="12345678-task-id",
+        )
 
 
 def test_create_task_worktree_rejects_branch_only_script_outside_task_root(
