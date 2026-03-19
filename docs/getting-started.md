@@ -1,5 +1,22 @@
 # 快速开始
 
+本页与 `README.md` 使用同一套最小启动路径，避免在仓库入口和站内文档之间出现两套 onboarding 说明。
+
+## 最小可执行路径
+
+```bash
+uv sync
+cd frontend && npm install
+cd ..
+just dsl-dev
+```
+
+本地默认地址：
+
+- 前端工作台：`http://localhost:5173`
+- 后端 API：`http://localhost:8000`
+- 健康检查：`http://localhost:8000/health`
+
 ## 环境要求
 
 ### 必需工具
@@ -51,7 +68,7 @@ just dev
 
 ## 启动项目
 
-最直接的本地开发方式：
+与 README 保持一致，最直接的本地开发方式是：
 
 ```bash
 just dsl-dev
@@ -73,12 +90,6 @@ just setup-data
 uv run python main.py
 cd frontend && npm run dev
 ```
-
-## 本地地址
-
-- 前端工作台：`http://localhost:5173`
-- 后端 API：`http://localhost:8000`
-- 健康检查：`http://localhost:8000/health`
 
 ## 首次启动后会发生什么
 
@@ -109,6 +120,8 @@ just docs-serve
 ```bash
 just docs-build
 ```
+
+提交前请至少执行一次 `just docs-build`。如果你修改了工作流、函数签名、环境变量、命令或路径规范，请同步更新 `README.md`、本页和相关 `docs/` 页面；若新增、重命名或移动文档页面，还需要同步更新 `mkdocs.yml` 的 `nav`。
 
 ## 常见问题
 

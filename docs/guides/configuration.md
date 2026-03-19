@@ -2,7 +2,7 @@
 
 ## 总览
 
-Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运行时配置看 `utils/settings.py`，前端端口和代理看 `frontend/vite.config.ts`，AI 提供商看 `ai_agent/`。
+Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运行时配置看 `utils/settings.py`，前端端口和代理看 `frontend/vite.config.ts`，AI 提供商看 `ai_agent/`。`README.md`、[快速开始](../getting-started.md) 和本页应始终复用 `justfile` 中同一套命令名称与含义。
 
 ## 配置文件清单
 
@@ -15,6 +15,14 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | `ai_agent/.env.example` | AI 服务凭据示例 | `DASHSCOPE_API_KEY`、`OPENROUTER_API_KEY` 等 |
 | `ai_agent/utils/models.json` | 模型注册表 | 提供商、基础 URL、模型分类 |
 | `mkdocs.yml` | 文档站点配置 | 导航、插件、Mermaid 支持 |
+
+## 默认本地入口
+
+当前开发环境的默认入口与 README / 快速开始保持一致：
+
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:8000`
+- 健康检查：`http://localhost:8000/health`
 
 ## 后端运行配置
 
@@ -88,11 +96,21 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 
 ## 命令入口
 
-`justfile` 已经把常用操作封装好了：
+面向贡献者的标准本地启动路径与 `README.md` / [快速开始](../getting-started.md) 完全一致：
+
+```bash
+uv sync
+cd frontend && npm install
+cd ..
+just dsl-dev
+```
+
+除最小启动路径外，仓库还提供以下常用命令入口：
 
 | 命令 | 作用 |
 | --- | --- |
-| `just sync` | 同步 Python 依赖 |
+| `uv sync` | 同步 Python、测试和文档依赖 |
+| `cd frontend && npm install` | 安装前端依赖 |
 | `just dev` | 同步依赖并安装 pre-commit |
 | `just run` | 启动后端 |
 | `just dsl-dev` | 同时启动后端和前端 |
@@ -100,6 +118,8 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 | `just docs-build` | 严格构建文档 |
 
 `just dsl-dev` 现在会在启动前检查 `8000` 和 `5173` 是否空闲；如果某个端口已被占用，会直接退出并打印当前监听进程。命令退出时，也会清理本次启动的后端和前端子进程，避免留下陈旧监听器。
+
+`just docs-build` 是文档改动的提交前验证项。任何命令名称、命令行为或默认端口的变更，都应该同步更新 `README.md`、[快速开始](../getting-started.md) 和本页。
 
 ## 配置变更建议
 
@@ -129,4 +149,10 @@ Koda 的配置分散在少量关键文件中，但职责边界比较清晰：运
 
 1. `frontend/vite.config.ts`
 2. `dsl/app.py` 的 CORS 白名单
-3. 本页和[快速开始](../getting-started.md)
+3. `README.md`、本页和[快速开始](../getting-started.md)
+
+## 文档同步检查清单
+
+- 工作流、函数签名、环境变量、命令或路径规范变化时，同步更新相关 `docs/` 页面和 `README.md`。
+- 新增、重命名或移动文档页面时，同步更新 `mkdocs.yml` 的 `nav`。
+- 文档改动提交前执行 `just docs-build`。

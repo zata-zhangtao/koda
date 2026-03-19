@@ -10,6 +10,48 @@
 - `frontend/src/App.tsx` already contains a generated markdown validation checklist, so the manual verification requirement can be satisfied by adding a PRD-specific checklist item there without changing the UI structure.
 - There is currently no direct regression test for `run_codex_prd` prompt assembly or for `get_task_prd_file`; both are good low-level targets for this change because they cover the new output contract and compatibility boundary without needing end-to-end Codex execution.
 
+## 2026-03-19 Configuration Guide Drift Follow-up Findings
+- `docs/guides/configuration.md` still documented `just sync` as the contributor-facing dependency install entrypoint and omitted the required `cd frontend && npm install` step, so it no longer matched `README.md` and `docs/getting-started.md`.
+- `justfile` still exposes `sync:` as a wrapper, but the PRD and the already-updated onboarding docs standardize contributor-facing guidance on `uv sync` + `cd frontend && npm install` + `just dsl-dev`.
+- No navigation or additional page changes are needed for this follow-up because the blocker is isolated to one section inside `docs/guides/configuration.md`.
+
+## 2026-03-19 Configuration Guide Drift Follow-up Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Limit the content fix to the `## 命令入口` section in `docs/guides/configuration.md` | The review blocker identified a single remaining source of command drift, and changing more pages would add unnecessary churn |
+| Document the README-standard startup path explicitly before listing auxiliary commands | This makes the config guide reuse the same onboarding sequence instead of only describing `justfile` recipes in isolation |
+| Keep `just docs-build` as the explicit pre-submit validation note in the same section | The PRD requires documentation maintenance and validation rules to stay visible on the core documentation path |
+
+## 2026-03-19 Agent Guide Consistency Follow-up Findings
+- `AGENTS.md` and `CLAUDE.md` were the only repository-level instruction docs still telling contributors to use `uv pip install`; the already-updated README and MkDocs onboarding pages consistently use `uv sync`.
+- Those two files also lacked the explicit `cd frontend && npm install`, `just dsl-dev`, and `just docs-build` entrypoints that the rest of the onboarding path now treats as standard.
+- `AGENTS.md` still referenced raw `uv run mkdocs serve` / `uv run mkdocs build` commands, which conflicted with the repository-standard `just docs-serve` / `just docs-build` wrappers defined in `justfile`.
+- `CLAUDE.md` ended with a stray closing code fence, which was unrelated to the blocker itself but would leave a Markdown formatting defect in one of the touched files if ignored.
+
+## 2026-03-19 Agent Guide Consistency Follow-up Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Update both agent guides, not only the `uv pip install` line | The review feedback explicitly framed the goal as a unified command set, so stopping at a one-line swap would leave repo-level docs partially inconsistent |
+| Mirror the `justfile` entrypoints in agent-facing docs | `justfile` is the operational source of truth for `dsl-dev`, `docs-serve`, and `docs-build` |
+| Keep README and MkDocs content unchanged in this follow-up | Those pages were already corrected in the prior pass and revalidated successfully |
+
+## 2026-03-19 README And Core Docs Findings
+- `README.md` is still anchored to `Zata Codes Template`, includes template-era hook and `utils/` scaffolding guidance, and uses `uv pip install`, so it directly conflicts with the PRD and current repo reality.
+- `docs/index.md` already positions the repo as Koda / DevStream Log and already exposes the correct local URLs plus `just docs-build`, which makes it the best baseline for the root README rewrite.
+- `docs/getting-started.md` already uses `uv sync`, `cd frontend && npm install`, and `just dsl-dev`, so the main work there is tightening wording and explicitly marking `just docs-build` as a pre-submit validation step.
+- `docs/guides/configuration.md` already lists the right command names from `justfile`, but it does not yet clearly tell maintainers to sync README / onboarding docs when commands, env vars, ports, or path rules change.
+- `docs/guides/dsl-development.md` still says `pr_preparing` is not fully automated, which conflicts with `docs/index.md`, `docs/architecture/system-design.md`, and `docs/guides/codex-cli-automation.md`.
+- `docs/api/references.md` already behaves as the mkdocstrings-driven authority page, so it does not need structural changes unless discoverability wording elsewhere depends on it.
+- `mkdocs.yml` already contains the required navigation targets and no page is being added, renamed, or moved, so nav churn would be unnecessary.
+
+## Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Rewrite README instead of incrementally patching template paragraphs | The existing template content would otherwise keep leaking conflicting positioning into the repo entry page |
+| Reuse the same command sequence and localhost addresses across README and onboarding pages | The PRD explicitly forbids divergent onboarding instructions |
+| Add documentation maintenance rules in both README and docs pages | Contributors should see the rule from both the repository root and the MkDocs landing path |
+| Correct the `pr_preparing` automation note in `docs/guides/dsl-development.md` while touching maintenance guidance nearby | Leaving that conflict in place would preserve internal documentation drift immediately after this refresh |
+
 ## 2026-03-19 Worktree Root Findings
 - `dsl/services/git_worktree_service.py` is the only place that computes default task worktree paths and selects between fallback, path-aware scripts, and branch-only scripts.
 - The current default path is `repo_root_path.parent / "<repo>-wt-<task8>"`, so both fallback Git and path-aware scripts still create sibling directories directly under the repo parent.

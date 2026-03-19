@@ -32,6 +32,85 @@
 |-------|------------|
 | `npm run build` initially failed with `sh: tsc: command not found` | Installed frontend dependencies with `npm ci` and reran the build successfully |
 
+## Session: 2026-03-19 Configuration Guide Drift Follow-up
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Re-read the review blocker and confirmed the remaining inconsistency was isolated to `docs/guides/configuration.md`.
+- Compared `README.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, `tasks/prd-e2a926f5.md`, and `justfile` to confirm the intended contributor-facing command set.
+- Rewrote the configuration guide's command section so it now opens with the same `uv sync` -> `cd frontend && npm install` -> `just dsl-dev` path used everywhere else.
+- Replaced the outdated `just sync`-only onboarding row with the README-aligned dependency and frontend install commands while keeping the auxiliary `just` command table for daily operations.
+- Recorded the follow-up findings and decisions in the planning files before verification.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `just docs-build` | MkDocs strict build still passes after the configuration guide correction | Passed; `mkdocs build --strict` completed successfully. The existing `VIRTUAL_ENV` mismatch notice and Material 2.0 upstream warning banner still appeared | passed |
+| `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` | No whitespace or patch-format issues in the touched files | Passed | passed |
+| `rg -n "just sync|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" docs/guides/configuration.md README.md docs/getting-started.md` | Configuration guide now matches the standardized onboarding command set | Passed; the config guide now exposes `uv sync`, frontend install, `just dsl-dev`, and `just docs-build` in the same shape as the README-led onboarding path | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| None | N/A |
+
+## Session: 2026-03-19 Agent Guide Consistency Follow-up
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the self-review blocker and confirmed the remaining drift was isolated to `AGENTS.md` and `CLAUDE.md`.
+- Re-checked `justfile` to confirm the repository-standard entrypoints remain `uv sync`, `cd frontend && npm install`, `just dsl-dev`, `just docs-serve`, and `just docs-build`.
+- Updated both agent-facing root docs so they now use the same Python install, frontend install, local development, and docs validation commands as `README.md` and the core MkDocs onboarding pages.
+- Switched the remaining raw MkDocs command references in `AGENTS.md` / `CLAUDE.md` to the repository-standard `just` wrappers.
+- Removed a stray trailing code fence from `CLAUDE.md` discovered during formatting verification.
+- Re-ran documentation validation, whitespace checks, and a command-consistency scan across the relevant doc surface.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `just docs-build` | MkDocs strict build still passes after the repo-level guide fix | Passed; `mkdocs build --strict` completed successfully. The existing `VIRTUAL_ENV` mismatch notice and Material 2.0 upstream warning banner still appeared | passed |
+| `git diff --check -- AGENTS.md CLAUDE.md README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | No whitespace or patch-format issues in the touched docs | Passed | passed |
+| `rg -n "uv pip install|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" AGENTS.md CLAUDE.md README.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | The targeted repo-level docs no longer contain `uv pip install` and do expose the unified command set | Passed; `uv pip install` no longer appears in the checked doc surface | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| None | N/A |
+
+## Session: 2026-03-19 README And Core Docs Refresh
+
+### Current Status
+- **Phase:** implementation in progress
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the PRD for `update docs and readme` and limited scope to the README-led documentation path.
+- Reviewed `README.md`, `docs/index.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, `docs/guides/codex-cli-automation.md`, `docs/guides/dsl-development.md`, `docs/api/references.md`, `docs/architecture/system-design.md`, `justfile`, and `mkdocs.yml`.
+- Confirmed `README.md` is the main source of template drift, while the MkDocs landing and onboarding pages already contain most of the correct Koda-specific reality.
+- Confirmed `mkdocs.yml` nav already covers the required pages and does not need churn because no page paths or titles are changing.
+- Identified one extra documentation conflict in `docs/guides/dsl-development.md`, where `pr_preparing` is still described as not fully automated.
+- Rewrote `README.md` to remove template-era positioning and replaced it with a Koda / DevStream Log landing page that links to the MkDocs deep-reference pages.
+- Realigned `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` around the same `uv sync` -> `cd frontend && npm install` -> `just dsl-dev` path and explicit `just docs-build` validation rule.
+- Corrected `docs/guides/dsl-development.md` so its workflow-stage description no longer conflicts with the implemented `pr_preparing` automation.
+- Verified the changed Markdown with `just docs-build`, then ran `git diff --check` to confirm no whitespace issues in the touched files.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `just docs-build` | MkDocs strict build passes after documentation refresh | Passed; only the upstream Material 2.0 warning banner appeared | passed |
+| `git diff --check -- README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | No whitespace or patch-format issues in touched files | Passed | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| None | N/A |
+
 ## Session: 2026-03-19 Worktree Root Migration
 
 ### Current Status

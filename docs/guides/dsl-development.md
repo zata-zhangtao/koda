@@ -33,7 +33,7 @@
 2. 在 `dsl/services/` 实现业务规则
 3. 在 `dsl/api/` 暴露路由
 4. 在前端 `api/client.ts` 对接接口
-5. 更新文档并执行验证
+5. 更新 `README.md` 和相关 `docs/` 页面，并执行 `just docs-build`
 
 ### 时间处理约定
 
@@ -68,13 +68,13 @@
 5. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
 6. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
 7. 自检若发现阻塞问题，任务自动回退到 `changes_requested`
+8. 点击“Complete”后，后端会进入 `pr_preparing`，执行确定性的 Git 收尾链路，并在成功后推进到 `done`
 
 ### 已建模但尚未自动化闭环的阶段
 
 以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示，但当前仓库尚未完整实现自动推进器：
 
 - `test_in_progress`
-- `pr_preparing`
 - `acceptance_in_progress`
 - `changes_requested` 到后续更细粒度阶段的闭环
 
@@ -101,6 +101,7 @@
 - 把 `workflow_stage` 视为唯一事实来源
 - 后端和前端要同时更新 `WorkflowStage` 相关逻辑
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
+- 如果阶段、命令、端口、环境变量或路径规范变化，要同步更新 `README.md`、相关 `docs/` 页面，并在提交前执行 `just docs-build`
 
 ### 改媒体上传时
 

@@ -49,6 +49,142 @@ All phases complete ✅
 
 ---
 
+# Task Plan: Resolve Configuration Guide Command Drift
+
+**Goal**: Remove the last README/onboarding command inconsistency by updating `docs/guides/configuration.md` to use the same contributor-facing startup path and validation wording as `README.md` and `docs/getting-started.md`.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Re-read the review blocker and confirm which command description still drifts
+- [x] Compare `README.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, and `justfile`
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Replace the outdated `just sync` onboarding row with the README-standard install commands
+- [x] Add the missing frontend install step so the config guide mirrors the documented quick-start path
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Run `just docs-build`
+- [x] Run `git diff --check` on the touched files
+- [x] Re-scan the command strings across the affected docs
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Keep the follow-up scoped to `docs/guides/configuration.md` plus planning logs | The blocker is a single remaining command-drift defect, not a broader doc rewrite |
+| Promote the README-standard startup path directly in the config guide before the supporting command table | This satisfies the PRD requirement that core onboarding docs use the same command names and descriptions |
+| Preserve the explicit `just docs-build` maintenance reminder in the same section | The review and PRD both require documentation validation to remain visible |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `just docs-build` -> PASS
+  - `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` -> PASS
+  - `rg -n "just sync|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" docs/guides/configuration.md README.md docs/getting-started.md` -> PASS
+- **Deliverables:**
+  - `docs/guides/configuration.md` - command section now mirrors the README/getting-started onboarding path and includes the missing frontend install step
+  - `task_plan.md`, `findings.md`, `progress.md` - recorded the blocker analysis, implementation scope, and verification evidence for this follow-up
+
+# Task Plan: Close Agent Guide Command Drift
+
+**Goal**: Align `AGENTS.md` and `CLAUDE.md` with the repository-standard onboarding and documentation commands already used by `README.md` and the core MkDocs pages, so no repo-level guide still points contributors or AI agents at `uv pip install` or raw MkDocs commands.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Confirm which repository-level docs still diverge from the updated README / MkDocs onboarding flow
+- [x] Re-check `justfile` so the repair uses the real command entrypoints
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Replace outdated dependency-install guidance in `AGENTS.md` and `CLAUDE.md`
+- [x] Add the matching frontend install, local dev, and docs validation commands so the repo-level guides stay aligned with README
+- [x] Fix any adjacent Markdown formatting issue encountered while touching the same docs
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Run `just docs-build`
+- [x] Run `git diff --check` on the touched documentation files
+- [x] Re-scan the relevant docs for the expected command set and confirm `uv pip install` no longer appears there
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Keep the fix limited to `AGENTS.md` and `CLAUDE.md` plus planning logs | The README / MkDocs pages were already aligned; the remaining blocker was isolated to repository-level agent guidance |
+| Standardize on `just` entrypoints for docs commands in agent-facing guidance | The repo already exposes `docs-serve`, `docs-build`, and `dsl-dev` via `justfile`, so repeating raw underlying commands reintroduces drift risk |
+| Fix the stray trailing code fence in `CLAUDE.md` while already editing that file | It was a localized Markdown bug in the same touched doc and leaving it would preserve avoidable formatting noise |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `just docs-build` -> PASS
+  - `git diff --check -- AGENTS.md CLAUDE.md README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
+  - `rg -n "uv pip install|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" AGENTS.md CLAUDE.md README.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
+- **Deliverables:**
+  - `AGENTS.md` - repository-level agent guide now matches the unified Python install, frontend install, local dev, and docs validation commands
+  - `CLAUDE.md` - companion agent guide now matches the same command set and no longer ends with a stray Markdown code fence
+
+# Task Plan: Refresh README And Core Docs
+
+**Goal**: Replace the outdated template-oriented README narrative with a Koda / DevStream Log workspace entry point, align the core MkDocs onboarding pages with the same commands and addresses, and make documentation maintenance plus `just docs-build` verification explicit.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Read the PRD and identify the required entry-path pages
+- [x] Compare `README.md`, `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` against `justfile`
+- [x] Confirm whether `mkdocs.yml` nav changes are needed for this scope
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Rewrite `README.md` as the repository landing page for Koda / DevStream Log
+- [x] Synchronize `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` with the same startup commands and maintenance rules
+- [x] Update any nearby guide content that still conflicts with the current documented workflow
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Run `just docs-build`
+- [x] Review final diffs for command, address, and navigation consistency
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Keep the change set focused on README plus core onboarding/overview docs | The PRD explicitly treats this as a documentation realignment, not a full-site rewrite |
+| Treat `justfile` as the command source of truth | The PRD requires command consistency across README and MkDocs pages |
+| Leave `mkdocs.yml` nav unchanged unless a page path/title actually changes | FR-11 forbids meaningless navigation churn |
+| Preserve `docs/api/references.md` as a linked deep-reference page instead of duplicating API member details elsewhere | FR-8 defines it as the sole object-level authority |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `just docs-build` -> PASS
+  - `git diff --check -- README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
+- **Deliverables:**
+  - `README.md` - rewritten as the Koda / DevStream Log repository landing page with quick start, project map, docs map, and documentation maintenance rules
+  - `docs/index.md` - aligned site overview, current capability summary, documentation map, and maintenance rules
+  - `docs/getting-started.md` - synchronized minimal startup path, addresses, and pre-submit docs validation rule
+  - `docs/guides/configuration.md` - synchronized command source-of-truth guidance plus documentation update checklist
+  - `docs/guides/dsl-development.md` - corrected workflow-stage reality and tightened documentation update expectations
+
+---
+
 # Task Plan: Put All New Worktrees Under ../task
 
 **Goal**: Change new task worktree creation so the default root is always `repo_root_path.parent / "task"`, while keeping downstream consumers on `Task.worktree_path`, preserving branch-only script compatibility, and aligning tests/docs with the new path rule.

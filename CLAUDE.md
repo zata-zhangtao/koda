@@ -10,10 +10,18 @@
 - **Dependency Declaration**: All dependencies must be correctly declared in `pyproject.toml`.
 
 ### Development Environment Setup
-- **Install Dependencies**: `uv pip install`
+- **Install Python Dependencies**: `uv sync`
+- **Install Frontend Dependencies**: `cd frontend && npm install`
 - **Run Scripts**: `uv run python script.py`
+- **Start Local Development**: `just dsl-dev`
 - **Virtual Environment**: `uv venv`
 - **Lock File**: Use `uv lock` to update the dependency lock file.
+
+### Documentation Tools (MkDocs)
+- **Engine**: Use `mkdocs` with the `mkdocs-material` theme for project documentation.
+- **API Reference**: Use `mkdocstrings[python]` to auto-generate API documentation from Python source code docstrings.
+- **Preview**: Use `just docs-serve` to preview documentation changes locally.
+- **Validation**: Use `just docs-build` to verify documentation changes before handoff or commit.
 
 ## Code Standards
 
@@ -201,5 +209,4 @@ def function_name(param1: str, param2: int) -> bool:
 ### Development Priorities
 
 * **Tool Priority**: Prioritize using `uv` commands over `pip` or `conda`.
-
-```
+* **Documentation Priority**: Never commit code changes without verifying `just docs-build` passes.
