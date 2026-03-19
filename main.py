@@ -5,7 +5,6 @@
 
 import uvicorn
 
-from dsl.app import app
 from utils.logger import logger
 
 

@@ -58,9 +58,15 @@ def test_timezone_helpers_preserve_utc_storage_semantics() -> None:
         tzinfo=ZoneInfo("Asia/Shanghai"),
     )
 
-    assert serialize_datetime_for_api(stored_utc_naive_datetime) == "2026-03-19T07:30:00+08:00"
+    assert (
+        serialize_datetime_for_api(stored_utc_naive_datetime)
+        == "2026-03-19T07:30:00+08:00"
+    )
     assert app_aware_to_utc_naive(app_timezone_datetime) == stored_utc_naive_datetime
-    assert app_aware_to_utc_naive(datetime(2026, 3, 19, 7, 30, 0)) == stored_utc_naive_datetime
+    assert (
+        app_aware_to_utc_naive(datetime(2026, 3, 19, 7, 30, 0))
+        == stored_utc_naive_datetime
+    )
 
 
 def test_task_response_schema_serializes_datetime_with_explicit_offset() -> None:
@@ -99,7 +105,9 @@ def test_app_config_route_exposes_runtime_timezone() -> None:
     }
 
 
-def test_chronicle_service_uses_app_timezone_for_cross_day_timeline_and_export() -> None:
+def test_chronicle_service_uses_app_timezone_for_cross_day_timeline_and_export() -> (
+    None
+):
     """Chronicle output should group cross-day records by UTC+8 natural days."""
     db_session = _create_test_session()
     try:
@@ -168,7 +176,9 @@ def test_chronicle_service_uses_app_timezone_for_cross_day_timeline_and_export()
         assert "**Timezone:** Asia/Shanghai (UTC+08:00)" in timeline_markdown
         assert "# 2026-03-19" in timeline_markdown
         assert "# 2026-03-18" in timeline_markdown
-        assert timeline_markdown.index("# 2026-03-19") < timeline_markdown.index("# 2026-03-18")
+        assert timeline_markdown.index("# 2026-03-19") < timeline_markdown.index(
+            "# 2026-03-18"
+        )
         assert "## ✅ [07:30:00 UTC+08:00] Timezone boundary task" in timeline_markdown
     finally:
         db_session.close()

@@ -149,7 +149,9 @@ def test_update_project_rebinds_repo_path_and_clears_missing_worktrees(
         display_name="Portable Repo",
         repo_path=str(original_repo_root_path),
         repo_remote_url="github.com/example/portable-repo",
-        repo_head_commit_hash=_run_git_command(original_repo_root_path, ["rev-parse", "HEAD"]),
+        repo_head_commit_hash=_run_git_command(
+            original_repo_root_path, ["rev-parse", "HEAD"]
+        ),
         description="sync test",
     )
     run_account_obj = RunAccount(
@@ -226,7 +228,9 @@ def test_update_project_rejects_different_remote_repo(
         display_name="Service A",
         repo_path=str(original_repo_root_path),
         repo_remote_url="github.com/example/service-a",
-        repo_head_commit_hash=_run_git_command(original_repo_root_path, ["rev-parse", "HEAD"]),
+        repo_head_commit_hash=_run_git_command(
+            original_repo_root_path, ["rev-parse", "HEAD"]
+        ),
         description=None,
     )
     db_session.add(project_obj)

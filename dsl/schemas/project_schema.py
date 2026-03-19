@@ -22,8 +22,12 @@ class ProjectCreateSchema(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    display_name: str = Field(..., min_length=1, max_length=100, description="项目展示名称")
-    repo_path: str = Field(..., min_length=1, max_length=500, description="本地 Git 仓库绝对路径")
+    display_name: str = Field(
+        ..., min_length=1, max_length=100, description="项目展示名称"
+    )
+    repo_path: str = Field(
+        ..., min_length=1, max_length=500, description="本地 Git 仓库绝对路径"
+    )
     description: str | None = Field(None, description="项目描述")
 
 
@@ -38,8 +42,15 @@ class ProjectUpdateSchema(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    display_name: str = Field(..., min_length=1, max_length=100, description="项目展示名称")
-    repo_path: str = Field(..., min_length=1, max_length=500, description="当前机器上的本地 Git 仓库绝对路径")
+    display_name: str = Field(
+        ..., min_length=1, max_length=100, description="项目展示名称"
+    )
+    repo_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="当前机器上的本地 Git 仓库绝对路径",
+    )
     description: str | None = Field(None, description="项目描述")
 
 
@@ -67,13 +78,25 @@ class ProjectResponseSchema(DSLResponseSchema):
     id: str = Field(..., description="UUID 主键")
     display_name: str = Field(..., description="项目展示名称")
     repo_path: str = Field(..., description="本地 Git 仓库绝对路径")
-    repo_remote_url: str | None = Field(None, description="项目记录中保存的归一化 origin remote URL")
-    repo_head_commit_hash: str | None = Field(None, description="项目记录中保存的 HEAD commit 哈希")
-    current_repo_remote_url: str | None = Field(None, description="当前本机仓库解析出的归一化 origin remote URL")
-    current_repo_head_commit_hash: str | None = Field(None, description="当前本机仓库解析出的 HEAD commit 哈希")
+    repo_remote_url: str | None = Field(
+        None, description="项目记录中保存的归一化 origin remote URL"
+    )
+    repo_head_commit_hash: str | None = Field(
+        None, description="项目记录中保存的 HEAD commit 哈希"
+    )
+    current_repo_remote_url: str | None = Field(
+        None, description="当前本机仓库解析出的归一化 origin remote URL"
+    )
+    current_repo_head_commit_hash: str | None = Field(
+        None, description="当前本机仓库解析出的 HEAD commit 哈希"
+    )
     description: str | None = Field(None, description="项目描述")
     is_repo_path_valid: bool = Field(..., description="当前机器上该仓库路径是否有效")
-    is_repo_remote_consistent: bool | None = Field(None, description="当前仓库 remote 是否与已保存指纹一致")
-    is_repo_head_consistent: bool | None = Field(None, description="当前仓库 HEAD 是否与已保存指纹一致")
+    is_repo_remote_consistent: bool | None = Field(
+        None, description="当前仓库 remote 是否与已保存指纹一致"
+    )
+    is_repo_head_consistent: bool | None = Field(
+        None, description="当前仓库 HEAD 是否与已保存指纹一致"
+    )
     repo_consistency_note: str | None = Field(None, description="当前仓库一致性说明")
     created_at: datetime = Field(..., description="创建时间")

@@ -34,7 +34,9 @@ def _to_response(email_settings_obj: EmailSettings) -> EmailSettingsResponse:
         masked_password_str = "*" * len(raw_password_str)
     else:
         masked_password_str = (
-            raw_password_str[0] + "*" * (len(raw_password_str) - 2) + raw_password_str[-1]
+            raw_password_str[0]
+            + "*" * (len(raw_password_str) - 2)
+            + raw_password_str[-1]
         )
 
     return EmailSettingsResponse(
@@ -68,7 +70,9 @@ def get_email_settings(db: Session = Depends(get_db)) -> EmailSettingsResponse:
     """
     email_settings_obj = db.query(EmailSettings).filter(EmailSettings.id == 1).first()
     if not email_settings_obj:
-        raise HTTPException(status_code=404, detail="Email settings not configured yet.")
+        raise HTTPException(
+            status_code=404, detail="Email settings not configured yet."
+        )
     return _to_response(email_settings_obj)
 
 
@@ -86,7 +90,9 @@ def upsert_email_settings(
     Returns:
         EmailSettingsResponse: 保存后的邮件设置（密码脱敏）
     """
-    existing_email_settings_obj = db.query(EmailSettings).filter(EmailSettings.id == 1).first()
+    existing_email_settings_obj = (
+        db.query(EmailSettings).filter(EmailSettings.id == 1).first()
+    )
 
     if existing_email_settings_obj:
         existing_email_settings_obj.smtp_host = update_payload.smtp_host
@@ -140,10 +146,15 @@ def test_email_settings(
     """
     email_settings_obj = db.query(EmailSettings).filter(EmailSettings.id == 1).first()
     if not email_settings_obj:
-        raise HTTPException(status_code=404, detail="Email settings not configured yet.")
+        raise HTTPException(
+            status_code=404, detail="Email settings not configured yet."
+        )
 
     if not email_settings_obj.is_enabled:
-        raise HTTPException(status_code=422, detail="Email notifications are disabled. Please enable them first.")
+        raise HTTPException(
+            status_code=422,
+            detail="Email notifications are disabled. Please enable them first.",
+        )
 
     required_fields_list = [
         email_settings_obj.smtp_host,
@@ -166,7 +177,10 @@ def test_email_settings(
     send_success_bool = send_notification_email(test_request.subject, body_html_str)
 
     if send_success_bool:
-        return {"success": True, "message": f"Test email sent to {email_settings_obj.receiver_email}"}
+        return {
+            "success": True,
+            "message": f"Test email sent to {email_settings_obj.receiver_email}",
+        }
     else:
         raise HTTPException(
             status_code=500,

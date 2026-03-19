@@ -51,6 +51,7 @@ class WebDAVSettingsResponse(DSLResponseSchema):
     created_at: datetime
     updated_at: datetime
 
+
 class WebDAVSyncResult(BaseModel):
     """WebDAV 同步操作结果.
 

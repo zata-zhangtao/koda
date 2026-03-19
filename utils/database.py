@@ -88,7 +88,10 @@ def _run_incremental_schema_patches(database_engine: Engine) -> None:
         database_engine: 需要应用补丁的数据库引擎
     """
     with database_engine.connect() as database_connection:
-        for schema_patch_sql_str, success_log_message_str in _INCREMENTAL_SCHEMA_PATCHES:
+        for (
+            schema_patch_sql_str,
+            success_log_message_str,
+        ) in _INCREMENTAL_SCHEMA_PATCHES:
             try:
                 database_connection.execute(text(schema_patch_sql_str))
                 database_connection.commit()
@@ -180,7 +183,9 @@ class DatabaseSession(Session):
             requested_bind_mapping = kwargs.get("binds") or {}
             if requested_bind_mapping:
                 first_bound_resource = next(iter(requested_bind_mapping.values()))
-                resolved_database_engine = self._resolve_engine_from_bind(first_bound_resource)
+                resolved_database_engine = self._resolve_engine_from_bind(
+                    first_bound_resource
+                )
 
         ensure_database_schema_ready(database_engine=resolved_database_engine or engine)
         super().__init__(**kwargs)

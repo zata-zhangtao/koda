@@ -12,7 +12,6 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from dsl.models.dev_log import DevLog
-from dsl.models.enums import AIProcessingStatus
 from dsl.schemas.dev_log_schema import DevLogResponseSchema
 from dsl.services.log_service import LogService
 from dsl.services.media_service import MediaService
@@ -36,9 +35,7 @@ def _get_current_run_account_id(db_session: Session) -> str:
     """
     from dsl.models.run_account import RunAccount
 
-    account = (
-        db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
-    )
+    account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
     if not account:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -75,7 +72,9 @@ async def upload_image(
 
     try:
         # 保存图片并生成缩略图
-        original_path, thumbnail_path = await MediaService.save_image(uploaded_image_file)
+        original_path, thumbnail_path = await MediaService.save_image(
+            uploaded_image_file
+        )
 
         # 创建日志（Phase 1: AI 处理状态设为 PENDING，Phase 2 实现异步处理）
         from dsl.schemas.dev_log_schema import DevLogCreateSchema

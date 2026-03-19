@@ -1,9 +1,9 @@
 # PRD：更新 README 与项目文档
 
-**文件路径**：`tasks/prd-e2a926f5.md`  
-**创建时间**：`2026-03-19 01:24:19 +0800`  
-**需求标题**：`update docs and readme`  
-**需求上下文**：`update docs and readme`  
+**文件路径**：`tasks/prd-e2a926f5.md`
+**创建时间**：`2026-03-19 01:24:19 +0800`
+**需求标题**：`update docs and readme`
+**需求上下文**：`update docs and readme`
 **参考文件**：`README.md`, `docs/index.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, `docs/api/references.md`, `docs/architecture/system-design.md`, `justfile`, `mkdocs.yml`
 
 ---
@@ -14,47 +14,47 @@
 
 ### 0.1 `README.md` 在本仓库中的角色应是什么？
 
-A. 仓库入口页，只负责说明项目定位、快速启动、目录地图和文档导航  
-B. 完整操作手册，把 MkDocs 站点里的内容大段复制进来  
+A. 仓库入口页，只负责说明项目定位、快速启动、目录地图和文档导航
+B. 完整操作手册，把 MkDocs 站点里的内容大段复制进来
 C. 保留“通用 Python 模板”定位，只在下方追加 DSL/Koda 补丁说明
 
-> **Recommended: A**  
+> **Recommended: A**
 > `docs/index.md`、`docs/getting-started.md` 和 `docs/guides/configuration.md` 已经承担站内深度说明；`README.md` 当前仍保留模板时期叙事，最合理的做法是把它收敛为仓库入口，而不是继续承担双重身份。
 
 ### 0.2 安装与启动命令的单一事实来源应是什么？
 
-A. 以 `justfile` 和 `docs/getting-started.md` 为准，README 只做摘要同步  
-B. 以当前 `README.md` 的命令块为准  
+A. 以 `justfile` 和 `docs/getting-started.md` 为准，README 只做摘要同步
+B. 以当前 `README.md` 的命令块为准
 C. 允许不同页面各写一套命令，只要大致可运行即可
 
-> **Recommended: A**  
+> **Recommended: A**
 > `justfile` 已明确定义 `just dsl-dev`、`just docs-build`、`just dev` 等真实入口，`docs/getting-started.md` 已按这些命令组织 onboarding。README 应引用同一套事实，避免再出现 `uv pip install` 与 `uv sync` 并存的漂移。
 
 ### 0.3 本次“update docs and readme”的默认范围应是什么？
 
-A. 修正 README 与核心 MkDocs 页面中的定位、启动方式、文档导航和维护约定，不做整站重写  
-B. 重写 `docs/` 下所有页面  
+A. 修正 README 与核心 MkDocs 页面中的定位、启动方式、文档导航和维护约定，不做整站重写
+B. 重写 `docs/` 下所有页面
 C. 只改 `README.md`，不处理站内文档漂移
 
-> **Recommended: A**  
+> **Recommended: A**
 > 当前最明显的问题是入口叙事和命令说明失真，而不是所有技术文档都失效。优先修复 `README.md`、`docs/index.md`、`docs/getting-started.md`、`docs/guides/configuration.md` 这一条主链路，收益最高、风险最低。
 
 ### 0.4 API 与对象级参考文档应如何处理？
 
-A. 保持 `docs/api/references.md` 作为 `mkdocstrings` 驱动的深度参考，README 只给导航链接  
-B. 在 README 中重复罗列所有路由与对象成员  
+A. 保持 `docs/api/references.md` 作为 `mkdocstrings` 驱动的深度参考，README 只给导航链接
+B. 在 README 中重复罗列所有路由与对象成员
 C. 移除 API 参考页，只保留口头说明
 
-> **Recommended: A**  
+> **Recommended: A**
 > `docs/api/references.md` 已明确采用 `mkdocstrings`，这与仓库的文档规范一致。README 应做发现入口，而不是复制对象级说明，否则后续最容易再次失同步。
 
 ### 0.5 文档类需求的默认验证标准应是什么？
 
-A. 至少执行 `just docs-build`，并手工检查 README 中的关键命令与链接  
-B. 只看 Markdown 是否能渲染  
+A. 至少执行 `just docs-build`，并手工检查 README 中的关键命令与链接
+B. 只看 Markdown 是否能渲染
 C. 不做验证，合并后再补
 
-> **Recommended: A**  
+> **Recommended: A**
 > `justfile` 已把 `uv run mkdocs build --strict` 封装为 `just docs-build`，且仓库约定要求文档与代码同级对待。文档更新如果不经过严格构建，很容易在导航、链接或 Mermaid 配置上留下回归。
 
 以下 PRD 按推荐选项 A / A / A / A / A 起草。
@@ -72,7 +72,7 @@ C. 不做验证，合并后再补
 
 这会导致两个直接问题：
 
-1. 新接手项目的人从仓库根目录进入时，先看到的是过时定位，而不是当前真实产品边界。  
+1. 新接手项目的人从仓库根目录进入时，先看到的是过时定位，而不是当前真实产品边界。
 2. 文档主链路没有被设计成“README 负责入口，MkDocs 负责深度”，所以维护者很容易在多个页面上各写一套命令和说明。
 
 ### 目标
@@ -90,17 +90,17 @@ C. 不做验证，合并后再补
 
 本需求不是单纯“润色几段文案”，而是要为仓库建立稳定的文档分层：
 
-1. **命令事实来源** 以 `justfile` 和现有 `docs/getting-started.md` 为准。README 不能再维护另一套启动流程。  
-2. **产品定位来源** 以 `docs/index.md` 与 `docs/architecture/system-design.md` 为准。README 需要与其对齐，而不是继续保留模板叙事。  
-3. **对象级参考来源** 继续由 `docs/api/references.md` 承担，避免在 README 或概览页复制 `mkdocstrings` 内容。  
-4. **维护约定** 应同时出现在根目录入口和站内概览页，让贡献者一眼知道“改代码时要同步改文档，并跑 `just docs-build`”。  
+1. **命令事实来源** 以 `justfile` 和现有 `docs/getting-started.md` 为准。README 不能再维护另一套启动流程。
+2. **产品定位来源** 以 `docs/index.md` 与 `docs/architecture/system-design.md` 为准。README 需要与其对齐，而不是继续保留模板叙事。
+3. **对象级参考来源** 继续由 `docs/api/references.md` 承担，避免在 README 或概览页复制 `mkdocstrings` 内容。
+4. **维护约定** 应同时出现在根目录入口和站内概览页，让贡献者一眼知道“改代码时要同步改文档，并跑 `just docs-build`”。
 
 推荐实施路径：
 
-1. 先重写 `README.md` 的标题、摘要、快速开始、项目结构和“继续阅读”部分  
-2. 再同步 `docs/index.md`、`docs/getting-started.md`、`docs/guides/configuration.md` 中与 README 直接重叠的命令与入口表述  
-3. 保持 `docs/api/references.md` 的技术角色不变，只增强从 README / docs 首页到它的可发现性  
-4. 若更新涉及页面标题或新增页面，再同步修改 `mkdocs.yml`；若仅调整正文，则避免不必要的导航重构  
+1. 先重写 `README.md` 的标题、摘要、快速开始、项目结构和“继续阅读”部分
+2. 再同步 `docs/index.md`、`docs/getting-started.md`、`docs/guides/configuration.md` 中与 README 直接重叠的命令与入口表述
+3. 保持 `docs/api/references.md` 的技术角色不变，只增强从 README / docs 首页到它的可发现性
+4. 若更新涉及页面标题或新增页面，再同步修改 `mkdocs.yml`；若仅调整正文，则避免不必要的导航重构
 5. 最后通过 `just docs-build` 验证整个站点在严格模式下仍可通过
 
 ### 2.1 Change Matrix
@@ -238,18 +238,18 @@ Not applicable. This requirement does not introduce or modify an interactive pro
 
 ## 5. Functional Requirements
 
-1. **FR-1:** `README.md` 必须用当前产品定位替换过时的模板叙事，并明确说明仓库是 Koda / DevStream Log 开发工作台。  
-2. **FR-2:** README 必须包含最小可执行的本地启动路径，至少覆盖 `uv sync`、`cd frontend && npm install`、`just dsl-dev`。  
-3. **FR-3:** README 必须列出本地运行后可访问的前端、后端和健康检查地址。  
-4. **FR-4:** README 必须提供项目结构摘要，至少覆盖 `dsl/`、`frontend/`、`docs/`、`ai_agent/`、`tasks/` 等关键目录。  
-5. **FR-5:** README 必须提供文档地图，至少链接到概览、快速开始、配置说明、Codex 自动化、API 参考。  
-6. **FR-6:** `docs/index.md` 必须与 README 对齐项目定位，并承担站内总览角色，而不是与 README 讲述冲突的项目故事。  
-7. **FR-7:** `docs/getting-started.md` 与 `docs/guides/configuration.md` 必须与 README 使用同一套命令名称和描述，不得继续保留相互冲突的 onboarding 说明。  
-8. **FR-8:** `docs/api/references.md` 继续作为对象级与 API 级参考的唯一权威页面；README 和概览页只能链接，不应复制成员级说明。  
-9. **FR-9:** 文档维护规则必须明确规定：当工作流、函数签名、环境变量、命令或路径规范变化时，需要同步更新相关文档。  
-10. **FR-10:** 文档改动完成后必须通过 `just docs-build`，确保 MkDocs 严格模式构建成功。  
-11. **FR-11:** 若本次实现新增页面、修改页面标题或调整文档路径，必须同步更新 `mkdocs.yml` 的 `nav`；若未新增或重命名页面，则不做无意义的导航改动。  
-12. **FR-12:** 本次文档修订必须删除、压缩或重写那些已不符合当前仓库现实的模板残留段落，避免“旧模板 + 新项目说明”继续并存。  
+1. **FR-1:** `README.md` 必须用当前产品定位替换过时的模板叙事，并明确说明仓库是 Koda / DevStream Log 开发工作台。
+2. **FR-2:** README 必须包含最小可执行的本地启动路径，至少覆盖 `uv sync`、`cd frontend && npm install`、`just dsl-dev`。
+3. **FR-3:** README 必须列出本地运行后可访问的前端、后端和健康检查地址。
+4. **FR-4:** README 必须提供项目结构摘要，至少覆盖 `dsl/`、`frontend/`、`docs/`、`ai_agent/`、`tasks/` 等关键目录。
+5. **FR-5:** README 必须提供文档地图，至少链接到概览、快速开始、配置说明、Codex 自动化、API 参考。
+6. **FR-6:** `docs/index.md` 必须与 README 对齐项目定位，并承担站内总览角色，而不是与 README 讲述冲突的项目故事。
+7. **FR-7:** `docs/getting-started.md` 与 `docs/guides/configuration.md` 必须与 README 使用同一套命令名称和描述，不得继续保留相互冲突的 onboarding 说明。
+8. **FR-8:** `docs/api/references.md` 继续作为对象级与 API 级参考的唯一权威页面；README 和概览页只能链接，不应复制成员级说明。
+9. **FR-9:** 文档维护规则必须明确规定：当工作流、函数签名、环境变量、命令或路径规范变化时，需要同步更新相关文档。
+10. **FR-10:** 文档改动完成后必须通过 `just docs-build`，确保 MkDocs 严格模式构建成功。
+11. **FR-11:** 若本次实现新增页面、修改页面标题或调整文档路径，必须同步更新 `mkdocs.yml` 的 `nav`；若未新增或重命名页面，则不做无意义的导航改动。
+12. **FR-12:** 本次文档修订必须删除、压缩或重写那些已不符合当前仓库现实的模板残留段落，避免“旧模板 + 新项目说明”继续并存。
 
 ---
 

@@ -197,7 +197,9 @@ def get_app_timezone_offset_label(reference_datetime: datetime | None = None) ->
         else app_now_aware()
     )
     offset_delta = reference_aware_datetime.utcoffset()
-    total_offset_minutes = int(offset_delta.total_seconds() // 60) if offset_delta else 0
+    total_offset_minutes = (
+        int(offset_delta.total_seconds() // 60) if offset_delta else 0
+    )
     sign_str = "+" if total_offset_minutes >= 0 else "-"
     absolute_offset_minutes = abs(total_offset_minutes)
     offset_hours, offset_minutes = divmod(absolute_offset_minutes, 60)

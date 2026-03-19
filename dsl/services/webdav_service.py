@@ -88,11 +88,15 @@ def _build_repo_relink_hint_message() -> str:
                 invalid_project_count_int += 1
                 continue
 
-            consistency_snapshot = ProjectService.build_project_consistency_snapshot(project_obj)
+            consistency_snapshot = ProjectService.build_project_consistency_snapshot(
+                project_obj
+            )
             if consistency_snapshot.is_repo_head_consistent is False:
                 head_mismatch_project_count_int += 1
     except Exception as relink_hint_error:
-        logger.error(f"Failed to inspect project repo paths after WebDAV restore: {relink_hint_error}")
+        logger.error(
+            f"Failed to inspect project repo paths after WebDAV restore: {relink_hint_error}"
+        )
         return ""
     finally:
         db_session.close()
@@ -108,7 +112,9 @@ def _build_repo_relink_hint_message() -> str:
             "paths from another machine and should be relinked in Project settings"
         )
     if head_mismatch_project_count_int > 0:
-        project_label_str = "project" if head_mismatch_project_count_int == 1 else "projects"
+        project_label_str = (
+            "project" if head_mismatch_project_count_int == 1 else "projects"
+        )
         hint_message_part_list.append(
             f"{head_mismatch_project_count_int} {project_label_str} already match the repo "
             "path but are on a different HEAD commit than the synced fingerprint"
@@ -149,7 +155,9 @@ def test_webdav_connection(
     )
 
     try:
-        with urllib.request.urlopen(propfind_request_obj, timeout=10) as http_response_obj:
+        with urllib.request.urlopen(
+            propfind_request_obj, timeout=10
+        ) as http_response_obj:
             status_code_int = http_response_obj.status
             if status_code_int in (207, 200):
                 return True, f"Connected successfully (HTTP {status_code_int})"
@@ -162,7 +170,10 @@ def test_webdav_connection(
             )
             if mkcol_success_bool:
                 return True, "Remote directory created and connection verified."
-            return False, f"Remote path not found and could not create: {mkcol_message_str}"
+            return (
+                False,
+                f"Remote path not found and could not create: {mkcol_message_str}",
+            )
         if http_error.code == 401:
             return False, "Authentication failed (HTTP 401). Check username/password."
         return False, f"HTTP error: {http_error.code} {http_error.reason}"
@@ -190,7 +201,9 @@ def _ensure_remote_directory(
         headers={"Authorization": auth_header_str},
     )
     try:
-        with urllib.request.urlopen(mkcol_request_obj, timeout=10) as mkcol_response_obj:
+        with urllib.request.urlopen(
+            mkcol_request_obj, timeout=10
+        ) as mkcol_response_obj:
             if mkcol_response_obj.status in (201, 200, 405):
                 # 405 = already exists, 201 = created
                 return True, "Directory ready."
@@ -255,7 +268,11 @@ def upload_file_to_webdav(
                 logger.info(
                     f"WebDAV upload success: {local_file_path.name} → {remote_file_url_str}"
                 )
-                return True, f"Uploaded {local_file_path.name} ({len(file_bytes_data)} bytes)", remote_file_url_str
+                return (
+                    True,
+                    f"Uploaded {local_file_path.name} ({len(file_bytes_data)} bytes)",
+                    remote_file_url_str,
+                )
             return False, f"Unexpected status: HTTP {status_code_int}", None
     except urllib.error.HTTPError as http_error:
         error_message_str = f"HTTP {http_error.code}: {http_error.reason}"

@@ -32,12 +32,8 @@ class DevLogCreateSchema(BaseModel):
     media_original_image_path: str | None = Field(
         default=None, description="原图存储路径"
     )
-    media_thumbnail_path: str | None = Field(
-        default=None, description="缩略图存储路径"
-    )
-    task_id: str | None = Field(
-        default=None, description="关联的 Task ID（可选）"
-    )
+    media_thumbnail_path: str | None = Field(default=None, description="缩略图存储路径")
+    task_id: str | None = Field(default=None, description="关联的 Task ID（可选）")
 
 
 class DevLogResponseSchema(DSLResponseSchema):

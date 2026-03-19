@@ -29,7 +29,9 @@ def _to_response(project_obj: Project) -> ProjectResponseSchema:
     Returns:
         ProjectResponseSchema: 前端消费的项目响应
     """
-    consistency_snapshot = ProjectService.build_project_consistency_snapshot(project_obj)
+    consistency_snapshot = ProjectService.build_project_consistency_snapshot(
+        project_obj
+    )
     return ProjectResponseSchema(
         id=project_obj.id,
         display_name=project_obj.display_name,
@@ -59,10 +61,15 @@ def list_projects(
     Returns:
         list[ProjectResponseSchema]: 项目列表
     """
-    return [_to_response(project_obj) for project_obj in ProjectService.list_projects(db_session)]
+    return [
+        _to_response(project_obj)
+        for project_obj in ProjectService.list_projects(db_session)
+    ]
 
 
-@router.post("", response_model=ProjectResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=ProjectResponseSchema, status_code=status.HTTP_201_CREATED
+)
 def create_project(
     project_create_schema: ProjectCreateSchema,
     db_session: Annotated[Session, Depends(get_db)],
@@ -80,7 +87,9 @@ def create_project(
         HTTPException: 当 repo_path 无效时返回 422
     """
     try:
-        created_project_obj = ProjectService.create_project(db_session, project_create_schema)
+        created_project_obj = ProjectService.create_project(
+            db_session, project_create_schema
+        )
     except ValueError as validation_error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -181,7 +190,9 @@ def open_project_in_trae(
             detail=f"Project {project_id} not found",
         )
 
-    consistency_snapshot = ProjectService.build_project_consistency_snapshot(project_obj)
+    consistency_snapshot = ProjectService.build_project_consistency_snapshot(
+        project_obj
+    )
     if not ProjectService.is_repo_path_valid(project_obj.repo_path):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

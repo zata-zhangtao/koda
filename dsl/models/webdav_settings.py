@@ -34,7 +34,9 @@ class WebDAVSettings(Base):
     server_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     username: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     password: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    remote_path: Mapped[str] = mapped_column(String(512), nullable=False, default="/koda-backup/")
+    remote_path: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="/koda-backup/"
+    )
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(

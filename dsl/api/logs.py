@@ -37,9 +37,7 @@ def _get_current_run_account_id(db_session: Session) -> str:
     Raises:
         HTTPException: 当没有活跃账户时返回 400
     """
-    account = (
-        db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
-    )
+    account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
     if not account:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -76,7 +74,9 @@ def list_logs(
     return logs
 
 
-@router.post("", response_model=DevLogResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=DevLogResponseSchema, status_code=status.HTTP_201_CREATED
+)
 def create_log(
     log_create_schema: DevLogCreateSchema,
     db_session: Annotated[Session, Depends(get_db)],
@@ -188,9 +188,7 @@ def _check_and_suggest_close_task(db_session: Session, task_id: str) -> None:
     """
     from dsl.models.enums import DevLogStateTag
 
-    bug_count = LogService.count_logs_by_state(
-        db_session, task_id, DevLogStateTag.BUG
-    )
+    bug_count = LogService.count_logs_by_state(db_session, task_id, DevLogStateTag.BUG)
     fix_count = LogService.count_logs_by_state(
         db_session, task_id, DevLogStateTag.FIXED
     )

@@ -110,7 +110,9 @@ class GitWorktreeService:
             stderr_text = (git_error.stderr or "").strip()
             stdout_text = (git_error.stdout or "").strip()
             failure_reason_text = stderr_text or stdout_text or str(git_error)
-            raise ValueError(f"创建 git worktree 失败：{failure_reason_text}") from git_error
+            raise ValueError(
+                f"创建 git worktree 失败：{failure_reason_text}"
+            ) from git_error
 
         created_worktree_path = GitWorktreeService._resolve_created_worktree_path(
             repo_root_path=repo_root_path,
@@ -118,8 +120,7 @@ class GitWorktreeService:
         )
         if not created_worktree_path.exists():
             raise ValueError(
-                "创建 git worktree 后未找到预期目录："
-                f"{created_worktree_path}"
+                "创建 git worktree 后未找到预期目录：" f"{created_worktree_path}"
             )
 
         return created_worktree_path
@@ -138,7 +139,14 @@ class GitWorktreeService:
             repo_root_path / "scripts" / "git_worktree_merge.sh",
             repo_root_path / "git_worktree_merge.sh",
         ]
-        return next((candidate for candidate in cleanup_script_candidates if candidate.exists()), None)
+        return next(
+            (
+                candidate
+                for candidate in cleanup_script_candidates
+                if candidate.exists()
+            ),
+            None,
+        )
 
     @staticmethod
     def _build_worktree_create_command_spec(
@@ -155,7 +163,9 @@ class GitWorktreeService:
             WorktreeCreateCommandSpec: Command and expected path information
         """
         task_branch_name_str = GitWorktreeService.build_task_branch_name(task_id)
-        default_worktree_path = GitWorktreeService.build_task_worktree_path(repo_root_path, task_id)
+        default_worktree_path = GitWorktreeService.build_task_worktree_path(
+            repo_root_path, task_id
+        )
 
         path_and_branch_script_candidates = [
             repo_root_path / "scripts" / "new-worktree.sh",
@@ -164,7 +174,11 @@ class GitWorktreeService:
             repo_root_path / "create-worktree.sh",
         ]
         path_and_branch_script_path = next(
-            (candidate for candidate in path_and_branch_script_candidates if candidate.exists()),
+            (
+                candidate
+                for candidate in path_and_branch_script_candidates
+                if candidate.exists()
+            ),
             None,
         )
         if path_and_branch_script_path is not None:
@@ -182,12 +196,19 @@ class GitWorktreeService:
             repo_root_path / "git_worktree.sh",
         ]
         branch_only_script_path = next(
-            (candidate for candidate in branch_only_script_candidates if candidate.exists()),
+            (
+                candidate
+                for candidate in branch_only_script_candidates
+                if candidate.exists()
+            ),
             None,
         )
         if branch_only_script_path is not None:
             return WorktreeCreateCommandSpec(
-                command_argument_list=[str(branch_only_script_path), task_branch_name_str],
+                command_argument_list=[
+                    str(branch_only_script_path),
+                    task_branch_name_str,
+                ],
                 expected_worktree_path=None,
                 branch_name_for_lookup=task_branch_name_str,
             )

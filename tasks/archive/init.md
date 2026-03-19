@@ -153,18 +153,18 @@ interface DevLog {
   task_id: string;
   run_account_id: string;
   timestamp: number;
-  
+
   // 核心内容
   text_content: string; // 用户手写的备注
-  
+
   // 状态标记
   state_tag: 'NONE' | 'BUG' | 'OPTIMIZATION' | 'FIXED' | 'TRANSFERRED';
-  
+
   // 图片与AI增强 (重点)
   media?: {
     original_image_path: string; // 本地存储路径
     ai_status: 'PENDING' | 'PROCESSING' | 'WAITING_REVIEW' | 'CONFIRMED';
-    
+
     // AI 解析结果 (作为 Draft 存在，确认后合并显示)
     ai_generated_title?: string;  // 例如 "Qdrant 502 Error"
     ai_analysis_text?: string;    // 例如 "代理配置错误导致..."

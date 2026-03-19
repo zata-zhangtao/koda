@@ -223,16 +223,18 @@ class TaskService:
         if task_obj.project_id and not task_obj.worktree_path:
             from dsl.models.project import Project
 
-            project_obj = db_session.query(Project).filter(
-                Project.id == task_obj.project_id
-            ).first()
+            project_obj = (
+                db_session.query(Project)
+                .filter(Project.id == task_obj.project_id)
+                .first()
+            )
 
             if project_obj:
                 repo_path_obj = Path(project_obj.repo_path)
                 from dsl.services.project_service import ProjectService
 
-                project_consistency_snapshot = ProjectService.build_project_consistency_snapshot(
-                    project_obj
+                project_consistency_snapshot = (
+                    ProjectService.build_project_consistency_snapshot(project_obj)
                 )
                 if not repo_path_obj.exists():
                     raise ValueError(
@@ -290,7 +292,6 @@ class TaskService:
         Raises:
             ValueError: 当任务当前阶段不允许执行时
         """
-        from pathlib import Path
 
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:

@@ -1,8 +1,8 @@
 # PRD：将所有 Git Worktree 统一放入 `../task/` 目录
 
-**文件路径**：`tasks/prd-7e932cad.md`  
-**创建时间**：`2026-03-19 00:33:16 +0800`  
-**需求标题**：`put all worktree into ../task folder`  
+**文件路径**：`tasks/prd-7e932cad.md`
+**创建时间**：`2026-03-19 00:33:16 +0800`
+**需求标题**：`put all worktree into ../task folder`
 **需求上下文**：`put all worktree put into ../task folder`
 
 ---
@@ -13,38 +13,38 @@
 
 ### 0.1 新的默认 worktree 子目录命名应是什么？
 
-A. `../task/<repo-name>-wt-<task8>`  
-B. `../task/<task8>`  
+A. `../task/<repo-name>-wt-<task8>`
+B. `../task/<task8>`
 C. `../task/task/<task8>`
 
-> **Recommended: A**  
+> **Recommended: A**
 > 现有 `dsl/services/git_worktree_service.py` 已经把 basename 固定为 `<repo>-wt-<task8>`，`tests/test_git_worktree_service.py` 也围绕该命名断言。只改变根目录、不改变 basename，改动面最小。
 
 ### 0.2 当 `../task/` 目录不存在时应如何处理？
 
-A. 自动创建 `../task/` 及缺失父目录  
-B. 直接报错，要求人工先创建  
+A. 自动创建 `../task/` 及缺失父目录
+B. 直接报错，要求人工先创建
 C. 仅在开发环境自动创建，生产环境报错
 
-> **Recommended: A**  
+> **Recommended: A**
 > 当前 Koda 的 worktree 创建是 `TaskService.start_task()` 的自动链路，人工前置创建目录会破坏“点击开始任务即可执行”的体验，也不符合现有自动化模式。
 
 ### 0.3 对已落库的旧 `worktree_path` 应如何处理？
 
-A. 仅影响新创建的 worktree；旧任务保留原绝对路径，不自动迁移  
-B. 启动时自动移动旧 worktree 到 `../task/`  
+A. 仅影响新创建的 worktree；旧任务保留原绝对路径，不自动迁移
+B. 启动时自动移动旧 worktree 到 `../task/`
 C. 只改数据库中的路径字符串，不移动磁盘目录
 
-> **Recommended: A**  
+> **Recommended: A**
 > `Task.worktree_path` 是后续 `/prd-file`、`open-in-trae`、完成态 merge/cleanup 的真实工作目录。自动搬迁 live worktree 风险过高，而“新任务新规则、旧任务继续可读”最稳妥。
 
 ### 0.4 对 repo-local 的 branch-only 脚本（`git_worktree.sh`）应采用什么兼容策略？
 
-A. 继续支持，但创建后必须解析真实路径，并校验最终路径位于 `../task/` 下  
-B. 停止支持 branch-only 脚本，只保留可显式传 path 的脚本  
+A. 继续支持，但创建后必须解析真实路径，并校验最终路径位于 `../task/` 下
+B. 停止支持 branch-only 脚本，只保留可显式传 path 的脚本
 C. 继续支持，且不限制脚本最终创建到哪里
 
-> **Recommended: A**  
+> **Recommended: A**
 > 当前 `dsl/services/git_worktree_service.py` 已支持 `git_worktree.sh`。直接移除兼容性会破坏现有仓库接入，而不做路径约束又违背本需求“put all worktree into ../task folder”的目标。
 
 以下 PRD 按推荐选项 A / A / A / A 起草。

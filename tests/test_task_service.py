@@ -143,7 +143,9 @@ def test_create_task_rejects_missing_project_id(db_session: Session) -> None:
         project_id="missing-project-id",
     )
 
-    with pytest.raises(ValueError, match="Project with id missing-project-id not found"):
+    with pytest.raises(
+        ValueError, match="Project with id missing-project-id not found"
+    ):
         TaskService.create_task(
             db_session=db_session,
             task_create_schema=task_create_schema,
@@ -280,7 +282,10 @@ def test_start_task_persists_created_worktree_path_under_task_root(
     assert started_task.workflow_stage == WorkflowStage.PRD_GENERATING
     assert started_task.worktree_path == str(expected_worktree_path)
     assert expected_worktree_path.exists() is True
-    assert _run_git_command(
-        expected_worktree_path,
-        ["symbolic-ref", "--short", "HEAD"],
-    ) == f"task/{created_task.id[:8]}"
+    assert (
+        _run_git_command(
+            expected_worktree_path,
+            ["symbolic-ref", "--short", "HEAD"],
+        )
+        == f"task/{created_task.id[:8]}"
+    )

@@ -21,7 +21,9 @@ def _mask_password(raw_password_str: str) -> str:
     """
     if len(raw_password_str) <= 2:
         return "*" * len(raw_password_str)
-    return raw_password_str[0] + "*" * (len(raw_password_str) - 2) + raw_password_str[-1]
+    return (
+        raw_password_str[0] + "*" * (len(raw_password_str) - 2) + raw_password_str[-1]
+    )
 
 
 def _load_email_settings_from_db():
@@ -35,7 +37,9 @@ def _load_email_settings_from_db():
 
     db_session = SessionLocal()
     try:
-        email_settings_obj = db_session.query(EmailSettings).filter(EmailSettings.id == 1).first()
+        email_settings_obj = (
+            db_session.query(EmailSettings).filter(EmailSettings.id == 1).first()
+        )
         return email_settings_obj
     except Exception as db_load_error:
         logger.error(f"Failed to load email settings: {db_load_error}")
@@ -106,9 +110,7 @@ def send_notification_email(subject_str: str, body_html_str: str) -> bool:
         )
         smtp_client.quit()
 
-        logger.info(
-            f"Email sent to {receiver_email_str}: {subject_str}"
-        )
+        logger.info(f"Email sent to {receiver_email_str}: {subject_str}")
         return True
 
     except smtplib.SMTPAuthenticationError as auth_error:
@@ -175,7 +177,7 @@ def send_task_failed_notification(
     """
     subject_str = f"[Koda] 任务需要处理：{task_title_str}"
     reason_block_html_str = (
-        f'<p><strong>原因摘要：</strong>{failure_reason_str}</p>'
+        f"<p><strong>原因摘要：</strong>{failure_reason_str}</p>"
         if failure_reason_str
         else ""
     )

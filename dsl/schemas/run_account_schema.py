@@ -24,7 +24,9 @@ class RunAccountCreateSchema(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     user_name: str = Field(..., min_length=1, max_length=50, description="用户名")
-    environment_os: str = Field(..., min_length=1, max_length=50, description="操作系统")
+    environment_os: str = Field(
+        ..., min_length=1, max_length=50, description="操作系统"
+    )
     git_branch_name: str | None = Field(
         default=None, max_length=100, description="当前 Git 分支"
     )

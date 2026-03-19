@@ -27,7 +27,9 @@ class EmailSettingsUpdate(BaseModel):
     smtp_port: int = Field(..., ge=1, le=65535, description="SMTP 端口号")
     smtp_username: str = Field(..., max_length=255, description="SMTP 用户名")
     smtp_password: str = Field(..., max_length=255, description="SMTP 密码")
-    smtp_use_ssl: bool = Field(True, description="是否使用 SSL（True=465，False=587+STARTTLS）")
+    smtp_use_ssl: bool = Field(
+        True, description="是否使用 SSL（True=465，False=587+STARTTLS）"
+    )
     receiver_email: str = Field(..., max_length=255, description="通知接收邮件地址")
     is_enabled: bool = Field(True, description="是否启用邮件通知")
 
@@ -58,6 +60,7 @@ class EmailSettingsResponse(DSLResponseSchema):
     is_enabled: bool
     created_at: datetime
     updated_at: datetime
+
 
 class EmailTestRequest(BaseModel):
     """发送测试邮件的请求体.

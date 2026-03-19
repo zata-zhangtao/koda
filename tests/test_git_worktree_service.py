@@ -83,13 +83,21 @@ def test_create_task_worktree_uses_default_branch_and_path(tmp_path: Path) -> No
         task_id="12345678-task-id",
     )
 
-    assert created_worktree_path == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    assert (
+        created_worktree_path
+        == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    )
     assert created_worktree_path.exists() is True
     assert (repo_root_path.parent / "task").exists() is True
-    assert _run_git_command(created_worktree_path, ["symbolic-ref", "--short", "HEAD"]) == "task/12345678"
+    assert (
+        _run_git_command(created_worktree_path, ["symbolic-ref", "--short", "HEAD"])
+        == "task/12345678"
+    )
 
 
-def test_create_task_worktree_passes_task_root_to_path_aware_script(tmp_path: Path) -> None:
+def test_create_task_worktree_passes_task_root_to_path_aware_script(
+    tmp_path: Path,
+) -> None:
     """Path-aware scripts should receive the new task-root worktree path explicitly."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
     script_capture_path = repo_root_path / "script-invocation.txt"
@@ -109,7 +117,10 @@ git worktree add "$target_path" -b "$branch_name" main >/dev/null
         task_id="12345678-task-id",
     )
 
-    assert created_worktree_path == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    assert (
+        created_worktree_path
+        == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    )
     assert created_worktree_path.exists() is True
     assert script_capture_path.read_text(encoding="utf-8").splitlines() == [
         str(created_worktree_path),
@@ -142,7 +153,9 @@ git worktree add "$target_path" -b "$branch_name" main >/dev/null
     assert (repo_root_path.parent / "task").exists() is True
 
 
-def test_execute_git_completion_flow_merges_and_cleans_up_worktree(tmp_path: Path) -> None:
+def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
+    tmp_path: Path,
+) -> None:
     """The deterministic completion flow should merge the task branch into main and remove the worktree."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
     created_worktree_path = GitWorktreeService.create_task_worktree(
@@ -177,6 +190,11 @@ def test_execute_git_completion_flow_merges_and_cleans_up_worktree(tmp_path: Pat
     assert completion_result.worktree_removed is True
     assert created_worktree_path.exists() is False
     assert _run_git_command(repo_root_path, ["branch", "--show-current"]) == "main"
-    assert "feature change" in (repo_root_path / "README.md").read_text(encoding="utf-8")
+    assert "feature change" in (repo_root_path / "README.md").read_text(
+        encoding="utf-8"
+    )
     assert _run_git_command(repo_root_path, ["branch", "--list", "task/12345678"]) == ""
-    assert _run_git_command(repo_root_path, ["log", "--format=%s", "-1"]) == "Summarize the completed branch behavior"
+    assert (
+        _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
+        == "Summarize the completed branch behavior"
+    )

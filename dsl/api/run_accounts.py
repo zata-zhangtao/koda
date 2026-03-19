@@ -37,7 +37,9 @@ def list_run_accounts(
     return accounts
 
 
-@router.post("", response_model=RunAccountResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=RunAccountResponseSchema, status_code=status.HTTP_201_CREATED
+)
 def create_run_account(
     account_create_schema: RunAccountCreateSchema,
     db_session: Annotated[Session, Depends(get_db)],
@@ -134,9 +136,7 @@ def get_current_run_account(
     Returns:
         RunAccount: 当前活跃账户
     """
-    account = (
-        db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
-    )
+    account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
 
     if account:
         return account

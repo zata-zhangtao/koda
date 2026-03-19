@@ -66,9 +66,7 @@ class ChronicleService:
         Returns:
             list[dict[str, Any]]: 时间线数据列表
         """
-        query = db_session.query(DevLog).filter(
-            DevLog.run_account_id == run_account_id
-        )
+        query = db_session.query(DevLog).filter(DevLog.run_account_id == run_account_id)
 
         if start_date:
             query = query.filter(DevLog.created_at >= start_date)
@@ -115,8 +113,12 @@ class ChronicleService:
             "logs": [ChronicleService._format_log_for_timeline(log) for log in logs],
             "stats": {
                 "total_logs": len(logs),
-                "bug_count": sum(1 for log in logs if log.state_tag == DevLogStateTag.BUG),
-                "fix_count": sum(1 for log in logs if log.state_tag == DevLogStateTag.FIXED),
+                "bug_count": sum(
+                    1 for log in logs if log.state_tag == DevLogStateTag.BUG
+                ),
+                "fix_count": sum(
+                    1 for log in logs if log.state_tag == DevLogStateTag.FIXED
+                ),
             },
         }
 
@@ -208,30 +210,35 @@ class ChronicleService:
         ]
 
         if task["closed_at"]:
-            lines.insert(4, f"**Closed:** {ChronicleService._format_markdown_datetime_label(task['closed_at'])}")
+            lines.insert(
+                4,
+                f"**Closed:** {ChronicleService._format_markdown_datetime_label(task['closed_at'])}",
+            )
 
         for log in logs:
-            timestamp = ChronicleService._format_markdown_datetime_label(log["created_at"])
+            timestamp = ChronicleService._format_markdown_datetime_label(
+                log["created_at"]
+            )
             icon = ChronicleService.STATE_TAG_ICONS.get(
-                DevLogStateTag(log['state_tag']), ""
+                DevLogStateTag(log["state_tag"]), ""
             )
 
             lines.append(f"## {icon} [{timestamp}] {log['task_title']}")
             lines.append("")
 
-            if log['text_content']:
-                lines.append(log['text_content'])
+            if log["text_content"]:
+                lines.append(log["text_content"])
                 lines.append("")
 
-            if log['has_media'] and log['media_original_path']:
+            if log["has_media"] and log["media_original_path"]:
                 # 使用相对路径引用图片
                 lines.append(f"![Screenshot]({log['media_original_path']})")
                 lines.append("")
 
-            if log['ai_generated_title']:
-                lines.append("> **AI Analysis:** " + log['ai_generated_title'])
+            if log["ai_generated_title"]:
+                lines.append("> **AI Analysis:** " + log["ai_generated_title"])
                 lines.append("")
-                if log['ai_analysis_text']:
+                if log["ai_analysis_text"]:
                     lines.append(f"> {log['ai_analysis_text']}")
                     lines.append("")
 
@@ -285,17 +292,17 @@ class ChronicleService:
 
             timestamp = ChronicleService._format_markdown_time_label(log["created_at"])
             icon = ChronicleService.STATE_TAG_ICONS.get(
-                DevLogStateTag(log['state_tag']), ""
+                DevLogStateTag(log["state_tag"]), ""
             )
 
             lines.append(f"## {icon} [{timestamp}] {log['task_title']}")
             lines.append("")
 
-            if log['text_content']:
-                lines.append(log['text_content'])
+            if log["text_content"]:
+                lines.append(log["text_content"])
                 lines.append("")
 
-            if log['has_media'] and log['media_original_path']:
+            if log["has_media"] and log["media_original_path"]:
                 lines.append(f"![Screenshot]({log['media_original_path']})")
                 lines.append("")
 
@@ -352,7 +359,9 @@ class ChronicleService:
         Returns:
             str: 形如 `2026-03-18 - 2026-03-19` 的区间描述
         """
-        start_label = format_date_in_app_timezone(start_date) if start_date else "All time"
+        start_label = (
+            format_date_in_app_timezone(start_date) if start_date else "All time"
+        )
         end_label = format_date_in_app_timezone(end_date) if end_date else "Now"
         return f"{start_label} - {end_label}"
 

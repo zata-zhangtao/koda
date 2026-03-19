@@ -95,7 +95,10 @@ class ProjectService:
         if not stripped_remote_url_str:
             return None
 
-        if stripped_remote_url_str.startswith("git@") and ":" in stripped_remote_url_str:
+        if (
+            stripped_remote_url_str.startswith("git@")
+            and ":" in stripped_remote_url_str
+        ):
             authority_str, raw_repo_path_str = stripped_remote_url_str.split(":", 1)
             host_str = authority_str.split("@", 1)[1].lower()
             normalized_repo_path_str = raw_repo_path_str.strip("/").removesuffix(".git")
@@ -104,8 +107,8 @@ class ProjectService:
         parsed_remote_url = urlsplit(stripped_remote_url_str)
         if parsed_remote_url.scheme:
             host_str = (parsed_remote_url.hostname or "").lower()
-            normalized_repo_path_str = (
-                parsed_remote_url.path.strip("/").removesuffix(".git")
+            normalized_repo_path_str = parsed_remote_url.path.strip("/").removesuffix(
+                ".git"
             )
             if host_str and normalized_repo_path_str:
                 return f"{host_str}/{normalized_repo_path_str}"
@@ -114,11 +117,15 @@ class ProjectService:
             if normalized_repo_path_str:
                 return normalized_repo_path_str
 
-        normalized_remote_url_str = stripped_remote_url_str.rstrip("/").removesuffix(".git")
+        normalized_remote_url_str = stripped_remote_url_str.rstrip("/").removesuffix(
+            ".git"
+        )
         return normalized_remote_url_str or None
 
     @staticmethod
-    def _run_git_command(repo_path_obj: Path, git_argument_list: list[str]) -> str | None:
+    def _run_git_command(
+        repo_path_obj: Path, git_argument_list: list[str]
+    ) -> str | None:
         """在指定仓库中执行 Git 命令并返回标准输出.
 
         Args:
@@ -210,18 +217,22 @@ class ProjectService:
             )
 
         current_repo_path_obj = Path(project_obj.repo_path).expanduser().resolve()
-        current_repo_fingerprint = ProjectService.get_repo_fingerprint(current_repo_path_obj)
+        current_repo_fingerprint = ProjectService.get_repo_fingerprint(
+            current_repo_path_obj
+        )
 
         is_repo_remote_consistent: bool | None = None
         if project_obj.repo_remote_url is not None:
             is_repo_remote_consistent = (
-                current_repo_fingerprint.normalized_remote_url == project_obj.repo_remote_url
+                current_repo_fingerprint.normalized_remote_url
+                == project_obj.repo_remote_url
             )
 
         is_repo_head_consistent: bool | None = None
         if project_obj.repo_head_commit_hash is not None:
             is_repo_head_consistent = (
-                current_repo_fingerprint.head_commit_hash == project_obj.repo_head_commit_hash
+                current_repo_fingerprint.head_commit_hash
+                == project_obj.repo_head_commit_hash
             )
 
         repo_consistency_note: str | None = None
@@ -273,7 +284,9 @@ class ProjectService:
                 continue
 
             repo_path_obj = Path(project_obj.repo_path).expanduser().resolve()
-            current_repo_fingerprint = ProjectService.get_repo_fingerprint(repo_path_obj)
+            current_repo_fingerprint = ProjectService.get_repo_fingerprint(
+                repo_path_obj
+            )
 
             next_repo_remote_url = current_repo_fingerprint.normalized_remote_url
             next_repo_head_commit_hash = current_repo_fingerprint.head_commit_hash
@@ -325,7 +338,9 @@ class ProjectService:
         normalized_repo_path_obj = ProjectService._normalize_repo_path(
             project_create_schema.repo_path
         )
-        repo_fingerprint_obj = ProjectService.get_repo_fingerprint(normalized_repo_path_obj)
+        repo_fingerprint_obj = ProjectService.get_repo_fingerprint(
+            normalized_repo_path_obj
+        )
 
         new_project = Project(
             display_name=project_create_schema.display_name,
@@ -339,7 +354,9 @@ class ProjectService:
         db_session.commit()
         db_session.refresh(new_project)
 
-        logger.info(f"Created Project: {new_project.id[:8]}... - {new_project.display_name}")
+        logger.info(
+            f"Created Project: {new_project.id[:8]}... - {new_project.display_name}"
+        )
         return new_project
 
     @staticmethod
@@ -372,7 +389,9 @@ class ProjectService:
             normalized_repo_path_obj
         )
         normalized_repo_path_str = str(normalized_repo_path_obj)
-        repo_path_changed_bool = existing_project_obj.repo_path != normalized_repo_path_str
+        repo_path_changed_bool = (
+            existing_project_obj.repo_path != normalized_repo_path_str
+        )
 
         if (
             existing_project_obj.repo_remote_url is not None
@@ -401,12 +420,16 @@ class ProjectService:
             from dsl.models.task import Task
 
             linked_task_list = (
-                db_session.query(Task).filter(Task.project_id == existing_project_obj.id).all()
+                db_session.query(Task)
+                .filter(Task.project_id == existing_project_obj.id)
+                .all()
             )
             for linked_task_obj in linked_task_list:
                 if not linked_task_obj.worktree_path:
                     continue
-                linked_worktree_path_obj = Path(linked_task_obj.worktree_path).expanduser()
+                linked_worktree_path_obj = Path(
+                    linked_task_obj.worktree_path
+                ).expanduser()
                 if linked_worktree_path_obj.exists():
                     continue
                 linked_task_obj.worktree_path = None

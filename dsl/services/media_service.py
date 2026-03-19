@@ -23,7 +23,12 @@ class MediaService:
     # 缩略图最大宽度
     THUMBNAIL_MAX_WIDTH: int = 300
     # 允许的图片格式
-    ALLOWED_IMAGE_FORMATS: set[str] = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+    ALLOWED_IMAGE_FORMATS: set[str] = {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+    }
     # 最大文件大小 (10MB)
     MAX_FILE_SIZE: int = 10 * 1024 * 1024
 
@@ -106,7 +111,9 @@ class MediaService:
             raise ValueError(f"Unsupported image format: {upload_file.content_type}")
 
         # 生成唯一文件名
-        unique_filename = MediaService.generate_unique_filename(upload_file.filename or "image.png")
+        unique_filename = MediaService.generate_unique_filename(
+            upload_file.filename or "image.png"
+        )
 
         media_path = Path(config.MEDIA_STORAGE_PATH)
         original_path = media_path / "original" / unique_filename
@@ -117,7 +124,9 @@ class MediaService:
             file_content = await upload_file.read()
 
             if len(file_content) > MediaService.MAX_FILE_SIZE:
-                raise ValueError(f"File too large. Max size: {MediaService.MAX_FILE_SIZE / 1024 / 1024}MB")
+                raise ValueError(
+                    f"File too large. Max size: {MediaService.MAX_FILE_SIZE / 1024 / 1024}MB"
+                )
 
             # 打开图片
             image = Image.open(io.BytesIO(file_content))
@@ -132,7 +141,9 @@ class MediaService:
             rgb_image.save(original_path, quality=95, optimize=True)
 
             # 生成并保存缩略图
-            thumbnail_image = MediaService.create_thumbnail(rgb_image, MediaService.THUMBNAIL_MAX_WIDTH)
+            thumbnail_image = MediaService.create_thumbnail(
+                rgb_image, MediaService.THUMBNAIL_MAX_WIDTH
+            )
             thumbnail_image.save(thumbnail_path, quality=85, optimize=True)
 
             logger.info(f"Saved image: {unique_filename}")

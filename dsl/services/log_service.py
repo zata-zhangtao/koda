@@ -15,7 +15,7 @@ from dsl.schemas.dev_log_schema import CommandParseResultSchema, DevLogCreateSch
 from utils.logger import logger
 
 if TYPE_CHECKING:
-    from dsl.models.task import Task
+    pass
 
 
 class LogService:
@@ -163,7 +163,9 @@ class LogService:
         db_session.commit()
         db_session.refresh(new_dev_log)
 
-        logger.info(f"Created DevLog: {new_dev_log.id[:8]}... with state {new_dev_log.state_tag.value}")
+        logger.info(
+            f"Created DevLog: {new_dev_log.id[:8]}... with state {new_dev_log.state_tag.value}"
+        )
         return new_dev_log
 
     @staticmethod
@@ -193,7 +195,9 @@ class LogService:
         if run_account_id:
             query = query.filter(DevLog.run_account_id == run_account_id)
 
-        return query.order_by(DevLog.created_at.desc()).offset(offset).limit(limit).all()
+        return (
+            query.order_by(DevLog.created_at.desc()).offset(offset).limit(limit).all()
+        )
 
     @staticmethod
     def get_log_by_id(db_session: Session, log_id: str) -> DevLog | None:

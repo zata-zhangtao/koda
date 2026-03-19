@@ -46,9 +46,7 @@ def _get_current_run_account_id(db_session: Session) -> str:
     """
     from dsl.models.run_account import RunAccount
 
-    active_account = (
-        db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
-    )
+    active_account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
     if not active_account:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -99,7 +97,9 @@ def create_task(
     """
     run_account_id = _get_current_run_account_id(db_session)
     try:
-        new_task = TaskService.create_task(db_session, task_create_schema, run_account_id)
+        new_task = TaskService.create_task(
+            db_session, task_create_schema, run_account_id
+        )
     except ValueError as validation_error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -224,9 +224,11 @@ def start_task(
     elif started_task.project_id:
         from dsl.models.project import Project
 
-        project_obj = db_session.query(Project).filter(
-            Project.id == started_task.project_id
-        ).first()
+        project_obj = (
+            db_session.query(Project)
+            .filter(Project.id == started_task.project_id)
+            .first()
+        )
         if project_obj:
             effective_work_dir_path = _Path(project_obj.repo_path)
 
@@ -288,8 +290,7 @@ def execute_task(
 
     # 收集日志文本供 Prompt 构建（在 session 关闭前读取）
     dev_log_text_snapshot_list: list[str] = [
-        dev_log_item.text_content
-        for dev_log_item in executed_task.dev_logs
+        dev_log_item.text_content for dev_log_item in executed_task.dev_logs
     ]
     task_title_snapshot_str: str = executed_task.task_title
     run_account_id_snapshot_str: str = executed_task.run_account_id
@@ -306,9 +307,11 @@ def execute_task(
     elif executed_task.project_id:
         from dsl.models.project import Project
 
-        project_obj = db_session.query(Project).filter(
-            Project.id == executed_task.project_id
-        ).first()
+        project_obj = (
+            db_session.query(Project)
+            .filter(Project.id == executed_task.project_id)
+            .first()
+        )
         if project_obj:
             effective_work_dir_path = _Path(project_obj.repo_path)
 
@@ -450,8 +453,12 @@ def cancel_task(
     cancel_codex_task(task_id)
 
     # 强制将阶段回退至 changes_requested，解除 UI 阻塞
-    stage_update_schema = TaskStageUpdateSchema(workflow_stage=WorkflowStage.CHANGES_REQUESTED)
-    updated_task = TaskService.update_workflow_stage(db_session, task_id, stage_update_schema)
+    stage_update_schema = TaskStageUpdateSchema(
+        workflow_stage=WorkflowStage.CHANGES_REQUESTED
+    )
+    updated_task = TaskService.update_workflow_stage(
+        db_session, task_id, stage_update_schema
+    )
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -612,7 +619,9 @@ def update_task(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    updated_task = TaskService.update_task_title(db_session, task_id, task_update_schema)
+    updated_task = TaskService.update_task_title(
+        db_session, task_id, task_update_schema
+    )
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

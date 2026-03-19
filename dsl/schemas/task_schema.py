@@ -23,9 +23,7 @@ class TaskCreateSchema(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    task_title: str = Field(
-        ..., min_length=1, max_length=200, description="任务标题"
-    )
+    task_title: str = Field(..., min_length=1, max_length=200, description="任务标题")
     project_id: str | None = Field(None, description="关联的 Project ID")
     requirement_brief: str | None = Field(None, description="需求描述文本")
 
@@ -39,9 +37,7 @@ class TaskStatusUpdateSchema(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    lifecycle_status: TaskLifecycleStatus = Field(
-        ..., description="任务生命周期状态"
-    )
+    lifecycle_status: TaskLifecycleStatus = Field(..., description="任务生命周期状态")
 
 
 class TaskStageUpdateSchema(BaseModel):
@@ -53,9 +49,7 @@ class TaskStageUpdateSchema(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    workflow_stage: WorkflowStage = Field(
-        ..., description="工作流阶段"
-    )
+    workflow_stage: WorkflowStage = Field(..., description="工作流阶段")
 
 
 class TaskUpdateSchema(BaseModel):

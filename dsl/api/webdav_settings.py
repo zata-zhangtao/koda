@@ -35,7 +35,9 @@ def _mask_password(raw_password_str: str) -> str:
     """
     if len(raw_password_str) <= 2:
         return "*" * len(raw_password_str)
-    return raw_password_str[0] + "*" * (len(raw_password_str) - 2) + raw_password_str[-1]
+    return (
+        raw_password_str[0] + "*" * (len(raw_password_str) - 2) + raw_password_str[-1]
+    )
 
 
 def _to_response(webdav_settings_obj: WebDAVSettings) -> WebDAVSettingsResponse:
@@ -72,9 +74,13 @@ def get_webdav_settings(db: Session = Depends(get_db)) -> WebDAVSettingsResponse
     Raises:
         HTTPException: 404 若尚未配置
     """
-    webdav_settings_obj = db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    webdav_settings_obj = (
+        db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    )
     if not webdav_settings_obj:
-        raise HTTPException(status_code=404, detail="WebDAV settings not configured yet.")
+        raise HTTPException(
+            status_code=404, detail="WebDAV settings not configured yet."
+        )
     return _to_response(webdav_settings_obj)
 
 
@@ -92,7 +98,9 @@ def upsert_webdav_settings(
     Returns:
         WebDAVSettingsResponse: 保存后的配置（密码脱敏）
     """
-    existing_webdav_settings_obj = db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    existing_webdav_settings_obj = (
+        db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    )
 
     if existing_webdav_settings_obj:
         existing_webdav_settings_obj.server_url = update_payload.server_url
@@ -136,9 +144,13 @@ def test_webdav(db: Session = Depends(get_db)) -> WebDAVSyncResult:
     Raises:
         HTTPException: 404 若尚未配置
     """
-    webdav_settings_obj = db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    webdav_settings_obj = (
+        db.query(WebDAVSettings).filter(WebDAVSettings.id == 1).first()
+    )
     if not webdav_settings_obj:
-        raise HTTPException(status_code=404, detail="WebDAV settings not configured yet.")
+        raise HTTPException(
+            status_code=404, detail="WebDAV settings not configured yet."
+        )
 
     if not all([webdav_settings_obj.server_url, webdav_settings_obj.username]):
         raise HTTPException(status_code=422, detail="WebDAV settings are incomplete.")
@@ -149,7 +161,9 @@ def test_webdav(db: Session = Depends(get_db)) -> WebDAVSyncResult:
         password_str=webdav_settings_obj.password,
         remote_path_str=webdav_settings_obj.remote_path,
     )
-    return WebDAVSyncResult(success=connection_success_bool, message=connection_message_str)
+    return WebDAVSyncResult(
+        success=connection_success_bool, message=connection_message_str
+    )
 
 
 @router.post("/sync/upload", response_model=WebDAVSyncResult)

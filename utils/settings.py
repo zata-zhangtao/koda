@@ -55,8 +55,7 @@ class Config:
 
     # 数据库配置
     DATABASE_URL: ClassVar[str] = os.getenv(
-        "DATABASE_URL",
-        f"sqlite:///{BASE_DIR / 'data' / 'dsl.db'}"
+        "DATABASE_URL", f"sqlite:///{BASE_DIR / 'data' / 'dsl.db'}"
     )
 
     # DSL 媒体存储路径

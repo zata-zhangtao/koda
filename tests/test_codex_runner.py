@@ -192,8 +192,13 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     assert "不要默认执行 `git commit`" in recorded_prompt_text_list[0]
     assert "SELF_REVIEW_STATUS: PASS" in recorded_prompt_text_list[1]
     assert recorded_stage_value_list == ["self_review_in_progress"]
-    assert any("开始执行代码评审" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("AI 自检完成，未发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "开始执行代码评审" in log_text for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "AI 自检完成，未发现阻塞性问题" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-exec" in task_log_text
@@ -273,7 +278,9 @@ def test_run_codex_task_moves_to_changes_requested_on_review_findings(
         "self_review_in_progress",
         "changes_requested",
     ]
-    assert any("AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_completion_advances_task_to_done_on_success(
@@ -437,7 +444,9 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
 
     assert recorded_stage_value_list == []
     assert recorded_finalize_call_list == [("12345678-clean-warn", False)]
-    assert any("自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
@@ -515,4 +524,6 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
 
     assert recorded_stage_value_list == ["changes_requested"]
     assert recorded_finalize_call_list == []
-    assert any("未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list
+    )

@@ -31,9 +31,7 @@ def _get_current_run_account_id(db_session: Session) -> str:
     """
     from dsl.models.run_account import RunAccount
 
-    account = (
-        db_session.query(RunAccount).filter(RunAccount.is_active == True).first()
-    )
+    account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
     if not account:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

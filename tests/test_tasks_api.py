@@ -79,4 +79,3 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
-

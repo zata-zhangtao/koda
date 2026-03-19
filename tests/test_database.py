@@ -46,5 +46,7 @@ def test_database_session_bootstraps_empty_sqlite_file(tmp_path: Path) -> None:
         "tasks",
         "webdav_settings",
     }.issubset(discovered_table_name_set)
-    assert {"repo_remote_url", "repo_head_commit_hash"}.issubset(project_column_name_set)
+    assert {"repo_remote_url", "repo_head_commit_hash"}.issubset(
+        project_column_name_set
+    )
     assert "requirement_brief" in task_column_name_set

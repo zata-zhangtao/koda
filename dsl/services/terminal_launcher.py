@@ -104,7 +104,9 @@ def open_log_tail_terminal(log_file_path: Path) -> str:
             stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError as launch_error:
-        launcher_name = terminal_launch_command[0] if terminal_launch_command else "unknown"
+        launcher_name = (
+            terminal_launch_command[0] if terminal_launch_command else "unknown"
+        )
         raise TerminalLaunchError(
             "无法打开终端：未找到可执行命令 "
             f"`{launcher_name}`。如在 WSL/Linux 环境，请设置环境变量 "
@@ -172,7 +174,13 @@ def _build_linux_terminal_command(
         ),
         (
             "gnome-terminal",
-            lambda shell_command: ["gnome-terminal", "--", "bash", "-lc", shell_command],
+            lambda shell_command: [
+                "gnome-terminal",
+                "--",
+                "bash",
+                "-lc",
+                shell_command,
+            ],
         ),
         (
             "konsole",
