@@ -60,6 +60,7 @@ interface RequirementViewModel {
   task: Task;
   description: string;
   stage: RequirementStage;
+  stageLabel: string;
   createdLabel: string;
 }
 
@@ -101,6 +102,8 @@ type MutationName =
 const GUEST_USER_LABEL = "Guest User";
 const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
+const SELF_REVIEW_STARTED_LOG_MARKER = "🔍 已进入 AI 自检阶段，开始执行代码评审。";
+const SELF_REVIEW_PASSED_LOG_MARKER = "✅ AI 自检完成，未发现阻塞性问题。";
 
 const CONTINUE_COMMAND_PATTERNS = [
   /^go\s+on$/i,
@@ -295,6 +298,10 @@ function App() {
   const selectedTaskStage = selectedTask
     ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
     : null;
+  const selectedTaskStageLabel =
+    selectedTask && selectedTaskStage
+      ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
+      : null;
   const conversationTurnList = groupTimelineIntoConversationTurns(selectedTimelineItemList);
   const latestAiConversationTurn =
     [...conversationTurnList].reverse().find((turnItem) => turnItem.kind === "ai") ?? null;
@@ -318,7 +325,7 @@ function App() {
     && shouldRenderFallbackTaskDocument
     ? buildTaskDocumentMarkdown(
         selectedTask,
-        selectedTaskStage,
+        selectedTaskStageLabel ?? formatStageLabel(selectedTaskStage),
         selectedTaskSnapshot,
         selectedTaskDevLogs.slice(-DOCUMENT_SUMMARY_LOG_LIMIT),
         currentRunAccount
@@ -336,8 +343,9 @@ function App() {
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
     : false;
 
-  const isSelectedTaskInActiveExecution =
-    selectedTaskStage !== null && ACTIVE_EXECUTION_STAGE_SET.has(selectedTaskStage);
+  const isSelectedTaskInActiveExecution = selectedTask
+    ? isTaskInActiveExecution(selectedTask, selectedTaskDevLogs)
+    : false;
 
   useEffect(() => {
     if (!isSelectedTaskInActiveExecution) {
@@ -1659,7 +1667,10 @@ function App() {
                     )}
                   >
                     <div className="devflow-requirement-card__meta">
-                      <StatusBadge status={requirementViewModel.stage} />
+                      <StatusBadge
+                        status={requirementViewModel.stage}
+                        label={requirementViewModel.stageLabel}
+                      />
                       <span className="devflow-requirement-card__date">
                         {requirementViewModel.createdLabel}
                       </span>
@@ -1687,7 +1698,10 @@ function App() {
                           {selectedTask.task_title}
                         </h2>
                         {selectedTaskStage ? (
-                          <StatusBadge status={selectedTaskStage} />
+                          <StatusBadge
+                            status={selectedTaskStage}
+                            label={selectedTaskStageLabel ?? undefined}
+                          />
                         ) : null}
                       </div>
                       <p className="devflow-detail__description">
@@ -1958,7 +1972,10 @@ function App() {
                             <span>
                               {selectedTaskStage === WorkflowStage.PRD_GENERATING
                                 ? "AI 正在生成 PRD，请稍候..."
-                                : "AI 正在执行编码，输出实时显示在下方..."}
+                                : selectedTaskStage ===
+                                      WorkflowStage.SELF_REVIEW_IN_PROGRESS
+                                  ? "AI 正在执行自检，输出实时显示在下方..."
+                                  : "AI 正在执行编码，输出实时显示在下方..."}
                             </span>
                             <button
                               type="button"
@@ -2425,9 +2442,10 @@ function ActionButton({
 
 interface StatusBadgeProps {
   status: RequirementStage;
+  label?: string;
 }
 
-function StatusBadge({ status }: StatusBadgeProps) {
+function StatusBadge({ status, label }: StatusBadgeProps) {
   return (
     <span
       className={joinClassNames(
@@ -2435,7 +2453,7 @@ function StatusBadge({ status }: StatusBadgeProps) {
         `devflow-badge--${status}`
       )}
     >
-      {formatStageLabel(status)}
+      {label ?? formatStageLabel(status)}
     </span>
   );
 }
@@ -2448,6 +2466,7 @@ function buildRequirementViewModel(
     task: taskItem,
     description: buildRequirementDescription(taskItem, taskDevLogList),
     stage: deriveRequirementStage(taskItem, taskDevLogList),
+    stageLabel: formatDisplayStageLabel(taskItem, taskDevLogList),
     createdLabel: formatMonthDay(taskItem.created_at),
   };
 }
@@ -2551,7 +2570,7 @@ function deriveRequirementSnapshot(
 
 function buildTaskDocumentMarkdown(
   selectedTask: Task,
-  selectedTaskStage: RequirementStage,
+  selectedTaskStageLabel: string,
   requirementSnapshot: RequirementSnapshot,
   selectedTaskDevLogs: DevLog[],
   currentRunAccount: RunAccount | null
@@ -2595,7 +2614,7 @@ function buildTaskDocumentMarkdown(
     requirementSnapshot.summary,
     "",
     "## Current Flow",
-    `- Workflow stage: ${formatStageLabel(selectedTaskStage)}`,
+    `- Workflow stage: ${selectedTaskStageLabel}`,
     `- Repository task status: ${selectedTask.lifecycle_status.toLowerCase()}`,
     `- Timeline entries: ${selectedTaskDevLogs.length}`,
     `- Run account: ${currentRunAccount?.account_display_name || GUEST_USER_LABEL}`,
@@ -2631,6 +2650,46 @@ function deriveRequirementStage(
 ): RequirementStage {
   // workflow_stage is the single source of truth — no log-count heuristics
   return taskItem.workflow_stage;
+}
+
+function deriveSelfReviewDisplayState(
+  taskItem: Task,
+  taskDevLogList: DevLog[]
+): "running" | "passed_waiting" | null {
+  if (taskItem.workflow_stage !== WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
+    return null;
+  }
+
+  for (let logIndex = taskDevLogList.length - 1; logIndex >= 0; logIndex -= 1) {
+    const logText = taskDevLogList[logIndex].text_content;
+    if (logText.includes(SELF_REVIEW_PASSED_LOG_MARKER)) {
+      return "passed_waiting";
+    }
+    if (logText.includes(SELF_REVIEW_STARTED_LOG_MARKER)) {
+      return "running";
+    }
+  }
+
+  return "running";
+}
+
+function formatDisplayStageLabel(taskItem: Task, taskDevLogList: DevLog[]): string {
+  const selfReviewDisplayState = deriveSelfReviewDisplayState(taskItem, taskDevLogList);
+  if (selfReviewDisplayState === "passed_waiting") {
+    return "Self Review Passed / Waiting to Complete";
+  }
+
+  return formatStageLabel(taskItem.workflow_stage);
+}
+
+function isTaskInActiveExecution(taskItem: Task, taskDevLogList: DevLog[]): boolean {
+  if (!ACTIVE_EXECUTION_STAGE_SET.has(taskItem.workflow_stage)) {
+    return false;
+  }
+
+  return (
+    deriveSelfReviewDisplayState(taskItem, taskDevLogList) !== "passed_waiting"
+  );
 }
 
 function hasRequirementUpdateLog(taskDevLogList: DevLog[]): boolean {
