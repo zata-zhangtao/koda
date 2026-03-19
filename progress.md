@@ -1,41 +1,106 @@
 # Progress Log
 
-## Session: 2026-03-19 Worktree Environment Bootstrap
+## Session: 2026-03-19 Public Tunnel Rebase Conflict Resolution
 
 ### Current Status
 - **Phase:** complete
 - **Started:** 2026-03-19
 
 ### Actions Taken
-- Re-read the implementation PRD in `tasks/20260319-105937-prd-worktree-environment-bootstrap.md`.
-- Initialized the planning flow for this task without overwriting the existing planning files.
-- Checked repository status and confirmed the workspace is dirty, with many staged files unrelated to this specific task.
-- Inspected `dsl/services/git_worktree_service.py` and confirmed it currently stops at worktree creation plus path resolution.
-- Inspected `scripts/git_worktree.sh` and confirmed it already contains the required environment bootstrap behavior for `.env*`, frontend dependency preparation, and Python dependency sync.
-- Verified the staged diffs for the targeted worktree service and test files are formatting-only, so this task can build on the current content without reconciling semantic conflicts first.
-- Added `scripts/bootstrap_worktree_env.sh` as the shared bootstrap entrypoint and moved the reusable environment-preparation logic there.
-- Updated `scripts/git_worktree.sh` to delegate to the shared bootstrap script instead of carrying its own duplicate bootstrap implementation.
-- Extended `dsl/services/git_worktree_service.py` so path-aware script and raw fallback strategies run post-create bootstrap before returning `worktree_path`.
-- Added regression coverage for `.env` copying, fake `npm` / `uv` dependency bootstrap, bootstrap failure, and `TaskService.start_task()` integration.
-- Updated README and the core worktree-related docs to describe the ready-to-code worktree contract.
+- Confirmed the worktree was left mid-`rebase` with unresolved index stages for `docs/guides/configuration.md`, `task_plan.md`, `findings.md`, and `progress.md`.
+- Compared `:2:` and `:3:` content directly because the working-tree files no longer contained visible conflict markers.
+- Verified the forwarding-service code already included the intended review fixes, so the remaining task was to preserve both the newer repo history and the public tunnel records.
+- Merged the three planning files by prepending the public tunnel sections to the newer repository history and added this conflict-resolution session as a final record.
+- Rewrote `docs/guides/configuration.md` into a combined guide that now covers core DSL settings, AI provider config, local packaged mode, and server-side gateway settings with the real `justfile` commands.
+- Deliberately stopped short of `git rebase --continue` so no new commit is created before user approval.
 
 ### Test Results
 | Test | Expected | Actual | Status |
 |------|----------|--------|--------|
-| Discovery scan only | Establish implementation surface and conflict risk | Completed | passed |
-| `bash -n scripts/bootstrap_worktree_env.sh` | Shared bootstrap script is valid shell syntax | Passed | passed |
-| `bash -n scripts/git_worktree.sh` | Updated worktree helper remains valid shell syntax | Passed | passed |
-| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` | Edited Python files compile | Passed | passed |
-| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` | Worktree bootstrap and task-start regressions pass | `12 passed` | passed |
-| `git diff --check -- scripts/bootstrap_worktree_env.sh scripts/git_worktree.sh dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py README.md docs/architecture/system-design.md docs/guides/codex-cli-automation.md docs/database/schema.md task_plan.md findings.md progress.md` | No whitespace or patch-format issues in touched files | Passed | passed |
-| `just docs-build` | MkDocs strict build passes through the standard repo command | Failed because `uv` could not initialize `~/.cache/uv` under sandbox | blocked |
-| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | MkDocs strict build passes with a writable cache directory | Passed; Material 2.0 upstream warning banner still appeared | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py -q` | Public tunnel behavior still passes after conflict resolution | `17 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | Docs build remains green after merging the configuration guide | Build succeeded | passed |
+| `docker compose -f deploy/public-forward/docker-compose.yml --env-file deploy/public-forward/.env.example config` | Compose assets still render after merge resolution | Rendered full config successfully | passed |
+| `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` | No whitespace or patch-format issues in merged files | Passed | passed |
 
 ### Errors
 | Error | Resolution |
 |-------|------------|
-| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format ...` failed with `Failed to spawn: ruff` | Skipped formatter-specific verification and used `py_compile`, shell syntax checks, pytest, and `git diff --check` instead |
-| `just docs-build` failed because sandboxed `uv` could not write `~/.cache/uv` | Reran the equivalent command with `UV_CACHE_DIR=/tmp/uv-cache` and confirmed `mkdocs build --strict` succeeds |
+| `git rebase` conflicts were not visible as inline markers in the working tree | Compared staged versions directly with `git show :2:` / `git show :3:` and merged the intended content manually |
+
+## Session: 2026-03-19 Public Tunnel Review Fixes
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the review summary and isolated the three blockers to `forwarding_service/server/app.py`, `forwarding_service/server/config.py`, and the root `.env.example`.
+- Re-read the gateway forwarding code, shared HTTP header helpers, current public gateway tests, and configuration docs to confirm the exact regression surface.
+- Confirmed the gateway currently appends all upstream headers after instantiating a fresh FastAPI `Response`, which can duplicate `content-length` and related entity headers that the framework will already manage.
+- Confirmed the gateway config still accepts a blank or missing `KODA_TUNNEL_SHARED_TOKEN` by silently replacing it with `"change-me"`.
+- Confirmed the documentation already expects `SERVE_FRONTEND_DIST=false` by default for normal development, so the root `.env.example` is the configuration artifact that needs to be corrected.
+- Added a dedicated response-header replay filter so the gateway now strips framework-owned `content-length` while preserving upstream `content-type` and custom headers.
+- Replaced the gateway's shared-token fallback with explicit required-secret validation, then reused the same placeholder rejection on the agent side for symmetry.
+- Restored the root `.env.example` to a development-safe `SERVE_FRONTEND_DIST=false` default and clarified that public packaged mode should copy `deploy/public-forward/agent.env.example`.
+- Removed the module-level gateway `app = create_application()` side effect after strict env validation caused import-time failures during test collection.
+- Updated deployment/configuration docs to document the dev-safe root example and the startup rejection of placeholder tunnel secrets.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Discovery scan only | Precisely locate the three blockers before editing | Completed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py -q` | Gateway/agent regressions stay green after the fixes | `16 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_packaged_runtime.py -q` | Packaged runtime behavior remains intact | `1 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | Docs stay valid after example/config changes | Build succeeded | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `forwarding_service/server/app.py` failed test collection after shared-token validation because it created the gateway app at import time | Removed the module-level `app` singleton so env validation only runs in explicit startup paths |
+
+## Session: 2026-03-19 Public Tunnel Forwarding Service
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the `planning-with-files` skill instructions and confirmed this task is large enough to require persistent plan/findings/progress tracking.
+- Scanned the repository root and confirmed the main relevant surfaces are the DSL FastAPI app, frontend Vite config, deployment docs, and test suites.
+- Verified the current DSL server already serves `/health` and `/media/*`, while the frontend dev server proxies `/api` and `/media` to `localhost:8000`.
+- Confirmed `just dsl-dev` runs backend and frontend separately, so the new packaged public mode must be additive rather than replacing the development workflow.
+- Located the central environment config and logger modules where the new tunnel/public-mode configuration and logging conventions should plug in.
+- Confirmed the only outstanding workspace change before implementation is the user-provided PRD file `tasks/prd-cfd7faaa.md`.
+- Verified all existing backend routers already live under `/api/*`, and the frontend API client hard-codes `API_BASE = "/api"`, so no frontend contract rewrite is necessary for public exposure.
+- Checked the current deployment guide and confirmed it still documents the absence of Docker/Caddy/compose assets and the absence of FastAPI-hosted `frontend/dist`, which aligns with this task's intended deliverables.
+- Identified existing isolated `FastAPI` + `TestClient` tests as the likely regression pattern for app-level public-mode behaviors.
+- Read the confirmed PRD and extracted the concrete target file map, architecture recommendation, and acceptance criteria for the gateway, local agent, packaged runtime mode, deployment assets, and tests.
+- Confirmed the PRD expects an HTTP-over-WebSocket tunnel rather than general TCP forwarding, with Caddy providing HTTPS/Basic Auth and the gateway handling tunnel-token authentication plus offline `503` responses.
+- Added runtime dependencies (`httpx`, `websockets`) plus a new `forwarding_service/` package split into shared message helpers, gateway code, and local agent code.
+- Extended `utils/settings.py`, `dsl/app.py`, `main.py`, `justfile`, and root `.env.example` to support packaged frontend hosting and local public-agent commands without changing `just dsl-dev`.
+- Implemented the gateway WebSocket registration path, shared-token auth, deterministic same-`tunnel_id` replacement, offline `503 Tunnel Offline`, and internal health path `/_gateway/health`.
+- Implemented the local agent heartbeat loop, reconnect backoff, local upstream HTTP bridge, and stable `502 Upstream Request Failed` fallback when the local DSL app cannot be reached.
+- Added deployment assets under `deploy/public-forward/`, including a multi-stage `Dockerfile.gateway`, `docker-compose.yml`, `Caddyfile`, and separate server/local env examples.
+- Added regression tests for gateway auth/offline/forwarding, agent reconnect/error handling, and DSL packaged runtime SPA fallback.
+- Rewrote deployment/configuration docs and added `docs/guides/public-exposure.md`, then exposed the new guide in `mkdocs.yml`.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| Discovery scan only | Establish implementation surface before edits | Completed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile main.py dsl/app.py utils/settings.py forwarding_service/... tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py` | Edited backend files and new tests compile | Passed | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py -q` | New tunnel/public-mode regressions pass | `10 passed` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` | Full Python suite still passes | `54 passed, 1 warning` | passed |
+| `cd frontend && npm ci` | Frontend dependencies available for production build | Installed 211 packages | passed |
+| `cd frontend && npm run build` | Frontend dist build succeeds for packaged mode | Build succeeded | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` | Documentation stays valid after nav/runbook updates | Build succeeded (upstream Material 2.0 warning only) | passed |
+| `docker compose -f deploy/public-forward/docker-compose.yml --env-file deploy/public-forward/.env.example config` | Compose assets are syntactically valid | Rendered full config successfully | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `cd frontend && npm run build` initially failed with `sh: tsc: command not found` | Installed frontend dependencies with `npm ci` and reran the build successfully |
+| `docker compose ... config` initially failed because `deploy/public-forward/.env` did not exist | Temporarily copied `.env.example` to `.env`, ran config validation, then removed the temporary file |
 
 ## Session: 2026-03-19 PRD Output Contract
 
@@ -68,85 +133,6 @@
 | Error | Resolution |
 |-------|------------|
 | `npm run build` initially failed with `sh: tsc: command not found` | Installed frontend dependencies with `npm ci` and reran the build successfully |
-
-## Session: 2026-03-19 Configuration Guide Drift Follow-up
-
-### Current Status
-- **Phase:** complete
-- **Started:** 2026-03-19
-
-### Actions Taken
-- Re-read the review blocker and confirmed the remaining inconsistency was isolated to `docs/guides/configuration.md`.
-- Compared `README.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, `tasks/prd-e2a926f5.md`, and `justfile` to confirm the intended contributor-facing command set.
-- Rewrote the configuration guide's command section so it now opens with the same `uv sync` -> `cd frontend && npm install` -> `just dsl-dev` path used everywhere else.
-- Replaced the outdated `just sync`-only onboarding row with the README-aligned dependency and frontend install commands while keeping the auxiliary `just` command table for daily operations.
-- Recorded the follow-up findings and decisions in the planning files before verification.
-
-### Test Results
-| Test | Expected | Actual | Status |
-|------|----------|--------|--------|
-| `just docs-build` | MkDocs strict build still passes after the configuration guide correction | Passed; `mkdocs build --strict` completed successfully. The existing `VIRTUAL_ENV` mismatch notice and Material 2.0 upstream warning banner still appeared | passed |
-| `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` | No whitespace or patch-format issues in the touched files | Passed | passed |
-| `rg -n "just sync|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" docs/guides/configuration.md README.md docs/getting-started.md` | Configuration guide now matches the standardized onboarding command set | Passed; the config guide now exposes `uv sync`, frontend install, `just dsl-dev`, and `just docs-build` in the same shape as the README-led onboarding path | passed |
-
-### Errors
-| Error | Resolution |
-|-------|------------|
-| None | N/A |
-
-## Session: 2026-03-19 Agent Guide Consistency Follow-up
-
-### Current Status
-- **Phase:** complete
-- **Started:** 2026-03-19
-
-### Actions Taken
-- Read the self-review blocker and confirmed the remaining drift was isolated to `AGENTS.md` and `CLAUDE.md`.
-- Re-checked `justfile` to confirm the repository-standard entrypoints remain `uv sync`, `cd frontend && npm install`, `just dsl-dev`, `just docs-serve`, and `just docs-build`.
-- Updated both agent-facing root docs so they now use the same Python install, frontend install, local development, and docs validation commands as `README.md` and the core MkDocs onboarding pages.
-- Switched the remaining raw MkDocs command references in `AGENTS.md` / `CLAUDE.md` to the repository-standard `just` wrappers.
-- Removed a stray trailing code fence from `CLAUDE.md` discovered during formatting verification.
-- Re-ran documentation validation, whitespace checks, and a command-consistency scan across the relevant doc surface.
-
-### Test Results
-| Test | Expected | Actual | Status |
-|------|----------|--------|--------|
-| `just docs-build` | MkDocs strict build still passes after the repo-level guide fix | Passed; `mkdocs build --strict` completed successfully. The existing `VIRTUAL_ENV` mismatch notice and Material 2.0 upstream warning banner still appeared | passed |
-| `git diff --check -- AGENTS.md CLAUDE.md README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | No whitespace or patch-format issues in the touched docs | Passed | passed |
-| `rg -n "uv pip install|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" AGENTS.md CLAUDE.md README.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | The targeted repo-level docs no longer contain `uv pip install` and do expose the unified command set | Passed; `uv pip install` no longer appears in the checked doc surface | passed |
-
-### Errors
-| Error | Resolution |
-|-------|------------|
-| None | N/A |
-
-## Session: 2026-03-19 README And Core Docs Refresh
-
-### Current Status
-- **Phase:** implementation in progress
-- **Started:** 2026-03-19
-
-### Actions Taken
-- Read the PRD for `update docs and readme` and limited scope to the README-led documentation path.
-- Reviewed `README.md`, `docs/index.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, `docs/guides/codex-cli-automation.md`, `docs/guides/dsl-development.md`, `docs/api/references.md`, `docs/architecture/system-design.md`, `justfile`, and `mkdocs.yml`.
-- Confirmed `README.md` is the main source of template drift, while the MkDocs landing and onboarding pages already contain most of the correct Koda-specific reality.
-- Confirmed `mkdocs.yml` nav already covers the required pages and does not need churn because no page paths or titles are changing.
-- Identified one extra documentation conflict in `docs/guides/dsl-development.md`, where `pr_preparing` is still described as not fully automated.
-- Rewrote `README.md` to remove template-era positioning and replaced it with a Koda / DevStream Log landing page that links to the MkDocs deep-reference pages.
-- Realigned `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` around the same `uv sync` -> `cd frontend && npm install` -> `just dsl-dev` path and explicit `just docs-build` validation rule.
-- Corrected `docs/guides/dsl-development.md` so its workflow-stage description no longer conflicts with the implemented `pr_preparing` automation.
-- Verified the changed Markdown with `just docs-build`, then ran `git diff --check` to confirm no whitespace issues in the touched files.
-
-### Test Results
-| Test | Expected | Actual | Status |
-|------|----------|--------|--------|
-| `just docs-build` | MkDocs strict build passes after documentation refresh | Passed; only the upstream Material 2.0 warning banner appeared | passed |
-| `git diff --check -- README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` | No whitespace or patch-format issues in touched files | Passed | passed |
-
-### Errors
-| Error | Resolution |
-|-------|------------|
-| None | N/A |
 
 ## Session: 2026-03-19 Worktree Root Migration
 
@@ -338,41 +324,3 @@
 | Error | Resolution |
 |-------|------------|
 | Existing `task_plan.md` still marked the timezone task as complete despite the self-review rollback | Reopened the task in planning files and added an explicit blocker-fix phase |
-
-## Session: 2026-03-19 Justfile Recipe Merge
-
-### Current Status
-- **Phase:** complete
-- **Started:** 2026-03-19
-
-### Actions Taken
-- Read the current `justfile` and `/Users/zata/code/koda/justfile copy` side by side.
-- Confirmed the current file already carries repo-specific recipes for docs, frontend work, data setup, and `dsl-dev`, so those should remain the base behavior.
-- Verified that the copied worktree-related recipes are supported by existing repository scripts: `scripts/git_worktree.sh`, `scripts/git_worktree_merge.sh`, and `scripts/just_worktree_completion.bash`.
-- Verified that `scripts/release.py` exists, making the copied `release` recipe usable here.
-- Confirmed that `tests/` exists and the copied `test` recipe maps cleanly onto the repo's existing pytest layout.
-- Confirmed that `.env` files exist in the repo tree, making `export-env-zip` a valid utility recipe.
-- Identified `copy` as template-specific because it assumes a clone-template workflow, references a missing `config.toml`, and hard-codes the old template project name.
-- Chosen merge scope: keep current repo workflows intact, port supported helper recipes, and omit `copy`.
-- Imported the supported recipes into `justfile`, preserving the repo's existing DSL/frontend workflows.
-- Hit one `just` parse error while first porting `export-env-zip`; the Python heredoc body had the wrong indentation for `just`.
-- Fixed the heredoc by restoring recipe-indented Python lines, then reran validation successfully.
-- Tightened several comment summaries so `just --list` now shows clearer descriptions for the imported recipes.
-
-### Test Results
-| Test | Expected | Actual | Status |
-|------|----------|--------|--------|
-| `just --list` | Current `justfile` parses before modification | Passed | passed |
-| `just --list` | Merged `justfile` parses and exposes the imported recipes | Passed; new recipes include `release`, `worktree`, `worktree-merge`, `worktree-delete`, `worktree-doctor`, `install-worktree-completion`, `test`, and `export-env-zip` | passed |
-| `just --summary` | Recipe names render cleanly after the merge | Passed | passed |
-| `just --dry-run export-env-zip /tmp/koda-env.zip` | Parameterized env-export recipe renders the correct command | Passed | passed |
-| `just --dry-run worktree-doctor demo-branch` | Imported worktree doctor recipe renders the expected helper-script command | Passed | passed |
-| `just --dry-run full-sync true` | Optional completion path is wired into `full-sync` | Passed | passed |
-| `git diff --check -- justfile task_plan.md findings.md progress.md` | Touched files have no whitespace or patch-format issues | Passed | passed |
-
-### Errors
-| Error | Resolution |
-|-------|------------|
-| `just --list` initially failed with `Unknown start of token '.'` inside `export-env-zip` | Restored `just`-compatible heredoc indentation for the embedded Python block |
-
-## Session: 2026-03-19 PRD Output Contract

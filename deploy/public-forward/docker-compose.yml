@@ -1,0 +1,84 @@
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/public-forward/Dockerfile.gateway
+    environment:
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 9000
+      KODA_TUNNEL_ID: ${KODA_TUNNEL_ID:?KODA_TUNNEL_ID must be set}
+      KODA_TUNNEL_SHARED_TOKEN: ${KODA_TUNNEL_SHARED_TOKEN:?KODA_TUNNEL_SHARED_TOKEN must be set}
+      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS: ${KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS:-30}
+      KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS: ${KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS:-45}
+    expose:
+      - "9000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/_gateway/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - public_forward
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      KODA_PUBLIC_HOST: ${KODA_PUBLIC_HOST:?KODA_PUBLIC_HOST must be set}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL must be set}
+      CADDY_BASICAUTH_USER: ${CADDY_BASICAUTH_USER:?CADDY_BASICAUTH_USER must be set}
+      CADDY_BASICAUTH_PASSWORD: ${CADDY_BASICAUTH_PASSWORD:-}
+      CADDY_BASICAUTH_HASH: ${CADDY_BASICAUTH_HASH:-}
+    entrypoint: ["/bin/sh", "/opt/koda/start-caddy.sh"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/opt/koda/Caddyfile.template:ro
+      - ./start-caddy.sh:/opt/koda/start-caddy.sh:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/Caddyfile.generated && caddy validate --config /tmp/Caddyfile.generated"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - public_forward
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+
+networks:
+  public_forward:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+
+# Builder stage: resolve and install Python dependencies into an isolated virtualenv.
+FROM python:3.13-slim AS builder
+
+# Keep Python deterministic and make uv copy files instead of hard-linking across layers.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+
+# Install uv once in the builder so dependency resolution stays cacheable.
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Copy dependency manifests first to maximize Docker layer cache hits.
+COPY pyproject.toml uv.lock ./
+
+# Install only runtime dependencies; the gateway runs directly from source in the final image.
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy only the forwarding service source needed at runtime.
+COPY forwarding_service ./forwarding_service
+
+
+# Runtime stage: minimal non-root image that only contains deps + gateway source.
+FROM python:3.13-slim AS runtime
+
+# Keep logs unbuffered and use the builder-created virtualenv as the default PATH.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/app/.venv/bin:$PATH
+
+# Create a dedicated non-root user for the long-running gateway process.
+RUN groupadd --system appuser && useradd --system --gid appuser --create-home --home-dir /app appuser
+
+WORKDIR /app
+
+# Copy the virtualenv and gateway source from the builder stage.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/forwarding_service /app/forwarding_service
+
+USER appuser
+
+EXPOSE 9000
+
+# Run the gateway through the Python module entrypoint.
+CMD ["python", "-m", "forwarding_service.server.main"]

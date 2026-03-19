@@ -1,18 +1,40 @@
 # Findings & Decisions
 
-## 2026-03-19 Justfile Merge Findings
-- The active `justfile` already contains the repository-specific day-to-day commands for dependency sync, docs, frontend work, data setup, and `dsl-dev`.
-- `justfile copy` contains several additional recipes that are usable here because their support files already exist: `release`, `worktree`, `worktree-merge`, `worktree-delete`, `worktree-doctor`, `install-worktree-completion`, `test`, and `export-env-zip`.
-- The copied `docs-serve` recipe is a strict improvement over the current version because it allows a configurable port and enables `WATCHDOG_USE_POLLING=1`, which is often safer in mixed filesystems.
-- The copied `full-sync` recipe adds optional completion installation; that behavior is supported here because `scripts/just_worktree_completion.bash` exists.
-- The copied `copy` recipe is not safe to import as-is: it still assumes template-project cloning, references a missing `config.toml`, rewrites `mkdocs.yml` and `pyproject.toml` using the old template name, and trims the target `justfile` from the `copy` section downward.
+## 2026-03-19 Public Tunnel Rebase Conflict Findings
+- The interrupted `git rebase main` left four files unmerged in the index: `docs/guides/configuration.md`, `task_plan.md`, `findings.md`, and `progress.md`.
+- The conflicted planning files had no inline conflict markers in the working tree; the real conflict information only existed in Git stages, so resolution required comparing `:2:` and `:3:` directly.
+- `stage2` contained newer repository task history added on `main`, while `stage3` contained the public tunnel forwarding task records, so the correct merge strategy was a set-union of task sections and session logs.
+- `docs/guides/configuration.md` needed a synthesized result rather than a straight pick, because one side described the standing DSL / AI / onboarding contract and the other added the new public tunnel / gateway configuration surface.
+- The forwarding-service code already contained the review-fix logic for placeholder-secret rejection, duplicate response-header filtering, and the dev-safe root `.env.example`; the blocking work was merge resolution rather than fresh implementation.
 
-## 2026-03-19 Justfile Merge Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Import the supported worktree, release, test, env export, and completion recipes | The repo already carries the required scripts and tests, so these commands are operational rather than dead weight |
-| Upgrade `docs-serve` and `full-sync` to the richer versions from `justfile copy` | They preserve existing behavior while adding useful configurability |
-| Do not port `copy` | It would introduce template-specific behavior that does not match this repository's role |
+## 2026-03-19 Public Tunnel Forwarding Findings
+- `dsl/app.py` currently exposes API routers, `/media/original`, `/media/thumbnail`, and `/health`, but it does not yet support serving `frontend/dist` or SPA fallback from FastAPI.
+- `frontend/vite.config.ts` proxies `/api` and `/media` to `http://localhost:8000`, so the public-mode design must preserve same-origin `/api` and `/media` paths without changing the frontend `API_BASE`.
+- `main.py` always starts uvicorn in reload mode on port `8000`, which is suitable for local development but not yet configurable for a production-facing packaged mode.
+- `utils/settings.py` already centralizes environment-backed config and is the correct place to add tunnel/public-mode settings required by the PRD.
+- `utils/logger.py` already provides structured-enough central logging hooks, but the forwarding service and local agent will need their own explicit structured log payloads rather than ad-hoc prints.
+- `mkdocs.yml` already has deployment/configuration guides in navigation, so the new public exposure manual can be added as a new guide and linked from nav.
+- The worktree is clean aside from the user-provided untracked file `tasks/prd-cfd7faaa.md`; no existing tracked changes need special merge handling for this task.
+- All current FastAPI routers use `/api/...` prefixes, and the frontend `fetchApi()` helper hard-codes `API_BASE = "/api"`, so the tunnel gateway should route requests by path prefix instead of rewriting the frontend contract.
+- Existing deployment docs explicitly state the repository has no production Dockerfile, compose stack, reverse-proxy config, or FastAPI-hosted `frontend/dist`, which means this task can add those assets without conflicting with an existing release path.
+- `tests/test_timezone_contract.py` already uses small `FastAPI()` + `TestClient` route-level tests, which is a good pattern for isolated SPA fallback and app-config/public-mode regressions.
+- The confirmed PRD already narrows the deliverable map: `forwarding_service/server/`, `forwarding_service/agent/`, `deploy/public-forward/`, plus new tests for gateway, agent, and packaged runtime.
+- The PRD explicitly recommends an HTTP-over-WebSocket design where the gateway owns the public HTTP interface and the local agent bridges every request to `http://127.0.0.1:8000`, so there is no need to design a broader TCP tunnel abstraction.
+- The PRD also fixes the security split: Caddy handles HTTPS and Basic Auth for browser traffic, while the gateway enforces the per-tunnel shared token for agent registration.
+- The simplest single-tenant routing model is to let the gateway expose one configured `KODA_TUNNEL_ID` to browser traffic while still keeping the WebSocket registration path parameterized; this satisfies the PRD without inventing a multi-tenant host/path router.
+- `TestClient` is reliable for isolated WebSocket auth/heartbeat and packaged-runtime tests, but it is a poor fit for concurrent HTTP+WebSocket forwarding simulation in one process; the forwarding regression is more stable when the gateway request layer is tested against a fake active tunnel session.
+- The gateway needs its own internal health path (`/_gateway/health`) so public `/health` can remain a forwarded DSL path; otherwise deployment health checks would conflict with the existing application route contract.
+- `SERVE_FRONTEND_DIST=true` should fail fast when `frontend/dist/index.html` is missing; silent fallback to API-only mode would make public deployment errors harder to detect and document.
+- `docker compose config` requires an actual `deploy/public-forward/.env` file because `env_file` is resolved from the compose file itself; a temporary copy from `.env.example` is enough for syntax verification during local validation.
+
+## 2026-03-19 Public Tunnel Review Fix Findings
+- `forwarding_service/server/app.py` currently creates a fresh FastAPI `Response` and then appends every agent-returned header, which allows duplicate framework-owned entity headers such as `content-length`.
+- `forwarding_service/shared/http.py` already strips hop-by-hop headers, but it does not distinguish headers that should be regenerated by FastAPI/Starlette for the final browser response.
+- `tests/test_public_gateway_server.py` covers the happy-path forwarding contract and is the right place to pin a regression that asserts duplicate `content-length` replay does not occur.
+- `forwarding_service/server/config.py` currently falls back to `"change-me"` when `KODA_TUNNEL_SHARED_TOKEN` is unset or blank, which leaves a known credential on the unauthenticated tunnel-registration path if operators miss the setting.
+- The docs already describe `KODA_TUNNEL_SHARED_TOKEN` as empty by default on the local side, so making the gateway fail fast is consistent with the security model and mainly needs test/doc/example alignment.
+- The root `.env.example` currently enables `SERVE_FRONTEND_DIST=true`, but `docs/guides/configuration.md` still says the default is `false` and `just dsl-dev` should remain Vite-based, so the sample file is the drift point rather than the docs.
+- Once gateway config became strict, the module-level `app = create_application()` in `forwarding_service/server/app.py` turned into an import-time failure for tests and any passive module introspection; explicit startup paths should own env validation instead.
 
 ## 2026-03-19 PRD Output Contract Findings
 - `dsl/services/codex_runner.py` currently assembles the PRD prompt inline inside `run_codex_prd`, which makes the output contract harder to unit-test directly.
@@ -23,48 +45,6 @@
 - `docs/core/prompt-management.md` also still refers to `run_codex_prd`'s inline PRD prompt and wildcard PRD paths; this doc should move to a first-class `build_codex_prd_prompt(...)` contract.
 - `frontend/src/App.tsx` already contains a generated markdown validation checklist, so the manual verification requirement can be satisfied by adding a PRD-specific checklist item there without changing the UI structure.
 - There is currently no direct regression test for `run_codex_prd` prompt assembly or for `get_task_prd_file`; both are good low-level targets for this change because they cover the new output contract and compatibility boundary without needing end-to-end Codex execution.
-
-## 2026-03-19 Configuration Guide Drift Follow-up Findings
-- `docs/guides/configuration.md` still documented `just sync` as the contributor-facing dependency install entrypoint and omitted the required `cd frontend && npm install` step, so it no longer matched `README.md` and `docs/getting-started.md`.
-- `justfile` still exposes `sync:` as a wrapper, but the PRD and the already-updated onboarding docs standardize contributor-facing guidance on `uv sync` + `cd frontend && npm install` + `just dsl-dev`.
-- No navigation or additional page changes are needed for this follow-up because the blocker is isolated to one section inside `docs/guides/configuration.md`.
-
-## 2026-03-19 Configuration Guide Drift Follow-up Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Limit the content fix to the `## 命令入口` section in `docs/guides/configuration.md` | The review blocker identified a single remaining source of command drift, and changing more pages would add unnecessary churn |
-| Document the README-standard startup path explicitly before listing auxiliary commands | This makes the config guide reuse the same onboarding sequence instead of only describing `justfile` recipes in isolation |
-| Keep `just docs-build` as the explicit pre-submit validation note in the same section | The PRD requires documentation maintenance and validation rules to stay visible on the core documentation path |
-
-## 2026-03-19 Agent Guide Consistency Follow-up Findings
-- `AGENTS.md` and `CLAUDE.md` were the only repository-level instruction docs still telling contributors to use `uv pip install`; the already-updated README and MkDocs onboarding pages consistently use `uv sync`.
-- Those two files also lacked the explicit `cd frontend && npm install`, `just dsl-dev`, and `just docs-build` entrypoints that the rest of the onboarding path now treats as standard.
-- `AGENTS.md` still referenced raw `uv run mkdocs serve` / `uv run mkdocs build` commands, which conflicted with the repository-standard `just docs-serve` / `just docs-build` wrappers defined in `justfile`.
-- `CLAUDE.md` ended with a stray closing code fence, which was unrelated to the blocker itself but would leave a Markdown formatting defect in one of the touched files if ignored.
-
-## 2026-03-19 Agent Guide Consistency Follow-up Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Update both agent guides, not only the `uv pip install` line | The review feedback explicitly framed the goal as a unified command set, so stopping at a one-line swap would leave repo-level docs partially inconsistent |
-| Mirror the `justfile` entrypoints in agent-facing docs | `justfile` is the operational source of truth for `dsl-dev`, `docs-serve`, and `docs-build` |
-| Keep README and MkDocs content unchanged in this follow-up | Those pages were already corrected in the prior pass and revalidated successfully |
-
-## 2026-03-19 README And Core Docs Findings
-- `README.md` is still anchored to `Zata Codes Template`, includes template-era hook and `utils/` scaffolding guidance, and uses `uv pip install`, so it directly conflicts with the PRD and current repo reality.
-- `docs/index.md` already positions the repo as Koda / DevStream Log and already exposes the correct local URLs plus `just docs-build`, which makes it the best baseline for the root README rewrite.
-- `docs/getting-started.md` already uses `uv sync`, `cd frontend && npm install`, and `just dsl-dev`, so the main work there is tightening wording and explicitly marking `just docs-build` as a pre-submit validation step.
-- `docs/guides/configuration.md` already lists the right command names from `justfile`, but it does not yet clearly tell maintainers to sync README / onboarding docs when commands, env vars, ports, or path rules change.
-- `docs/guides/dsl-development.md` still says `pr_preparing` is not fully automated, which conflicts with `docs/index.md`, `docs/architecture/system-design.md`, and `docs/guides/codex-cli-automation.md`.
-- `docs/api/references.md` already behaves as the mkdocstrings-driven authority page, so it does not need structural changes unless discoverability wording elsewhere depends on it.
-- `mkdocs.yml` already contains the required navigation targets and no page is being added, renamed, or moved, so nav churn would be unnecessary.
-
-## Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Rewrite README instead of incrementally patching template paragraphs | The existing template content would otherwise keep leaking conflicting positioning into the repo entry page |
-| Reuse the same command sequence and localhost addresses across README and onboarding pages | The PRD explicitly forbids divergent onboarding instructions |
-| Add documentation maintenance rules in both README and docs pages | Contributors should see the rule from both the repository root and the MkDocs landing path |
-| Correct the `pr_preparing` automation note in `docs/guides/dsl-development.md` while touching maintenance guidance nearby | Leaving that conflict in place would preserve internal documentation drift immediately after this refresh |
 
 ## 2026-03-19 Worktree Root Findings
 - `dsl/services/git_worktree_service.py` is the only place that computes default task worktree paths and selects between fallback, path-aware scripts, and branch-only scripts.
@@ -144,24 +124,3 @@
 - The narrowest end-to-end fix is to expose a read-only API config payload (timezone name plus current offset label) and let the frontend datetime utility use that as its runtime source of truth, while still defaulting to `Asia/Shanghai` during bootstrap.
 - Frontend day-group labels should treat `YYYY-MM-DD` keys as already-normalized calendar days; re-parsing those keys as timestamps reintroduces timezone drift and is the wrong abstraction boundary.
 - A lightweight `get_app_timezone_display_label()` helper keeps chronicle export copy aligned with the configured timezone without duplicating string formatting rules in service code.
-
-## 2026-03-19 Worktree Environment Bootstrap Findings
-- `dsl/services/git_worktree_service.py` currently guarantees only worktree creation plus path resolution. It does not bootstrap `.env*`, frontend dependencies, or Python dependencies after creation.
-- `scripts/git_worktree.sh` already implements the desired ready-to-code behavior: it copies `.env*`, honors `WORKTREE_FRONTEND_STRATEGY` and `WORKTREE_SKIP_FRONTEND_INSTALL`, and runs `uv sync --all-extras` when `pyproject.toml` exists.
-- The current service chooses among three create strategies: path-aware repo-local scripts, branch-only repo-local scripts, and raw `git worktree add` fallback. Only the branch-only script path can currently inherit the shell script's environment behavior.
-- The `../task/` worktree path rule is already encoded in `GitWorktreeService`, `TaskService`, tests, and docs, so the safest implementation path is to preserve it and layer bootstrap on top.
-- The current staged diffs for `dsl/services/git_worktree_service.py`, `tests/test_git_worktree_service.py`, and `tests/test_task_service.py` are formatting-only, so there is no conflicting in-progress logic change in those files for this task.
-
-## 2026-03-19 Worktree Environment Bootstrap Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Extract shared bootstrap behavior into a separate script instead of re-implementing it in Python | The existing shell script already defines the operational contract, especially around frontend package manager detection and symlink/install strategy |
-| Keep branch-only script invocation non-interactive from backend and avoid `just worktree` as a hard dependency | The user explicitly clarified that `just` is optional; the requirement is environment setup, not command branding |
-| Enforce fail-fast semantics when bootstrap fails | Returning a `worktree_path` that is not actually ready-to-code would violate the stated requirement and create ambiguous task state |
-| Treat repo-local branch-only `git_worktree.sh` as self-bootstrapping, while Koda adds post-create bootstrap to path-aware and raw fallback strategies | This guarantees environment setup where Koda has full control without inventing a new contract for arbitrary third-party branch-only scripts |
-
-## 2026-03-19 Worktree Environment Bootstrap Verification Findings
-- A dedicated shared script works cleanly as the single source of truth because `scripts/git_worktree.sh` can call it directly, while `GitWorktreeService` can invoke it with `bash` after any successful create command.
-- Using fake `npm` and fake `uv` binaries in `PATH` is sufficient to verify dependency bootstrap behavior without any network access or real package installs.
-- `TaskService.start_task()` integration can be validated cheaply by asserting untracked `.env*` files appear in the created worktree, which proves bootstrap happened after `git worktree add`.
-- `just docs-build` is not reliable under the default sandbox because `uv` tries to initialize `~/.cache/uv`; the equivalent `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` command succeeds and verifies the same MkDocs output.

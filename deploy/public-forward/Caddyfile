@@ -1,0 +1,19 @@
+{
+    email {$CADDY_ACME_EMAIL}
+}
+
+{$KODA_PUBLIC_HOST} {
+    encode gzip zstd
+
+    @tunnel_ws path /ws/tunnels/*
+    handle @tunnel_ws {
+        reverse_proxy gateway:9000
+    }
+
+    handle {
+        basicauth {
+            {$CADDY_BASICAUTH_USER} __CADDY_BASICAUTH_HASH__
+        }
+        reverse_proxy gateway:9000
+    }
+}

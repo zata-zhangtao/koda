@@ -2,33 +2,46 @@
 
 ## 总览
 
-当前仓库的默认形态是**单机开发工作台**，不是已经包装好的生产部署模板。
+当前仓库现在有两种明确运行形态：
 
-这意味着：
+1. **本地开发模式**
+   使用 `just dsl-dev`，后端仍然跑在 `:8000`，前端继续使用 Vite `:5173` 代理。
+2. **公网暴露模式**
+   本机继续运行 DSL 和 Codex CLI，公网服务器只部署 `caddy + gateway`，由本机 `public-agent` 主动连出形成反向 HTTP 隧道。
 
-- 后端默认用 `uvicorn` 开发模式启动
-- 数据库默认是本地 SQLite
-- 媒体文件落在本机目录
-- `codex`、`trae-cn`、终端启动器等能力都依赖开发机环境
+这意味着本次补齐的是“受控公网入口”，不是把 SQLite、媒体目录、Git 仓库或 Codex CLI 迁移到服务器。
 
-因此本页更准确的定位是“现状说明 + 最小可运行部署建议”，而不是成熟的生产手册。
-
-## 当前可运行拓扑
+## 当前公网拓扑
 
 ```mermaid
 flowchart LR
-    BROWSER[Browser] --> WEB[Static Frontend]
-    WEB --> API[FastAPI Backend]
-    API --> DB[SQLite Data File]
-    API --> MEDIA[Media Directory]
-    API --> CODEX[Local Codex CLI]
+    Browser[Browser] --> HTTPS[HTTPS Domain]
+    HTTPS --> Caddy[Caddy Basic Auth + TLS]
+    Caddy --> Gateway[Public Gateway]
+    Gateway -->|WebSocket request envelope| Agent[Local public-agent]
+    Agent --> DSL[Local DSL FastAPI :8000]
+    DSL --> API[/api/*]
+    DSL --> MEDIA[/media/*]
+    DSL --> DIST[frontend/dist]
 ```
 
-## 最小部署建议
+## 交付件
 
-### 方案一
+公网模式相关资产现在位于以下位置：
 
-本地开发机直接运行，适合作者自己使用：
+| 位置 | 作用 |
+| --- | --- |
+| `forwarding_service/server/` | 服务器侧 gateway，负责 tunnel 注册、会话替换、离线 503 和 HTTP 转发 |
+| `forwarding_service/agent/` | 本机 agent，负责心跳、重连和转发到 `KODA_TUNNEL_UPSTREAM_URL` |
+| `deploy/public-forward/Dockerfile.gateway` | gateway 容器镜像构建文件 |
+| `deploy/public-forward/docker-compose.yml` | 服务器 `caddy + gateway` 编排 |
+| `deploy/public-forward/Caddyfile` | TLS 与 Basic Auth 配置 |
+| `deploy/public-forward/.env.example` | 服务器环境变量样例 |
+| `deploy/public-forward/agent.env.example` | 本机 agent / DSL 公网模式环境变量样例 |
+
+## 本地开发模式
+
+开发流保持不变：
 
 ```bash
 uv sync
@@ -36,57 +49,123 @@ cd frontend && npm install && cd ..
 just dsl-dev
 ```
 
-### 方案二
+该模式下：
 
-前后端分离，适合轻量内网环境：
+- 前端仍使用 Vite `:5173`
+- `/api` 与 `/media` 继续代理到 `http://localhost:8000`
+- 不需要 `frontend/dist`
+- 不需要 `public-agent`
 
-1. 后端机器运行 FastAPI
-2. 前端执行 `npm run build`，将 `frontend/dist` 交给静态站点服务
-3. 反向代理把 `/api` 与 `/media` 转发到后端
-4. 持久化 `data/` 与 `logs/`
+## 公网暴露模式
 
-## 后端部署注意事项
+### 1. 服务器部署
 
-- 当前 `main.py` 使用了 `reload=True`，只适合开发环境。
-- 如果你要长期运行，建议改为显式的生产启动命令，而不是直接依赖开发模式。
-- `data/dsl.db`、`data/media/`、`logs/` 都应该映射到持久化目录。
-- 如果需要自动生成 PRD 或代码，运行后端的机器上必须安装 `codex` CLI。
+在服务器上：
 
-## 前端部署注意事项
+```bash
+cd deploy/public-forward
+docker compose up -d --build
+```
 
-- 前端本身不内嵌到 FastAPI 中，当前仓库没有后端托管 `frontend/dist` 的逻辑。
-- `frontend/vite.config.ts` 中的代理配置只对开发模式生效。
-- 生产环境需要自己提供静态站点服务，并配置 API 基础路径。
+要求先由 shell / CI / systemd 注入这些环境变量：
 
-## 当前限制
+- `KODA_PUBLIC_HOST`
+- `CADDY_ACME_EMAIL`
+- `CADDY_BASICAUTH_USER`
+- `CADDY_BASICAUTH_PASSWORD`
+- `KODA_TUNNEL_ID`
+- `KODA_TUNNEL_SHARED_TOKEN`
 
-### 数据库
+可选兼容项：
 
-- 没有 Alembic
-- 没有迁移回滚能力
-- 对已有 SQLite 文件的结构变更依赖人工操作
+- `CADDY_BASICAUTH_HASH`
 
-### 安全
+说明：
 
-- 目前没有鉴权
-- 没有多用户隔离
-- 运行账户只是本机开发上下文，不是认证体系
+- `deploy/public-forward/.env.example` 仅作为变量清单与示例值。
+- `docker-compose.yml` 会在缺少 `KODA_PUBLIC_HOST`、`CADDY_ACME_EMAIL`、`CADDY_BASICAUTH_USER`、`KODA_TUNNEL_ID` 或 `KODA_TUNNEL_SHARED_TOKEN` 时直接报错。
+- `caddy` 容器会在启动时把 `CADDY_BASICAUTH_PASSWORD` 自动转换成 Caddy 需要的哈希格式。
+- 如果你同时提供 `CADDY_BASICAUTH_PASSWORD` 和 `CADDY_BASICAUTH_HASH`，会优先使用明文密码。
+- 如果 `CADDY_BASICAUTH_PASSWORD` 和 `CADDY_BASICAUTH_HASH` 都没提供，`caddy` 容器会立即启动失败。
 
-### 自动化执行
+部署后：
 
-- `open-in-trae` 依赖本机存在 `trae-cn`
-- `open-terminal` 依赖本机可用的终端启动器；Linux/WSL 可通过 `KODA_OPEN_TERMINAL_COMMAND` 覆盖
-- `codex exec` 在本机代码仓库中直接执行，适合受控开发环境，不适合无隔离多租户环境
+- `caddy` 监听 `80/443`
+- `gateway` 只暴露在 Compose 内部网络，健康检查走 `/_gateway/health`
+- 浏览器请求默认先经过 Basic Auth
+- `gateway` 在没有活动 tunnel 时返回 `503 Tunnel Offline`
 
-## 如果要走向生产
+### 2. 本机 DSL 打包运行
 
-建议至少补齐以下能力：
+在本机开发机上：
 
-1. 引入正式迁移工具
-2. 拆分后台任务执行器，避免把长任务完全压在 FastAPI 进程内
-3. 为 `codex` 执行增加权限边界和审计
-4. 引入鉴权与项目级访问控制
-5. 为媒体文件接入对象存储或稳定持久卷
+```bash
+cp .env.example .env
+npm --prefix frontend run build
+just public-run
+```
 
-!!! warning "待补充"
-    当前仓库没有现成的 `Dockerfile`、生产 `compose` 编排或反向代理配置。本页记录的是现状和建议，不代表仓库已经具备生产级发布方案。
+这里复制根 `.env.example` 只是为了复用本机常规配置；该样例默认保持 `SERVE_FRONTEND_DIST=false`，不会影响 `just dsl-dev`。`just public-run` 会在启动时显式设置 `SERVE_FRONTEND_DIST=true`，让 FastAPI 同源托管：
+
+- `/`
+- `frontend/dist` 内静态资源
+- SPA fallback
+- `/api/*`
+- `/media/*`
+- `/health`
+
+### 3. 本机 agent 连接
+
+在同一台本机开发机上：
+
+```bash
+cp deploy/public-forward/agent.env.example .env
+just public-agent
+```
+
+要求：
+
+- `KODA_TUNNEL_ID` 必须与服务器注入给 `docker compose` 的值一致
+- `KODA_TUNNEL_SHARED_TOKEN` 必须与服务器注入给 `docker compose` 的值一致
+- `KODA_TUNNEL_SHARED_TOKEN` 不能保留示例占位值；`gateway` 与 `agent` 都会在启动时拒绝这类配置
+- `KODA_TUNNEL_SERVER_URL` 应填写公网域名，例如 `https://koda.example.com`
+- `KODA_TUNNEL_UPSTREAM_URL` 默认就是本机 DSL 的 `http://127.0.0.1:8000`
+
+## 验证清单
+
+服务器侧：
+
+- `docker compose ps` 中 `caddy` 与 `gateway` 都是 `healthy` / `running`
+- `docker compose logs gateway` 能看到 `tunnel_connected` / `tunnel_disconnected` 结构化日志
+- 未带 Basic Auth 的浏览器请求返回 `401`
+
+本机侧：
+
+- `npm --prefix frontend run build` 成功产出 `frontend/dist`
+- `SERVE_FRONTEND_DIST=true uv run python main.py` 时，`http://127.0.0.1:8000/` 返回前端页面
+- `uv run python -m forwarding_service.agent.main` 能在 10 秒内建立 tunnel
+
+端到端：
+
+- 访问 `https://<your-domain>/` 可打开 DSL 页面
+- 页面内 `/api/*` 请求不需要改前端代码即可工作
+- `/media/*` 可以在同一域名下访问
+- agent 停止后，公网入口对 `/`、`/api/*`、`/media/*`、`/health` 都返回 `503 Tunnel Offline`
+
+## 安全边界
+
+- 入口安全默认由 Caddy Basic Auth 提供，防止匿名浏览器流量进入 gateway。
+- agent 注册安全由 `KODA_TUNNEL_SHARED_TOKEN` 提供。
+- gateway 只转发当前 DSL 所需的 HTTP/HTTPS 流量，不提供任意 TCP/UDP 隧道。
+- 本方案不是多租户 SaaS，不包含应用内 RBAC、OIDC、WAF 或高可用容灾。
+
+## 容器运行注意事项
+
+- `deploy/public-forward/Dockerfile.gateway` 使用多阶段构建，只携带 `forwarding_service` 运行所需代码。
+- gateway 容器以非 root 用户运行。
+- `.dockerignore` 会排除 `data/`、`logs/`、`frontend/node_modules/`、`frontend/dist/` 等本地文件。
+- 如果你仍然想预先生成 Basic Auth 哈希而不是传明文密码，可运行：
+
+```bash
+docker run --rm caddy:2.8-alpine caddy hash-password --plaintext 'your-password'
+```

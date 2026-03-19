@@ -4,9 +4,11 @@
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from dsl.api import (
@@ -140,7 +142,75 @@ def create_application() -> FastAPI:
             "version": "2.0.0",
         }
 
+    if config.SERVE_FRONTEND_DIST:
+        _register_frontend_dist_routes(application)
+
     return application
+
+
+def _register_frontend_dist_routes(application: FastAPI) -> None:
+    """在公网模式下注册同源前端静态资源与 SPA fallback.
+
+    Args:
+        application: FastAPI 应用实例
+
+    Raises:
+        RuntimeError: 当前端构建目录不存在或缺少 `index.html` 时抛出
+    """
+    frontend_dist_path = config.FRONTEND_DIST_PATH.resolve()
+    frontend_index_path = frontend_dist_path / "index.html"
+
+    if not frontend_dist_path.exists() or not frontend_index_path.exists():
+        raise RuntimeError(
+            "SERVE_FRONTEND_DIST=true 但未找到 frontend/dist。"
+            "请先执行 `npm --prefix frontend run build`，"
+            f"当前 FRONTEND_DIST_PATH={frontend_dist_path}"
+        )
+
+    logger.info("Serving packaged frontend dist from %s", frontend_dist_path)
+
+    @application.get("/", include_in_schema=False)
+    async def serve_frontend_root() -> FileResponse:
+        """返回前端首页."""
+        return FileResponse(frontend_index_path)
+
+    @application.get("/{frontend_path:path}", include_in_schema=False)
+    async def serve_frontend_path(frontend_path: str) -> FileResponse:
+        """返回前端静态资源或 SPA fallback.
+
+        Args:
+            frontend_path: 请求的相对路径
+
+        Returns:
+            FileResponse: 静态资源文件或 `index.html`
+
+        Raises:
+            HTTPException: 当请求命中保留后端前缀或越界/缺失静态文件时抛出
+        """
+        normalized_frontend_path = frontend_path.strip("/")
+        if normalized_frontend_path == "":
+            return FileResponse(frontend_index_path)
+
+        if (
+            normalized_frontend_path == "health"
+            or normalized_frontend_path.startswith("api/")
+            or normalized_frontend_path == "api"
+            or normalized_frontend_path.startswith("media/")
+            or normalized_frontend_path == "media"
+        ):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        candidate_asset_path = (frontend_dist_path / normalized_frontend_path).resolve()
+        if frontend_dist_path not in candidate_asset_path.parents:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        if candidate_asset_path.is_file():
+            return FileResponse(candidate_asset_path)
+
+        if Path(normalized_frontend_path).suffix:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        return FileResponse(frontend_index_path)
 
 
 # 全局应用实例

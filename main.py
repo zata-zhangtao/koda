@@ -6,6 +6,7 @@
 import uvicorn
 
 from utils.logger import logger
+from utils.settings import config
 
 
 def main():
@@ -19,7 +20,7 @@ def main():
         "dsl.app:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=not config.SERVE_FRONTEND_DIST,
         log_level="info",
     )
 

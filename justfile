@@ -282,6 +282,30 @@ dev-frontend:
 build-frontend:
     cd frontend && npm run build
 
+# 构建公网打包前端
+public-build:
+    cd frontend && npm run build
+
+# 启动 DSL 公网打包模式（同源托管 frontend/dist）
+public-run:
+    SERVE_FRONTEND_DIST=true uv run python main.py
+
+# 启动本机隧道 agent
+public-agent:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ ! -f .env ]]; then
+        echo "Missing .env. Copy deploy/public-forward/agent.env.example to .env first."
+        exit 1
+    fi
+
+    set -a
+    source ./.env
+    set +a
+
+    uv run python -m forwarding_service.agent.main
+
 # 创建数据目录
 setup-data:
     mkdir -p data/media/original

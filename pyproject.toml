@@ -18,6 +18,8 @@ dependencies = [
     "python-multipart>=0.0.20",
     "aiofiles>=24.0.0",
     "tzdata>=2024.1",
+    "httpx>=0.28.1",
+    "websockets>=15.0.1",
 ]
 
 [dependency-groups]

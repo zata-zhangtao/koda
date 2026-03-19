@@ -1,108 +1,153 @@
-# Task Plan: Merge Reusable Recipes From `justfile copy`
+# Task Plan: Resolve Public Tunnel Rebase Conflicts
 
-**Goal**: Compare `/Users/zata/code/koda/justfile copy` against the active `justfile`, import the recipes that are actually supported by this repository, and leave template-only or unsafe-to-port logic out of the main `justfile`.
+**Goal**: Merge the public tunnel forwarding change set on top of the latest `main` updates without discarding either side's planning history, keep the configuration guide accurate for both local and public modes, and leave the worktree verified and ready for a user-approved Git continuation step.
 **Started**: 2026-03-19
-
-## Current Phase
-All phases complete ✅
 
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Compare the current `justfile` and `justfile copy`
-- [x] Check whether copied recipes have supporting scripts or files in this repository
-- [x] Identify which copied recipes are template-specific and should be excluded
+- [x] Inspect the interrupted `rebase` state and identify which files remain unmerged
+- [x] Compare stage 2 / stage 3 content for planning files and the configuration guide
+- [x] Confirm whether the forwarding-service implementation itself still needs code fixes
 - **Status:** complete
 
-### Phase 2: Implementation
-- [x] Merge supported recipes into `justfile`
-- [x] Preserve current repo-specific recipes such as `dsl-dev`, frontend helpers, and existing docs commands
-- [x] Avoid importing template-only `copy` behavior
+### Phase 2: Merge Resolution
+- [x] Merge `task_plan.md`, `findings.md`, and `progress.md` by preserving both the newer repo history and the public-tunnel task records
+- [x] Rewrite `docs/guides/configuration.md` so it covers the existing DSL/AI config plus the new public tunnel / gateway settings
+- [x] Avoid `git rebase --continue` because that would implicitly create a commit before user approval
 - **Status:** complete
 
 ### Phase 3: Verification
-- [x] Run `just --list`
-- [x] Run a targeted `just` recipe check for the merged commands
-- [x] Record which recipes were merged versus skipped
+- [x] Re-run the public tunnel regression tests
+- [x] Re-run MkDocs strict build and Compose config validation
+- [x] Check the merged files for whitespace / patch-format issues
 - **Status:** complete
+
+## Current Phase
+All phases complete ✅
 
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Treat repo-local support files under `scripts/` as the gate for importing copied recipes | A recipe without its backing script or files would just add dead commands |
-| Skip the `copy` recipe from `justfile copy` | It is still template-oriented, references `config.toml`, and hard-codes the old template project name |
-| Keep existing `dsl-dev`, frontend, and basic sync recipes as the base | They already match this repository's current workflow and docs |
+| Treat the planning-file conflict as a history merge, not a winner-take-all overwrite | `stage2` carried newer repo task history while `stage3` carried the public tunnel task records, so either side alone would lose information |
+| Synthesize `docs/guides/configuration.md` from both sides instead of choosing one version | The upstream file still documented core DSL and AI settings, while the rebased change added the new tunnel / gateway surface |
+| Stop before `git rebase --continue` | The user explicitly asked not to create commits by default, and continuing the rebase would recreate a commit |
 
 ## Completion Summary
 - **Status:** Complete (2026-03-19)
 - **Tests:**
-  - `just --list` -> PASS
-  - `just --summary` -> PASS
-  - `just --dry-run export-env-zip /tmp/koda-env.zip` -> PASS
-  - `just --dry-run worktree-doctor demo-branch` -> PASS
-  - `just --dry-run full-sync true` -> PASS
-  - `git diff --check -- justfile task_plan.md findings.md progress.md` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py -q` -> PASS (`17 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
+  - `docker compose -f deploy/public-forward/docker-compose.yml --env-file deploy/public-forward/.env.example config` -> PASS
+  - `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` -> PASS
 - **Deliverables:**
-  - `justfile` - merged reusable recipes from `justfile copy`, upgraded `docs-serve`, added optional completion support to `full-sync`, and imported release/worktree/test/env helper recipes without the template-only `copy` recipe
-  - `task_plan.md`, `findings.md`, `progress.md` - recorded merge scope, rationale, and verification evidence
+  - `task_plan.md`, `findings.md`, `progress.md` - merged planning history plus a new conflict-resolution record
+  - `docs/guides/configuration.md` - unified DSL / AI / public-tunnel configuration guide
+  - Git index/worktree state ready for user-approved next Git steps
 
 ---
 
-# Task Plan: Bootstrap Environments For Task Worktrees
+# Task Plan: Public Tunnel Forwarding Service For DSL
 
-**Goal**: Implement the PRD in `tasks/20260319-105937-prd-worktree-environment-bootstrap.md` so every task worktree created by Koda is returned in a ready-to-code state, with environment bootstrap behavior aligned to `scripts/git_worktree.sh` rather than limited to whichever creation path happened to run.
+**Goal**: Add a server-side forwarding service under `forwarding_service/server/` plus a reconnecting local agent, make DSL support same-origin frontend dist hosting for public mode, and ship deployment assets, tests, and MkDocs documentation that satisfy the confirmed PRD for secure public exposure.
 **Started**: 2026-03-19
-
-## Current Phase
-All phases complete ✅
 
 ## Phases
 
 ### Phase 1: Discovery
-- [x] Re-read the current worktree creation code, shell script behavior, and affected tests/docs
-- [x] Confirm how much of the target behavior already exists and where logic is duplicated
-- [x] Identify a minimal integration approach that avoids breaking the `../task/` path contract
+- [x] Inspect existing FastAPI routes, config surface, frontend API assumptions, and test conventions
+- [x] Decide how the tunnel server, gateway, and local agent integrate without breaking `just dsl-dev`
+- [x] Identify required deployment artifacts and docs navigation changes
 - **Status:** complete
 
 ### Phase 2: Implementation
-- [x] Extract or introduce a reusable worktree-environment bootstrap entrypoint based on `scripts/git_worktree.sh`
-- [x] Wire `GitWorktreeService.create_task_worktree()` to enforce environment bootstrap for creation paths that do not already provide it
-- [x] Keep branch-only script compatibility and non-interactive backend behavior intact
-- [x] Update tests to cover bootstrap success/failure and environment side effects
-- [x] Update README and MkDocs pages that describe the worktree contract
+- [x] Add forwarding service server code at `forwarding_service/server/` with WebSocket tunnel registration, shared-token auth, heartbeat, reconnection handling, and offline `503`
+- [x] Add local agent forwarding code targeting `KODA_TUNNEL_UPSTREAM_URL`
+- [x] Add DSL public-mode frontend dist hosting controlled by `SERVE_FRONTEND_DIST`
+- [x] Add deployment assets (`Dockerfile`, `docker-compose.yml`, `Caddyfile`, env example files)
 - **Status:** complete
 
 ### Phase 3: Verification
-- [x] Run focused worktree/task tests
-- [x] Run `just docs-build`
-- [x] Record exact command outcomes and touched deliverables
+- [x] Add regression coverage for auth, offline handling, request forwarding, and SPA fallback
+- [x] Run focused backend tests, frontend build, and `uv run mkdocs build`
 - **Status:** complete
+
+## Current Phase
+All phases complete ✅
 
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Preserve the existing `../task/<repo>-wt-<task_short_id>` task path contract | It is already enforced by code, tests, and docs, so changing it would expand scope and risk unrelated regressions |
-| Treat `scripts/git_worktree.sh` as the environment-bootstrap source of truth, not necessarily the only worktree entrypoint | The user clarified that `just` is optional; the actual requirement is parity of environment setup |
-| Keep repo-local branch-only `git_worktree.sh` as the self-bootstrapping path and add Koda-managed post-create bootstrap for path-aware/raw strategies | This preserves compatibility with the existing branch-only contract while guaranteeing environment setup for the other creation paths |
+| Keep the tunnel solution HTTP-focused rather than general TCP | The PRD explicitly scopes this work to the current DSL HTTP/HTTPS traffic |
+| Preserve the existing `/api` frontend contract and `just dsl-dev` flow | The new public mode must not break the current local development workflow |
+| Use a single FastAPI gateway app for both `/ws/tunnels/{tunnel_id}` and forwarded public HTTP paths | This keeps session state in one process, minimizes moving parts, and maps cleanly to isolated tests |
+| Put browser-facing HTTPS/Basic Auth in Caddy and keep tunnel-token auth in the gateway | This follows the confirmed PRD security split and avoids coupling browser auth to the local agent |
+| Route all public browser traffic to one configured `KODA_TUNNEL_ID` | The PRD explicitly excludes multi-tenant SaaS, so a single public tunnel target keeps deployment and operations simpler |
 
 ## Completion Summary
 - **Status:** Complete (2026-03-19)
 - **Tests:**
-  - `bash -n scripts/bootstrap_worktree_env.sh` -> PASS
-  - `bash -n scripts/git_worktree.sh` -> PASS
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py` -> PASS
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py -q` -> PASS (`12 passed`)
-  - `git diff --check -- scripts/bootstrap_worktree_env.sh scripts/git_worktree.sh dsl/services/git_worktree_service.py tests/test_git_worktree_service.py tests/test_task_service.py README.md docs/architecture/system-design.md docs/guides/codex-cli-automation.md docs/database/schema.md task_plan.md findings.md progress.md` -> PASS
-  - `just docs-build` -> BLOCKED by sandboxed `~/.cache/uv` write
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python -m py_compile main.py dsl/app.py utils/settings.py forwarding_service/... tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py tests/test_packaged_runtime.py -q` -> PASS (`10 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` -> PASS (`54 passed, 1 warning`)
+  - `cd frontend && npm ci` -> PASS
+  - `cd frontend && npm run build` -> PASS
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
+  - `docker compose -f deploy/public-forward/docker-compose.yml --env-file deploy/public-forward/.env.example config` -> PASS
+- **Deliverables:**
+  - `forwarding_service/server/` - gateway app, config, tunnel registry, health endpoint, offline `503`, and WebSocket auth/session handling
+  - `forwarding_service/agent/` - reconnecting local agent, heartbeat loop, upstream HTTP bridge, and stable upstream-failure handling
+  - `dsl/app.py`, `main.py`, `utils/settings.py`, `justfile`, `.env.example` - packaged runtime mode and operator commands/config
+  - `deploy/public-forward/` and `.dockerignore` - Dockerized server deployment assets for Caddy + gateway
+  - `tests/test_public_gateway_server.py`, `tests/test_public_tunnel_agent.py`, `tests/test_packaged_runtime.py` - regression coverage for auth, offline handling, forwarding, reconnect logic, and SPA fallback
+  - `docs/guides/deployment.md`, `docs/guides/configuration.md`, `docs/guides/public-exposure.md`, `mkdocs.yml` - synchronized deployment/config/runbook docs
+
+# Task Plan: Public Tunnel Forwarding Review Fixes
+
+**Goal**: Resolve the three blocking review findings in the public tunnel forwarding implementation: prevent invalid replayed entity headers on gateway responses, restore a development-safe root `.env.example`, and make the gateway reject missing or placeholder shared tokens at startup.
+**Started**: 2026-03-19
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Re-read the blocking review notes and inspect the affected gateway/config/example files
+- [x] Confirm which tests exist and where new regression coverage should live
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Filter framework-owned entity headers when replaying agent responses from the gateway
+- [x] Change the root `.env.example` back to a dev-safe `SERVE_FRONTEND_DIST=false` default while leaving public-mode examples in deployment assets
+- [x] Fail fast when `KODA_TUNNEL_SHARED_TOKEN` is missing or still set to a placeholder value
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Add or update regression tests for response-header replay and shared-token validation
+- [x] Run focused `pytest` coverage for public gateway behavior plus `uv run mkdocs build`
+- **Status:** complete
+
+## Current Phase
+All phases complete ✅
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Filter entity headers at response replay time instead of changing the wire format globally | Request/response serialization can still preserve useful metadata, while the FastAPI gateway must avoid duplicate framework-owned headers such as `content-length` |
+| Keep root `.env.example` development-safe and point public deployments to `deploy/public-forward/agent.env.example` | The repo root example should not break `just dsl-dev` for a fresh checkout |
+| Treat blank and placeholder tunnel tokens as invalid configuration | A public gateway must not come up with a known default credential on the tunnel registration endpoint |
+| Remove the module-level gateway `app` singleton | Strict env validation should only happen in explicit runtime entrypoints, not during test-module import or passive code introspection |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_public_gateway_server.py tests/test_public_tunnel_agent.py -q` -> PASS (`16 passed`)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_packaged_runtime.py -q` -> PASS (`1 passed`)
   - `UV_CACHE_DIR=/tmp/uv-cache uv run mkdocs build --strict` -> PASS
 - **Deliverables:**
-  - `scripts/bootstrap_worktree_env.sh` - shared worktree environment bootstrap entrypoint for `.env*`, frontend dependency preparation, and Python dependency sync
-  - `scripts/git_worktree.sh` - now delegates environment preparation to the shared bootstrap script
-  - `dsl/services/git_worktree_service.py` - enforces post-create bootstrap for path-aware and raw fallback strategies
-  - `tests/test_git_worktree_service.py`, `tests/test_task_service.py` - regression coverage for `.env` copying, fake dependency commands, bootstrap failure, and task-start integration
-  - `README.md`, `docs/architecture/system-design.md`, `docs/guides/codex-cli-automation.md`, `docs/database/schema.md` - synchronized worktree environment contract
-
----
+  - `forwarding_service/shared/http.py`, `forwarding_service/server/app.py` - safe response-header replay that drops framework-owned `content-length` before returning browser responses
+  - `forwarding_service/shared/config_utils.py`, `forwarding_service/server/config.py`, `forwarding_service/agent/config.py` - fail-fast secret validation for missing or placeholder tunnel tokens
+  - `.env.example` - restored development-safe `SERVE_FRONTEND_DIST=false` default with a pointer to `deploy/public-forward/agent.env.example`
+  - `tests/test_public_gateway_server.py`, `tests/test_public_tunnel_agent.py` - regression coverage for duplicate response headers and placeholder-token rejection
+  - `docs/guides/configuration.md`, `docs/guides/deployment.md` - synchronized operator guidance for dev-safe defaults and required real tunnel secrets
 
 # Task Plan: PRD Output Must Include AI-Summarized Requirement Name
 
@@ -152,142 +197,6 @@ All phases complete ✅
   - `tests/test_codex_runner.py`, `tests/test_tasks_api.py` - regression coverage for prompt contract and fixed PRD file lookup
   - `docs/guides/codex-cli-automation.md`, `docs/core/prompt-management.md`, `docs/core/ai-assets.md`, `docs/architecture/system-design.md`, `docs/dev/evaluation.md` - synchronized PRD output contract and manual verification guidance
   - `frontend/src/App.tsx` - validation checklist now mentions `需求名称（AI 归纳）`
-
----
-
-# Task Plan: Resolve Configuration Guide Command Drift
-
-**Goal**: Remove the last README/onboarding command inconsistency by updating `docs/guides/configuration.md` to use the same contributor-facing startup path and validation wording as `README.md` and `docs/getting-started.md`.
-**Started**: 2026-03-19
-
-## Current Phase
-All phases complete ✅
-
-## Phases
-
-### Phase 1: Discovery
-- [x] Re-read the review blocker and confirm which command description still drifts
-- [x] Compare `README.md`, `docs/getting-started.md`, `docs/guides/configuration.md`, and `justfile`
-- **Status:** complete
-
-### Phase 2: Implementation
-- [x] Replace the outdated `just sync` onboarding row with the README-standard install commands
-- [x] Add the missing frontend install step so the config guide mirrors the documented quick-start path
-- **Status:** complete
-
-### Phase 3: Verification
-- [x] Run `just docs-build`
-- [x] Run `git diff --check` on the touched files
-- [x] Re-scan the command strings across the affected docs
-- **Status:** complete
-
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
-| Keep the follow-up scoped to `docs/guides/configuration.md` plus planning logs | The blocker is a single remaining command-drift defect, not a broader doc rewrite |
-| Promote the README-standard startup path directly in the config guide before the supporting command table | This satisfies the PRD requirement that core onboarding docs use the same command names and descriptions |
-| Preserve the explicit `just docs-build` maintenance reminder in the same section | The review and PRD both require documentation validation to remain visible |
-
-## Completion Summary
-- **Status:** Complete (2026-03-19)
-- **Tests:**
-  - `just docs-build` -> PASS
-  - `git diff --check -- docs/guides/configuration.md task_plan.md findings.md progress.md` -> PASS
-  - `rg -n "just sync|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" docs/guides/configuration.md README.md docs/getting-started.md` -> PASS
-- **Deliverables:**
-  - `docs/guides/configuration.md` - command section now mirrors the README/getting-started onboarding path and includes the missing frontend install step
-  - `task_plan.md`, `findings.md`, `progress.md` - recorded the blocker analysis, implementation scope, and verification evidence for this follow-up
-
-# Task Plan: Close Agent Guide Command Drift
-
-**Goal**: Align `AGENTS.md` and `CLAUDE.md` with the repository-standard onboarding and documentation commands already used by `README.md` and the core MkDocs pages, so no repo-level guide still points contributors or AI agents at `uv pip install` or raw MkDocs commands.
-**Started**: 2026-03-19
-
-## Current Phase
-All phases complete ✅
-
-## Phases
-
-### Phase 1: Discovery
-- [x] Confirm which repository-level docs still diverge from the updated README / MkDocs onboarding flow
-- [x] Re-check `justfile` so the repair uses the real command entrypoints
-- **Status:** complete
-
-### Phase 2: Implementation
-- [x] Replace outdated dependency-install guidance in `AGENTS.md` and `CLAUDE.md`
-- [x] Add the matching frontend install, local dev, and docs validation commands so the repo-level guides stay aligned with README
-- [x] Fix any adjacent Markdown formatting issue encountered while touching the same docs
-- **Status:** complete
-
-### Phase 3: Verification
-- [x] Run `just docs-build`
-- [x] Run `git diff --check` on the touched documentation files
-- [x] Re-scan the relevant docs for the expected command set and confirm `uv pip install` no longer appears there
-- **Status:** complete
-
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
-| Keep the fix limited to `AGENTS.md` and `CLAUDE.md` plus planning logs | The README / MkDocs pages were already aligned; the remaining blocker was isolated to repository-level agent guidance |
-| Standardize on `just` entrypoints for docs commands in agent-facing guidance | The repo already exposes `docs-serve`, `docs-build`, and `dsl-dev` via `justfile`, so repeating raw underlying commands reintroduces drift risk |
-| Fix the stray trailing code fence in `CLAUDE.md` while already editing that file | It was a localized Markdown bug in the same touched doc and leaving it would preserve avoidable formatting noise |
-
-## Completion Summary
-- **Status:** Complete (2026-03-19)
-- **Tests:**
-  - `just docs-build` -> PASS
-  - `git diff --check -- AGENTS.md CLAUDE.md README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
-  - `rg -n "uv pip install|uv sync|cd frontend && npm install|just dsl-dev|just docs-build" AGENTS.md CLAUDE.md README.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
-- **Deliverables:**
-  - `AGENTS.md` - repository-level agent guide now matches the unified Python install, frontend install, local dev, and docs validation commands
-  - `CLAUDE.md` - companion agent guide now matches the same command set and no longer ends with a stray Markdown code fence
-
-# Task Plan: Refresh README And Core Docs
-
-**Goal**: Replace the outdated template-oriented README narrative with a Koda / DevStream Log workspace entry point, align the core MkDocs onboarding pages with the same commands and addresses, and make documentation maintenance plus `just docs-build` verification explicit.
-**Started**: 2026-03-19
-
-## Current Phase
-All phases complete ✅
-
-## Phases
-
-### Phase 1: Discovery
-- [x] Read the PRD and identify the required entry-path pages
-- [x] Compare `README.md`, `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` against `justfile`
-- [x] Confirm whether `mkdocs.yml` nav changes are needed for this scope
-- **Status:** complete
-
-### Phase 2: Implementation
-- [x] Rewrite `README.md` as the repository landing page for Koda / DevStream Log
-- [x] Synchronize `docs/index.md`, `docs/getting-started.md`, and `docs/guides/configuration.md` with the same startup commands and maintenance rules
-- [x] Update any nearby guide content that still conflicts with the current documented workflow
-- **Status:** complete
-
-### Phase 3: Verification
-- [x] Run `just docs-build`
-- [x] Review final diffs for command, address, and navigation consistency
-- **Status:** complete
-
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
-| Keep the change set focused on README plus core onboarding/overview docs | The PRD explicitly treats this as a documentation realignment, not a full-site rewrite |
-| Treat `justfile` as the command source of truth | The PRD requires command consistency across README and MkDocs pages |
-| Leave `mkdocs.yml` nav unchanged unless a page path/title actually changes | FR-11 forbids meaningless navigation churn |
-| Preserve `docs/api/references.md` as a linked deep-reference page instead of duplicating API member details elsewhere | FR-8 defines it as the sole object-level authority |
-
-## Completion Summary
-- **Status:** Complete (2026-03-19)
-- **Tests:**
-  - `just docs-build` -> PASS
-  - `git diff --check -- README.md docs/index.md docs/getting-started.md docs/guides/configuration.md docs/guides/dsl-development.md` -> PASS
-- **Deliverables:**
-  - `README.md` - rewritten as the Koda / DevStream Log repository landing page with quick start, project map, docs map, and documentation maintenance rules
-  - `docs/index.md` - aligned site overview, current capability summary, documentation map, and maintenance rules
-  - `docs/getting-started.md` - synchronized minimal startup path, addresses, and pre-submit docs validation rule
-  - `docs/guides/configuration.md` - synchronized command source-of-truth guidance plus documentation update checklist
-  - `docs/guides/dsl-development.md` - corrected workflow-stage reality and tightened documentation update expectations
 
 ---
 

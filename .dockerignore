@@ -1,0 +1,33 @@
+# Git metadata and editor folders
+.git
+.github
+.idea
+.vscode
+.DS_Store
+
+# Python environments and caches
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node artifacts
+frontend/node_modules
+node_modules
+frontend/dist
+dist
+build
+
+# Local runtime data
+data
+logs
+
+# Documentation build artifacts
+site
+
+# Misc local artifacts
+coverage
+tmp

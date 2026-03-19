@@ -52,6 +52,7 @@ nav:
       - DSL 开发: guides/dsl-development.md
       - 配置说明: guides/configuration.md
       - 部署说明: guides/deployment.md
+      - 公网暴露: guides/public-exposure.md
       - Codex 自动化: guides/codex-cli-automation.md
   - 核心:
       - AI 资产: core/ai-assets.md
