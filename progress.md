@@ -301,3 +301,41 @@
 | Error | Resolution |
 |-------|------------|
 | Existing `task_plan.md` still marked the timezone task as complete despite the self-review rollback | Reopened the task in planning files and added an explicit blocker-fix phase |
+
+## Session: 2026-03-19 Justfile Recipe Merge
+
+### Current Status
+- **Phase:** complete
+- **Started:** 2026-03-19
+
+### Actions Taken
+- Read the current `justfile` and `/Users/zata/code/koda/justfile copy` side by side.
+- Confirmed the current file already carries repo-specific recipes for docs, frontend work, data setup, and `dsl-dev`, so those should remain the base behavior.
+- Verified that the copied worktree-related recipes are supported by existing repository scripts: `scripts/git_worktree.sh`, `scripts/git_worktree_merge.sh`, and `scripts/just_worktree_completion.bash`.
+- Verified that `scripts/release.py` exists, making the copied `release` recipe usable here.
+- Confirmed that `tests/` exists and the copied `test` recipe maps cleanly onto the repo's existing pytest layout.
+- Confirmed that `.env` files exist in the repo tree, making `export-env-zip` a valid utility recipe.
+- Identified `copy` as template-specific because it assumes a clone-template workflow, references a missing `config.toml`, and hard-codes the old template project name.
+- Chosen merge scope: keep current repo workflows intact, port supported helper recipes, and omit `copy`.
+- Imported the supported recipes into `justfile`, preserving the repo's existing DSL/frontend workflows.
+- Hit one `just` parse error while first porting `export-env-zip`; the Python heredoc body had the wrong indentation for `just`.
+- Fixed the heredoc by restoring recipe-indented Python lines, then reran validation successfully.
+- Tightened several comment summaries so `just --list` now shows clearer descriptions for the imported recipes.
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `just --list` | Current `justfile` parses before modification | Passed | passed |
+| `just --list` | Merged `justfile` parses and exposes the imported recipes | Passed; new recipes include `release`, `worktree`, `worktree-merge`, `worktree-delete`, `worktree-doctor`, `install-worktree-completion`, `test`, and `export-env-zip` | passed |
+| `just --summary` | Recipe names render cleanly after the merge | Passed | passed |
+| `just --dry-run export-env-zip /tmp/koda-env.zip` | Parameterized env-export recipe renders the correct command | Passed | passed |
+| `just --dry-run worktree-doctor demo-branch` | Imported worktree doctor recipe renders the expected helper-script command | Passed | passed |
+| `just --dry-run full-sync true` | Optional completion path is wired into `full-sync` | Passed | passed |
+| `git diff --check -- justfile task_plan.md findings.md progress.md` | Touched files have no whitespace or patch-format issues | Passed | passed |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `just --list` initially failed with `Unknown start of token '.'` inside `export-env-zip` | Restored `just`-compatible heredoc indentation for the embedded Python block |
+
+## Session: 2026-03-19 PRD Output Contract

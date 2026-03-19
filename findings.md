@@ -1,5 +1,19 @@
 # Findings & Decisions
 
+## 2026-03-19 Justfile Merge Findings
+- The active `justfile` already contains the repository-specific day-to-day commands for dependency sync, docs, frontend work, data setup, and `dsl-dev`.
+- `justfile copy` contains several additional recipes that are usable here because their support files already exist: `release`, `worktree`, `worktree-merge`, `worktree-delete`, `worktree-doctor`, `install-worktree-completion`, `test`, and `export-env-zip`.
+- The copied `docs-serve` recipe is a strict improvement over the current version because it allows a configurable port and enables `WATCHDOG_USE_POLLING=1`, which is often safer in mixed filesystems.
+- The copied `full-sync` recipe adds optional completion installation; that behavior is supported here because `scripts/just_worktree_completion.bash` exists.
+- The copied `copy` recipe is not safe to import as-is: it still assumes template-project cloning, references a missing `config.toml`, rewrites `mkdocs.yml` and `pyproject.toml` using the old template name, and trims the target `justfile` from the `copy` section downward.
+
+## 2026-03-19 Justfile Merge Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Import the supported worktree, release, test, env export, and completion recipes | The repo already carries the required scripts and tests, so these commands are operational rather than dead weight |
+| Upgrade `docs-serve` and `full-sync` to the richer versions from `justfile copy` | They preserve existing behavior while adding useful configurability |
+| Do not port `copy` | It would introduce template-specific behavior that does not match this repository's role |
+
 ## 2026-03-19 PRD Output Contract Findings
 - `dsl/services/codex_runner.py` currently assembles the PRD prompt inline inside `run_codex_prd`, which makes the output contract harder to unit-test directly.
 - The PRD generation flow already writes to `tasks/prd-{task_id[:8]}.md`, and `dsl/api/tasks.py:get_task_prd_file` reads that exact path with UTF-8 decoding.

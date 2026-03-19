@@ -1,3 +1,53 @@
+# Task Plan: Merge Reusable Recipes From `justfile copy`
+
+**Goal**: Compare `/Users/zata/code/koda/justfile copy` against the active `justfile`, import the recipes that are actually supported by this repository, and leave template-only or unsafe-to-port logic out of the main `justfile`.
+**Started**: 2026-03-19
+
+## Current Phase
+All phases complete ✅
+
+## Phases
+
+### Phase 1: Discovery
+- [x] Compare the current `justfile` and `justfile copy`
+- [x] Check whether copied recipes have supporting scripts or files in this repository
+- [x] Identify which copied recipes are template-specific and should be excluded
+- **Status:** complete
+
+### Phase 2: Implementation
+- [x] Merge supported recipes into `justfile`
+- [x] Preserve current repo-specific recipes such as `dsl-dev`, frontend helpers, and existing docs commands
+- [x] Avoid importing template-only `copy` behavior
+- **Status:** complete
+
+### Phase 3: Verification
+- [x] Run `just --list`
+- [x] Run a targeted `just` recipe check for the merged commands
+- [x] Record which recipes were merged versus skipped
+- **Status:** complete
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Treat repo-local support files under `scripts/` as the gate for importing copied recipes | A recipe without its backing script or files would just add dead commands |
+| Skip the `copy` recipe from `justfile copy` | It is still template-oriented, references `config.toml`, and hard-codes the old template project name |
+| Keep existing `dsl-dev`, frontend, and basic sync recipes as the base | They already match this repository's current workflow and docs |
+
+## Completion Summary
+- **Status:** Complete (2026-03-19)
+- **Tests:**
+  - `just --list` -> PASS
+  - `just --summary` -> PASS
+  - `just --dry-run export-env-zip /tmp/koda-env.zip` -> PASS
+  - `just --dry-run worktree-doctor demo-branch` -> PASS
+  - `just --dry-run full-sync true` -> PASS
+  - `git diff --check -- justfile task_plan.md findings.md progress.md` -> PASS
+- **Deliverables:**
+  - `justfile` - merged reusable recipes from `justfile copy`, upgraded `docs-serve`, added optional completion support to `full-sync`, and imported release/worktree/test/env helper recipes without the template-only `copy` recipe
+  - `task_plan.md`, `findings.md`, `progress.md` - recorded merge scope, rationale, and verification evidence
+
+---
+
 # Task Plan: PRD Output Must Include AI-Summarized Requirement Name
 
 **Goal**: Make the PRD generation contract explicitly require both the original requirement title and an AI-summarized requirement name at the top of the generated PRD, with prompt logic that is testable, documented, and compatible with the existing `tasks/prd-{task_id[:8]}.md` file flow and stage transitions.
