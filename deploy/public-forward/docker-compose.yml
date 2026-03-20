@@ -51,13 +51,13 @@ services:
         # Run the gateway through the Python module entrypoint.
         CMD ["python", "-m", "forwarding_service.server.main"]
     environment:
-      GATEWAY_HOST: 0.0.0.0
-      GATEWAY_PORT: 9000
-      KODA_TUNNEL_ID: ${KODA_TUNNEL_ID:?KODA_TUNNEL_ID must be set}
-      KODA_TUNNEL_SHARED_TOKEN: ${KODA_TUNNEL_SHARED_TOKEN:?KODA_TUNNEL_SHARED_TOKEN must be set}
-      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
-      KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS: ${KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS:-30}
-      KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS: ${KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS:-45}
+      - GATEWAY_HOST=0.0.0.0
+      - GATEWAY_PORT=9000
+      - KODA_TUNNEL_ID
+      - KODA_TUNNEL_SHARED_TOKEN
+      - GATEWAY_LOG_LEVEL=INFO
+      - KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS=30
+      - KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS=45
     expose:
       - "9000"
     restart: unless-stopped
@@ -90,9 +90,9 @@ services:
       gateway:
         condition: service_healthy
     environment:
-      CADDY_BASICAUTH_USER: ${CADDY_BASICAUTH_USER:?CADDY_BASICAUTH_USER must be set}
-      CADDY_BASICAUTH_PASSWORD: ${CADDY_BASICAUTH_PASSWORD:-}
-      CADDY_BASICAUTH_HASH: ${CADDY_BASICAUTH_HASH:-}
+      - CADDY_BASICAUTH_USER
+      - CADDY_BASICAUTH_PASSWORD
+      - CADDY_BASICAUTH_HASH
     entrypoint: ["/bin/sh", "/opt/koda/start-caddy.sh"]
     expose:
       - "80"

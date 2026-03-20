@@ -18,6 +18,12 @@ HOP_BY_HOP_HEADER_NAME_SET = {
     "upgrade",
 }
 
+# Headers that must be stripped when forwarding to the local upstream.
+# "host" is set automatically by httpx from the target URL; forwarding the
+# original public-domain Host header causes Starlette to build redirect
+# Location values that point at the public domain instead of the upstream.
+UPSTREAM_REQUEST_STRIP_HEADER_NAME_SET = HOP_BY_HOP_HEADER_NAME_SET | {"host"}
+
 FRAMEWORK_OWNED_RESPONSE_HEADER_NAME_SET = {
     "content-length",
 }
@@ -73,18 +79,21 @@ def build_header_entry_list(
 def build_header_tuple_list(
     header_entry_list: Iterable[TunnelHeaderEntry],
 ) -> list[tuple[str, str]]:
-    """Convert serializable header entries back into `(name, value)` tuples.
+    """Convert serializable header entries into upstream-safe `(name, value)` tuples.
+
+    Strips hop-by-hop headers and the ``host`` header so that the upstream
+    HTTP client can set the correct ``Host`` for the local target URL.
 
     Args:
         header_entry_list: Serialized header entries.
 
     Returns:
-        list[tuple[str, str]]: Filtered header tuples without hop-by-hop headers.
+        list[tuple[str, str]]: Filtered header tuples safe to forward upstream.
     """
     return [
         (header_entry.name, header_entry.value)
         for header_entry in header_entry_list
-        if header_entry.name.lower() not in HOP_BY_HOP_HEADER_NAME_SET
+        if header_entry.name.lower() not in UPSTREAM_REQUEST_STRIP_HEADER_NAME_SET
     ]
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -60,12 +61,47 @@ class UpstreamHttpBridge:
             headers=build_header_tuple_list(request_message.headers),
             content=decode_body_text(request_message.body_base64),
         )
+        rewritten_response_headers = self._rewrite_upstream_location_headers(
+            upstream_response.headers.items()
+        )
         return AgentHttpResponseMessage(
             request_id=request_message.request_id,
             status_code=upstream_response.status_code,
-            headers=build_header_entry_list(upstream_response.headers.items()),
+            headers=build_header_entry_list(rewritten_response_headers),
             body_base64=encode_body_bytes(upstream_response.content),
         )
+
+    def _rewrite_upstream_location_headers(
+        self,
+        raw_header_pairs: Iterable[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Rewrite absolute Location headers that point at the local upstream.
+
+        Starlette builds redirect Location values using the request Host header.
+        Because the gateway strips the Host before forwarding, the Location may
+        still contain the upstream base URL (e.g. ``http://127.0.0.1:8000/foo``).
+        Convert these to root-relative paths so the browser follows them on the
+        public domain instead of trying to contact the internal address.
+
+        Args:
+            raw_header_pairs: Raw ``(name, value)`` pairs from the upstream response.
+
+        Returns:
+            list[tuple[str, str]]: Header pairs with upstream-origin Location
+                values replaced by their root-relative equivalents.
+        """
+        rewritten_header_pair_list: list[tuple[str, str]] = []
+        for header_name, header_value in raw_header_pairs:
+            if (
+                header_name.lower() == "location"
+                and header_value.startswith(self._upstream_base_url)
+            ):
+                relative_location_path = header_value[len(self._upstream_base_url):]
+                if not relative_location_path.startswith("/"):
+                    relative_location_path = "/" + relative_location_path
+                header_value = relative_location_path
+            rewritten_header_pair_list.append((header_name, header_value))
+        return rewritten_header_pair_list
 
     def _build_upstream_request_url(self, request_path: str, query_string: str) -> str:
         """Build the concrete local upstream request URL.
