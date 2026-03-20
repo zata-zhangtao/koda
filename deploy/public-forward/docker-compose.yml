@@ -2,7 +2,54 @@ services:
   gateway:
     build:
       context: ../..
-      dockerfile: deploy/public-forward/Dockerfile.gateway
+      dockerfile_inline: |
+        # Builder stage: resolve and install Python dependencies into an isolated virtualenv.
+        FROM python:3.13-slim AS builder
+
+        # Keep Python deterministic and make uv copy files instead of hard-linking across layers.
+        ENV PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONUNBUFFERED=1 \
+            UV_LINK_MODE=copy \
+            UV_PROJECT_ENVIRONMENT=/app/.venv
+
+        # Install uv once in the builder so dependency resolution stays cacheable.
+        RUN pip install --no-cache-dir uv
+
+        WORKDIR /app
+
+        # Copy dependency manifests first to maximize Docker layer cache hits.
+        COPY pyproject.toml uv.lock ./
+
+        # Install only runtime dependencies; the gateway runs directly from source in the final image.
+        RUN uv sync --frozen --no-dev --no-install-project
+
+        # Copy only the forwarding service source needed at runtime.
+        COPY forwarding_service ./forwarding_service
+
+
+        # Runtime stage: minimal non-root image that only contains deps + gateway source.
+        FROM python:3.13-slim AS runtime
+
+        # Keep logs unbuffered and use the builder-created virtualenv as the default PATH.
+        ENV PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONUNBUFFERED=1 \
+            PATH=/app/.venv/bin:$PATH
+
+        # Create a dedicated non-root user for the long-running gateway process.
+        RUN groupadd --system appuser && useradd --system --gid appuser --create-home --home-dir /app appuser
+
+        WORKDIR /app
+
+        # Copy the virtualenv and gateway source from the builder stage.
+        COPY --from=builder /app/.venv /app/.venv
+        COPY --from=builder /app/forwarding_service /app/forwarding_service
+
+        USER appuser
+
+        EXPOSE 9000
+
+        # Run the gateway through the Python module entrypoint.
+        CMD ["python", "-m", "forwarding_service.server.main"]
     environment:
       GATEWAY_HOST: 0.0.0.0
       GATEWAY_PORT: 9000
@@ -53,10 +100,15 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/opt/koda/Caddyfile.template:ro
-      - ./start-caddy.sh:/opt/koda/start-caddy.sh:ro
       - caddy_data:/data
       - caddy_config:/config
+    configs:
+      - source: caddyfile_template
+        target: /opt/koda/Caddyfile.template
+        mode: 0444
+      - source: start_caddy_sh
+        target: /opt/koda/start-caddy.sh
+        mode: 0555
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/Caddyfile.generated && caddy validate --config /tmp/Caddyfile.generated"]
@@ -82,3 +134,53 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+
+configs:
+  caddyfile_template:
+    content: |
+      {
+          email {$CADDY_ACME_EMAIL}
+      }
+
+      {$KODA_PUBLIC_HOST} {
+          encode gzip zstd
+
+          @tunnel_ws path /ws/tunnels/*
+          handle @tunnel_ws {
+              reverse_proxy gateway:9000
+          }
+
+          handle {
+              basicauth {
+                  {$CADDY_BASICAUTH_USER} __CADDY_BASICAUTH_HASH__
+              }
+              reverse_proxy gateway:9000
+          }
+      }
+
+  start_caddy_sh:
+    content: |
+      #!/bin/sh
+      set -eu
+
+      caddyfile_template_path="/opt/koda/Caddyfile.template"
+      generated_caddyfile_path="/tmp/Caddyfile.generated"
+
+      basic_auth_plaintext_password="${CADDY_BASICAUTH_PASSWORD:-}"
+      basic_auth_configured_hash="${CADDY_BASICAUTH_HASH:-}"
+
+      if [ -n "$basic_auth_plaintext_password" ]; then
+          basic_auth_effective_hash="$(caddy hash-password --plaintext "$basic_auth_plaintext_password")"
+      elif [ -n "$basic_auth_configured_hash" ]; then
+          basic_auth_effective_hash="$basic_auth_configured_hash"
+      else
+          echo "Either CADDY_BASICAUTH_PASSWORD or CADDY_BASICAUTH_HASH must be set." >&2
+          exit 1
+      fi
+
+      # Escape sed replacement metacharacters before injecting the hash into the template.
+      basic_auth_escaped_hash="$(printf '%s\n' "$basic_auth_effective_hash" | sed 's/[\\/&]/\\&/g')"
+      sed "s/__CADDY_BASICAUTH_HASH__/$basic_auth_escaped_hash/g" "$caddyfile_template_path" > "$generated_caddyfile_path"
+
+      caddy validate --config "$generated_caddyfile_path"
+      exec caddy run --config "$generated_caddyfile_path" --adapter caddyfile
