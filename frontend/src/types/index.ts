@@ -89,6 +89,7 @@ export interface Task {
   created_at: string;
   closed_at: string | null;
   log_count: number;
+  is_codex_task_running: boolean;
 }
 
 /** DevLog 类型 */

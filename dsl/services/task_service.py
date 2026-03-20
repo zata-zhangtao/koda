@@ -427,7 +427,6 @@ class TaskService:
             WorkflowStage.TEST_IN_PROGRESS,
             WorkflowStage.PR_PREPARING,
             WorkflowStage.ACCEPTANCE_IN_PROGRESS,
-            WorkflowStage.CHANGES_REQUESTED,
         }
         if task_obj.workflow_stage not in allowed_source_stages:
             raise ValueError(

@@ -52,7 +52,7 @@ class WorkflowStage(str, Enum):
         TEST_IN_PROGRESS: 自检通过，拉起容器执行自动化测试
         PR_PREPARING: 测试通过，正在整理变更并创建 PR
         ACCEPTANCE_IN_PROGRESS: PR 已创建，验收员或用户正在验收
-        CHANGES_REQUESTED: 验收不通过，等待修改后重新执行
+        CHANGES_REQUESTED: AI 无法自行完成闭环或人工要求修改，等待人工介入后重新执行
         DONE: 需求验收完成，已关闭
     """
 

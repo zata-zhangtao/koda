@@ -295,6 +295,35 @@ def test_prepare_task_completion_rejects_tasks_without_worktree(
         TaskService.prepare_task_completion(db_session, created_task.id)
 
 
+def test_prepare_task_completion_rejects_changes_requested_tasks(
+    db_session: Session,
+) -> None:
+    """Completion should reject worktree tasks that still require rerun after manual changes."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_create_schema = TaskCreateSchema(task_title="Finalize branch")
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=task_create_schema,
+        run_account_id=run_account_obj.id,
+    )
+    created_task.worktree_path = "/tmp/project-wt-12345678"
+    created_task.workflow_stage = WorkflowStage.CHANGES_REQUESTED
+    created_task.lifecycle_status = TaskLifecycleStatus.OPEN
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="cannot complete from stage 'changes_requested'"):
+        TaskService.prepare_task_completion(db_session, created_task.id)
+
+
 def test_start_task_persists_created_worktree_path_under_task_root(
     db_session: Session,
     tmp_path: Path,

@@ -10,7 +10,7 @@ import type {
   ReactNode,
   SVGProps,
 } from "react";
-import { startTransition, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -27,7 +27,6 @@ import {
   formatDateTime,
   formatHourMinute,
   formatMonthDay,
-  shiftApiDateByMilliseconds,
   toTimestampValue,
 } from "./utils/datetime";
 import {
@@ -60,7 +59,6 @@ interface RequirementViewModel {
   task: Task;
   description: string;
   stage: RequirementStage;
-  stageLabel: string;
   createdLabel: string;
 }
 
@@ -102,8 +100,6 @@ type MutationName =
 const GUEST_USER_LABEL = "Guest User";
 const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
-const SELF_REVIEW_STARTED_LOG_MARKER = "🔍 已进入 AI 自检阶段，开始执行代码评审。";
-const SELF_REVIEW_PASSED_LOG_MARKER = "✅ AI 自检完成，未发现阻塞性问题。";
 
 const CONTINUE_COMMAND_PATTERNS = [
   /^go\s+on$/i,
@@ -116,34 +112,14 @@ const CONTINUE_COMMAND_PATTERNS = [
   /^go$/i,
   /^resume$/i,
 ];
-
-const ACTIVE_EXECUTION_STAGE_SET = new Set<WorkflowStage>([
-  WorkflowStage.PRD_GENERATING,
-  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
-  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
-  WorkflowStage.TEST_IN_PROGRESS,
-  WorkflowStage.PR_PREPARING,
-]);
-
-const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
-  WorkflowStage.PRD_WAITING_CONFIRMATION,
-  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
-  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
-  WorkflowStage.TEST_IN_PROGRESS,
-  WorkflowStage.PR_PREPARING,
-  WorkflowStage.ACCEPTANCE_IN_PROGRESS,
-  WorkflowStage.CHANGES_REQUESTED,
-]);
-
-const ACTIVE_TASK_LIST_POLL_INTERVAL_MS = 3000;
-const ACTIVE_TASK_LOG_POLL_INTERVAL_MS = 2000;
-const IDLE_TASK_LOG_POLL_INTERVAL_MS = 6000;
-const SELECTED_TASK_INITIAL_LOG_LIMIT = 2000;
-const SELECTED_TASK_POLL_LOG_LIMIT = 120;
-const SELECTED_TASK_LOG_POLL_OVERLAP_MS = -15000;
-const TIMELINE_INITIAL_VISIBLE_LOG_COUNT = 160;
-const TIMELINE_VISIBLE_LOG_INCREMENT = 160;
-const DOCUMENT_SUMMARY_LOG_LIMIT = 160;
+const SELF_REVIEW_PASSED_LOG_MARKER_LIST = [
+  "AI 自检闭环完成",
+  "AI 自检完成，未发现阻塞性问题",
+];
+const SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
+  "开始第 1 轮代码评审",
+  "开始执行代码评审",
+];
 
 function _isContinueCommand(text: string): boolean {
   const trimmed = text.trim();
@@ -151,9 +127,9 @@ function _isContinueCommand(text: string): boolean {
 }
 
 function App() {
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const aiTurnBodyElementByTurnIdRef = useRef<Record<string, HTMLDivElement | null>>({});
   const previousExpandedTurnIdSetRef = useRef<Set<string>>(new Set());
-  const selectedTaskLatestLogCreatedAtRef = useRef<string | null>(null);
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -169,6 +145,9 @@ function App() {
   const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
+  const [feedbackInputText, setFeedbackInputText] = useState("");
+  const [feedbackAttachmentDraft, setFeedbackAttachmentDraft] =
+    useState<AttachmentDraft | null>(null);
   const [activeMutationName, setActiveMutationName] = useState<MutationName>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -176,9 +155,6 @@ function App() {
   const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
   const [expandedTurnIdSet, setExpandedTurnIdSet] = useState<Set<string>>(new Set());
-  const [visibleTimelineLogCount, setVisibleTimelineLogCount] = useState(
-    TIMELINE_INITIAL_VISIBLE_LOG_COUNT
-  );
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
@@ -212,6 +188,14 @@ function App() {
   useEffect(() => {
     void initializeDashboard();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(feedbackAttachmentDraft.previewUrl);
+      }
+    };
+  }, [feedbackAttachmentDraft]);
 
   useEffect(() => {
     if (
@@ -273,12 +257,6 @@ function App() {
         ? selectedTaskLogList
         : devLogsByTaskId[selectedTask.id] ?? [])
     : [];
-  const visibleSelectedTaskDevLogs =
-    selectedTaskDevLogs.length > visibleTimelineLogCount
-      ? selectedTaskDevLogs.slice(-visibleTimelineLogCount)
-      : selectedTaskDevLogs;
-  const hiddenTimelineLogCount =
-    selectedTaskDevLogs.length - visibleSelectedTaskDevLogs.length;
   const selectedTaskSnapshot = selectedTask
     ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
     : null;
@@ -291,17 +269,13 @@ function App() {
     buildRequirementViewModel(taskItem, devLogsByTaskId[taskItem.id] ?? [])
   );
   const selectedTimelineItemList = selectedTask
-    ? visibleSelectedTaskDevLogs.map((devLogItem) =>
+    ? selectedTaskDevLogs.map((devLogItem) =>
         buildTimelineViewModel(devLogItem, currentRunAccount)
       )
     : [];
   const selectedTaskStage = selectedTask
     ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
     : null;
-  const selectedTaskStageLabel =
-    selectedTask && selectedTaskStage
-      ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
-      : null;
   const conversationTurnList = groupTimelineIntoConversationTurns(selectedTimelineItemList);
   const latestAiConversationTurn =
     [...conversationTurnList].reverse().find((turnItem) => turnItem.kind === "ai") ?? null;
@@ -310,30 +284,19 @@ function App() {
     latestAiConversationTurn && latestAiConversationTurn.items.length > 0
       ? latestAiConversationTurn.items[latestAiConversationTurn.items.length - 1].log.id
       : null;
-  const shouldRenderFallbackTaskDocument = Boolean(
-    selectedTask &&
-      (
-        !prdFileContent ||
-        selectedTaskStage === WorkflowStage.BACKLOG ||
-        selectedTaskStage === WorkflowStage.DONE ||
-        selectedTaskStage === WorkflowStage.PRD_GENERATING
-      )
-  );
   const selectedTaskDocumentMarkdown = selectedTask
-    && selectedTaskSnapshot
-    && selectedTaskStage
-    && shouldRenderFallbackTaskDocument
     ? buildTaskDocumentMarkdown(
         selectedTask,
-        selectedTaskStageLabel ?? formatStageLabel(selectedTaskStage),
-        selectedTaskSnapshot,
-        selectedTaskDevLogs.slice(-DOCUMENT_SUMMARY_LOG_LIMIT),
+        selectedTaskDevLogs,
         currentRunAccount
       )
     : "";
   const currentUserLabel =
     currentRunAccount?.account_display_name || GUEST_USER_LABEL;
   const canCreateRequirements = workspaceView === "active";
+  const selectedTaskHasSettledSelfReview = selectedTask
+    ? hasLatestSelfReviewCyclePassed(selectedTaskDevLogs)
+    : false;
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
@@ -342,27 +305,23 @@ function App() {
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
     : false;
+  const hasFeedbackPayload =
+    Boolean(feedbackInputText.trim()) || feedbackAttachmentDraft !== null;
 
-  const isSelectedTaskInActiveExecution = selectedTask
-    ? isTaskInActiveExecution(selectedTask, selectedTaskDevLogs)
+  const isSelectedTaskInActiveExecution =
+    selectedTask?.is_codex_task_running ?? false;
+  const canCompleteSelectedTask = selectedTask
+    ? canCompleteTask(selectedTask, selectedTaskStage) &&
+      !selectedTask.is_codex_task_running
     : false;
 
   useEffect(() => {
     if (!isSelectedTaskInActiveExecution) {
       return;
     }
-
-    const pollActiveTaskList = () => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void loadTaskListData();
-    };
-
     const pollingIntervalId = window.setInterval(() => {
-      pollActiveTaskList();
-    }, ACTIVE_TASK_LIST_POLL_INTERVAL_MS);
-
+      void loadDashboardData(true);
+    }, 1000);
     return () => {
       window.clearInterval(pollingIntervalId);
     };
@@ -407,6 +366,8 @@ function App() {
     setIsCreatePanelOpen(false);
     resetCreateRequirementDraft();
     setIsEditPanelOpen(false);
+    setFeedbackInputText("");
+    setFeedbackAttachmentDraft(null);
     setSuccessMessage(null);
     setErrorMessage(null);
     setPrdFileContent(null);
@@ -458,103 +419,42 @@ function App() {
     latestAiTurnBodyElement.scrollTop = latestAiTurnBodyElement.scrollHeight;
   }, [expandedTurnIdSet, lastAiTurnId, latestAiTurnLastItemId]);
 
+  // 当选中任务有 worktree 且处于 PRD 相关阶段时，轮询 PRD 文件内容
+  const prdRelevantStageSet = new Set<WorkflowStage>([
+    // PRD_GENERATING 不在这里：生成中阶段强制显示 banner，不读旧文件
+    WorkflowStage.PRD_WAITING_CONFIRMATION,
+    WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    WorkflowStage.TEST_IN_PROGRESS,
+    WorkflowStage.PR_PREPARING,
+    WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+    WorkflowStage.CHANGES_REQUESTED,
+  ]);
+
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
     setPrdFileContent(null);
   }, [selectedTaskId]);
 
-  useEffect(() => {
-    setVisibleTimelineLogCount(TIMELINE_INITIAL_VISIBLE_LOG_COUNT);
-  }, [selectedTaskId]);
-
-  // 切换任务时拉取一次完整日志列表，确保时间线仍可回看历史内容。
+  // 按任务拉取完整日志列表，避免全局 100 条限制导致时间线空白
   useEffect(() => {
     if (!selectedTaskId) {
       setSelectedTaskLogList([]);
       return;
     }
     let cancelled = false;
-
-    logApi
-      .list(selectedTaskId, SELECTED_TASK_INITIAL_LOG_LIMIT)
-      .then((logs) => {
-        if (!cancelled) {
-          const nextSelectedTaskLogList = sortDevLogListByCreatedAt(logs);
-          startTransition(() => {
-            setSelectedTaskLogList((previousLogList) =>
-              areDevLogListsEquivalent(previousLogList, nextSelectedTaskLogList)
-                ? previousLogList
-                : nextSelectedTaskLogList
-            );
-          });
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
+    const fetch = () => {
+      logApi.list(selectedTaskId, 2000).then((logs) => {
+        if (!cancelled) setSelectedTaskLogList(sortDevLogListByCreatedAt(logs));
+      }).catch(() => {});
     };
-  }, [selectedTaskId, workspaceView]);
-
-  useEffect(() => {
-    selectedTaskLatestLogCreatedAtRef.current = null;
-  }, [selectedTaskId]);
-
-  useEffect(() => {
-    const latestSelectedTaskLog =
-      selectedTaskLogList.length > 0
-        ? selectedTaskLogList[selectedTaskLogList.length - 1]
-        : null;
-    selectedTaskLatestLogCreatedAtRef.current = latestSelectedTaskLog?.created_at ?? null;
-  }, [selectedTaskLogList]);
-
-  // 任务详情页保留轻量轮询，但只拉最新窗口并与本地历史合并。
-  useEffect(() => {
-    if (!selectedTaskId) {
-      return;
-    }
-
-    let cancelled = false;
-    const nextLogPollIntervalMs = isSelectedTaskInActiveExecution
-      ? ACTIVE_TASK_LOG_POLL_INTERVAL_MS
-      : IDLE_TASK_LOG_POLL_INTERVAL_MS;
-
-    const pollRecentLogs = () => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-
-      const incrementalCreatedAfter = selectedTaskLatestLogCreatedAtRef.current
-        ? shiftApiDateByMilliseconds(
-            selectedTaskLatestLogCreatedAtRef.current,
-            SELECTED_TASK_LOG_POLL_OVERLAP_MS
-          )
-        : null;
-
-      logApi
-        .list(selectedTaskId, SELECTED_TASK_POLL_LOG_LIMIT, {
-          createdAfter: incrementalCreatedAfter,
-        })
-        .then((logs) => {
-          if (cancelled) {
-            return;
-          }
-          const nextRecentLogList = sortDevLogListByCreatedAt(logs);
-          startTransition(() => {
-            setSelectedTaskLogList((previousLogList) =>
-              mergeDevLogLists(previousLogList, nextRecentLogList)
-            );
-          });
-        })
-        .catch(() => {});
-    };
-
-    const pollId = window.setInterval(pollRecentLogs, nextLogPollIntervalMs);
+    fetch();
+    const pollId = window.setInterval(fetch, 2000);
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
     };
-  }, [selectedTaskId, isSelectedTaskInActiveExecution]);
+  }, [selectedTaskId]);
 
   // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
   const _prdPollTask = taskList.find((t) => t.id === selectedTaskId);
@@ -565,7 +465,7 @@ function App() {
   const _prdPollActive =
     _prdWorktreePath !== null &&
     _prdPollStage !== null &&
-    PRD_RELEVANT_STAGE_SET.has(_prdPollStage);
+    prdRelevantStageSet.has(_prdPollStage);
 
   useEffect(() => {
     if (!selectedTaskId || !_prdPollActive) return;
@@ -585,30 +485,6 @@ function App() {
     return () => window.clearInterval(prdPollId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTaskId, _prdPollActive, _prdWorktreePath]);
-
-  async function loadTaskListData(): Promise<void> {
-    try {
-      const nextTaskList = sortTaskListByCreatedAt(await taskApi.list());
-      startTransition(() => {
-        setTaskList((previousTaskList) =>
-          areTaskListsEquivalent(previousTaskList, nextTaskList)
-            ? previousTaskList
-            : nextTaskList
-        );
-        setSelectedTaskId((previousSelectedTaskId) => {
-          if (!previousSelectedTaskId) {
-            return previousSelectedTaskId;
-          }
-          const hasMatchingTask = nextTaskList.some(
-            (taskItem) => taskItem.id === previousSelectedTaskId
-          );
-          return hasMatchingTask ? previousSelectedTaskId : null;
-        });
-      });
-    } catch (taskListError) {
-      console.error("Failed to refresh requirements:", taskListError);
-    }
-  }
 
   async function loadDashboardData(silent = false): Promise<void> {
     if (!silent) {
@@ -635,19 +511,13 @@ function App() {
     }
     if (taskListResult.status === "fulfilled") {
       const nextTaskList = sortTaskListByCreatedAt(taskListResult.value);
-      startTransition(() => {
-        setTaskList((previousTaskList) =>
-          areTaskListsEquivalent(previousTaskList, nextTaskList)
-            ? previousTaskList
-            : nextTaskList
+      setTaskList(nextTaskList);
+      setSelectedTaskId((previousSelectedTaskId) => {
+        if (!previousSelectedTaskId) return previousSelectedTaskId;
+        const hasMatchingTask = nextTaskList.some(
+          (taskItem) => taskItem.id === previousSelectedTaskId
         );
-        setSelectedTaskId((previousSelectedTaskId) => {
-          if (!previousSelectedTaskId) return previousSelectedTaskId;
-          const hasMatchingTask = nextTaskList.some(
-            (taskItem) => taskItem.id === previousSelectedTaskId
-          );
-          return hasMatchingTask ? previousSelectedTaskId : null;
-        });
+        return hasMatchingTask ? previousSelectedTaskId : null;
       });
     }
     if (devLogListResult.status === "fulfilled") {
@@ -655,28 +525,6 @@ function App() {
     }
     if (projectListResult.status === "fulfilled") {
       setProjectList(projectListResult.value);
-    }
-
-    if (selectedTaskId) {
-      try {
-        const nextSelectedTaskLogList = sortDevLogListByCreatedAt(
-          await logApi.list(selectedTaskId, SELECTED_TASK_POLL_LOG_LIMIT, {
-            createdAfter: selectedTaskLatestLogCreatedAtRef.current
-              ? shiftApiDateByMilliseconds(
-                  selectedTaskLatestLogCreatedAtRef.current,
-                  SELECTED_TASK_LOG_POLL_OVERLAP_MS
-                )
-              : null,
-          })
-        );
-        startTransition(() => {
-          setSelectedTaskLogList((previousLogList) =>
-            mergeDevLogLists(previousLogList, nextSelectedTaskLogList)
-          );
-        });
-      } catch (selectedTaskLogError) {
-        console.error("Failed to refresh selected task logs.", selectedTaskLogError);
-      }
     }
 
     const dashboardErrors: string[] = [];
@@ -1012,9 +860,14 @@ function App() {
 
     try {
       if (taskItem.worktree_path) {
+        const isManualSelfReviewOverride =
+          taskItem.workflow_stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
+          !hasLatestSelfReviewCyclePassed(devLogsByTaskId[taskItem.id] ?? []);
         await taskApi.complete(taskItem.id);
         setSuccessMessage(
-          "Koda is finalizing the branch: git add ., commit from the task summary, rebase main, auto-fix rebase conflicts with Codex if needed, merge into main, and clean up the worktree."
+          isManualSelfReviewOverride
+            ? "已记录人工接管，Koda 正在执行 Git 收尾：git add .、基于任务摘要提交、rebase main、必要时自动修复冲突、合并到 main，并清理 worktree。"
+            : "Koda is finalizing the branch: git add ., commit from the task summary, rebase main, auto-fix rebase conflicts with Codex if needed, merge into main, and clean up the worktree."
         );
         await loadDashboardData(true);
         return;
@@ -1076,17 +929,14 @@ function App() {
     }
   }
 
-  async function handleFeedbackSubmit(
-    feedbackText: string,
-    attachmentDraft: AttachmentDraft | null
-  ): Promise<boolean> {
+  async function handleFeedbackSubmit(): Promise<void> {
     if (!selectedTask) {
-      return false;
+      return;
     }
 
-    const nextFeedbackInputText = feedbackText.trim();
-    if (!nextFeedbackInputText && !attachmentDraft) {
-      return false;
+    const nextFeedbackInputText = feedbackInputText.trim();
+    if (!nextFeedbackInputText && !feedbackAttachmentDraft) {
+      return;
     }
 
     setActiveMutationName("feedback");
@@ -1094,16 +944,16 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      if (attachmentDraft) {
-        if (attachmentDraft.kind === "image") {
+      if (feedbackAttachmentDraft) {
+        if (feedbackAttachmentDraft.kind === "image") {
           await mediaApi.uploadImage(
-            attachmentDraft.file,
+            feedbackAttachmentDraft.file,
             nextFeedbackInputText,
             selectedTask.id
           );
         } else {
           await mediaApi.uploadAttachment(
-            attachmentDraft.file,
+            feedbackAttachmentDraft.file,
             nextFeedbackInputText,
             selectedTask.id
           );
@@ -1116,9 +966,15 @@ function App() {
         });
       }
 
+      setFeedbackInputText("");
+      setFeedbackAttachmentDraft(null);
+      if (attachmentInputRef.current) {
+        attachmentInputRef.current.value = "";
+      }
+
       // 若用户输入了继续指令，根据当前阶段自动恢复执行
       const isContinueCommand = _isContinueCommand(nextFeedbackInputText);
-      if (isContinueCommand && !attachmentDraft) {
+      if (isContinueCommand && !feedbackAttachmentDraft) {
         const stage = selectedTask.workflow_stage;
         if (stage === WorkflowStage.CHANGES_REQUESTED) {
           // 正常重试：直接触发执行
@@ -1126,10 +982,7 @@ function App() {
           setTaskList((prev) =>
             prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
           );
-        } else if (
-          stage === WorkflowStage.IMPLEMENTATION_IN_PROGRESS ||
-          stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS
-        ) {
+        } else if (stage === WorkflowStage.IMPLEMENTATION_IN_PROGRESS) {
           // 进程已死但阶段未更新：先取消（强制回到 changes_requested），再重新执行
           const cancelledTask = await taskApi.cancel(selectedTask.id);
           setTaskList((prev) =>
@@ -1139,18 +992,78 @@ function App() {
           setTaskList((prev) =>
             prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
           );
+        } else if (stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
+          if (selectedTask.is_codex_task_running) {
+            setSuccessMessage("AI 自检仍在执行中，请等待当前评审结束，或先手动中断。");
+          } else if (selectedTaskHasSettledSelfReview) {
+            setSuccessMessage("AI 自检已通过，点击 Complete 进入 Git 收尾。");
+          } else {
+            setSuccessMessage("AI 自检已停止但尚未形成通过结论，可直接点击 Complete 进行人工接管。");
+          }
         }
       }
 
       await loadDashboardData(true);
-      return true;
     } catch (feedbackError) {
       console.error(feedbackError);
       setErrorMessage("Failed to process feedback.");
-      return false;
     } finally {
       setActiveMutationName(null);
     }
+  }
+
+  function handleFeedbackKeyDown(
+    keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
+  ): void {
+    if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
+      keyboardEvent.preventDefault();
+      void handleFeedbackSubmit();
+    }
+  }
+
+  function handleFeedbackPaste(
+    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+  ): void {
+    const clipboardItemList = Array.from(clipboardEvent.clipboardData.items);
+    const pastedFile = clipboardItemList.find(
+      (clipboardItem) => clipboardItem.kind === "file"
+    )?.getAsFile();
+
+    if (!pastedFile) {
+      return;
+    }
+
+    clipboardEvent.preventDefault();
+    setAttachmentDraftFromFile(pastedFile);
+  }
+
+  function handleAttachmentInputChange(
+    changeEvent: ChangeEvent<HTMLInputElement>
+  ): void {
+    const nextFile = changeEvent.target.files?.[0];
+    if (!nextFile) {
+      return;
+    }
+
+    setAttachmentDraftFromFile(nextFile);
+  }
+
+  function setAttachmentDraftFromFile(nextFile: File): void {
+    setFeedbackAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+
+      return {
+        file: nextFile,
+        kind: nextFile.type.startsWith("image/") ? "image" : "file",
+        previewUrl: nextFile.type.startsWith("image/")
+          ? URL.createObjectURL(nextFile)
+          : null,
+      };
+    });
+    setSuccessMessage(null);
+    setErrorMessage(null);
   }
 
   async function handleCreateProject(): Promise<void> {
@@ -1258,6 +1171,18 @@ function App() {
     } catch (err) {
       console.error(err);
       setErrorMessage(err instanceof Error ? err.message : "删除项目失败。");
+    }
+  }
+
+  function clearAttachmentDraft(): void {
+    setFeedbackAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+      return null;
+    });
+    if (attachmentInputRef.current) {
+      attachmentInputRef.current.value = "";
     }
   }
 
@@ -1667,10 +1592,7 @@ function App() {
                     )}
                   >
                     <div className="devflow-requirement-card__meta">
-                      <StatusBadge
-                        status={requirementViewModel.stage}
-                        label={requirementViewModel.stageLabel}
-                      />
+                      <StatusBadge status={requirementViewModel.stage} />
                       <span className="devflow-requirement-card__date">
                         {requirementViewModel.createdLabel}
                       </span>
@@ -1698,10 +1620,7 @@ function App() {
                           {selectedTask.task_title}
                         </h2>
                         {selectedTaskStage ? (
-                          <StatusBadge
-                            status={selectedTaskStage}
-                            label={selectedTaskStageLabel ?? undefined}
-                          />
+                          <StatusBadge status={selectedTaskStage} />
                         ) : null}
                       </div>
                       <p className="devflow-detail__description">
@@ -1862,16 +1781,18 @@ function App() {
                             <EditIcon className="devflow-icon devflow-icon--small" />
                             <span>Edit Requirement</span>
                           </ActionButton>
-                          <ActionButton
-                            variant="outline"
-                            busy={activeMutationName === "complete"}
-                            onClick={() => {
-                              void handleCompleteRequirement(selectedTask);
-                            }}
-                          >
-                            <ArchiveIcon className="devflow-icon devflow-icon--small" />
-                            <span>Complete</span>
-                          </ActionButton>
+                          {canCompleteSelectedTask ? (
+                            <ActionButton
+                              variant="outline"
+                              busy={activeMutationName === "complete"}
+                              onClick={() => {
+                                void handleCompleteRequirement(selectedTask);
+                              }}
+                            >
+                              <ArchiveIcon className="devflow-icon devflow-icon--small" />
+                              <span>Complete</span>
+                            </ActionButton>
+                          ) : null}
                           <ActionButton
                             variant="ghost"
                             busy={activeMutationName === "delete"}
@@ -1945,26 +1866,6 @@ function App() {
                         <span>Timeline</span>
                       </h3>
 
-                      {hiddenTimelineLogCount > 0 ? (
-                        <div className="devflow-inline-message">
-                          <span>
-                            Showing latest {visibleSelectedTaskDevLogs.length} of{" "}
-                            {selectedTaskDevLogs.length} timeline entries.
-                          </span>
-                          <button
-                            type="button"
-                            className="devflow-project-item__action"
-                            onClick={() =>
-                              setVisibleTimelineLogCount((previousCount) =>
-                                previousCount + TIMELINE_VISIBLE_LOG_INCREMENT
-                              )
-                            }
-                          >
-                            Load older
-                          </button>
-                        </div>
-                      ) : null}
-
                       <div className="devflow-conversation">
                         {isSelectedTaskInActiveExecution ? (
                           <div className="devflow-execution-banner">
@@ -1972,10 +1873,11 @@ function App() {
                             <span>
                               {selectedTaskStage === WorkflowStage.PRD_GENERATING
                                 ? "AI 正在生成 PRD，请稍候..."
-                                : selectedTaskStage ===
-                                      WorkflowStage.SELF_REVIEW_IN_PROGRESS
-                                  ? "AI 正在执行自检，输出实时显示在下方..."
-                                  : "AI 正在执行编码，输出实时显示在下方..."}
+                                : selectedTaskStage === WorkflowStage.SELF_REVIEW_IN_PROGRESS
+                                  ? "AI 正在执行自检与代码评审，输出实时显示在下方..."
+                                  : selectedTaskStage === WorkflowStage.PR_PREPARING
+                                    ? "Koda 正在整理分支并执行合并收尾..."
+                                    : "AI 正在执行编码，输出实时显示在下方..."}
                             </span>
                             <button
                               type="button"
@@ -2164,11 +2066,90 @@ function App() {
                 </div>
 
                 {canSendFeedback ? (
-                  <FeedbackComposer
-                    key={selectedTask.id}
-                    busy={activeMutationName === "feedback"}
-                    onSubmit={handleFeedbackSubmit}
-                  />
+                  <div className="devflow-feedback">
+                    {feedbackAttachmentDraft ? (
+                      <div className="devflow-feedback__attachment">
+                        {feedbackAttachmentDraft.previewUrl ? (
+                          <img
+                            className="devflow-feedback__attachment-preview"
+                            src={feedbackAttachmentDraft.previewUrl}
+                            alt={feedbackAttachmentDraft.file.name}
+                          />
+                        ) : (
+                          <span className="devflow-feedback__attachment-icon">
+                            <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                          </span>
+                        )}
+
+                        <div className="devflow-feedback__attachment-copy">
+                          <span className="devflow-feedback__attachment-name">
+                            {feedbackAttachmentDraft.file.name}
+                          </span>
+                          <span className="devflow-feedback__attachment-meta">
+                            {feedbackAttachmentDraft.kind === "image"
+                              ? "Image attachment"
+                              : "File attachment"}
+                            {" · "}
+                            {formatFileSize(feedbackAttachmentDraft.file.size)}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="devflow-feedback__attachment-remove"
+                          onClick={clearAttachmentDraft}
+                        >
+                          <XIcon className="devflow-icon devflow-icon--small" />
+                        </button>
+                      </div>
+                    ) : null}
+
+                    <div className="devflow-feedback__composer">
+                      <button
+                        type="button"
+                        className="devflow-feedback__attach"
+                        onClick={() => attachmentInputRef.current?.click()}
+                        disabled={activeMutationName === "feedback"}
+                      >
+                        <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                      </button>
+
+                      <textarea
+                        className="devflow-feedback__textarea"
+                        placeholder="Ask AI to refine the PRD, or paste an image/file directly..."
+                        value={feedbackInputText}
+                        onChange={(changeEvent) =>
+                          setFeedbackInputText(changeEvent.target.value)
+                        }
+                        onKeyDown={handleFeedbackKeyDown}
+                        onPaste={handleFeedbackPaste}
+                      />
+
+                      <button
+                        type="button"
+                        className="devflow-feedback__send"
+                        onClick={() => {
+                          void handleFeedbackSubmit();
+                        }}
+                        disabled={
+                          activeMutationName === "feedback" || !hasFeedbackPayload
+                        }
+                      >
+                        <SendIcon className="devflow-icon devflow-icon--small" />
+                      </button>
+
+                      <input
+                        ref={attachmentInputRef}
+                        className="devflow-feedback__file-input"
+                        type="file"
+                        onChange={handleAttachmentInputChange}
+                      />
+                    </div>
+                    <p className="devflow-feedback__hint">
+                      Tip: Press Enter to send, Shift + Enter for new line, or paste an
+                      image/file directly into the composer.
+                    </p>
+                  </div>
                 ) : null}
               </div>
             ) : (
@@ -2207,190 +2188,6 @@ function App() {
           </div>
         </div>
       </footer>
-    </div>
-  );
-}
-
-interface FeedbackComposerProps {
-  busy: boolean;
-  onSubmit: (feedbackText: string, attachmentDraft: AttachmentDraft | null) => Promise<boolean>;
-}
-
-function FeedbackComposer({ busy, onSubmit }: FeedbackComposerProps) {
-  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
-  const [feedbackInputText, setFeedbackInputText] = useState("");
-  const [feedbackAttachmentDraft, setFeedbackAttachmentDraft] =
-    useState<AttachmentDraft | null>(null);
-  const hasFeedbackPayload =
-    Boolean(feedbackInputText.trim()) || feedbackAttachmentDraft !== null;
-
-  useEffect(() => {
-    return () => {
-      if (feedbackAttachmentDraft?.previewUrl) {
-        URL.revokeObjectURL(feedbackAttachmentDraft.previewUrl);
-      }
-    };
-  }, [feedbackAttachmentDraft]);
-
-  function setAttachmentDraftFromFile(nextFile: File): void {
-    setFeedbackAttachmentDraft((previousAttachmentDraft) => {
-      if (previousAttachmentDraft?.previewUrl) {
-        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
-      }
-
-      return {
-        file: nextFile,
-        kind: nextFile.type.startsWith("image/") ? "image" : "file",
-        previewUrl: nextFile.type.startsWith("image/")
-          ? URL.createObjectURL(nextFile)
-          : null,
-      };
-    });
-  }
-
-  function clearAttachmentDraft(): void {
-    setFeedbackAttachmentDraft((previousAttachmentDraft) => {
-      if (previousAttachmentDraft?.previewUrl) {
-        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
-      }
-      return null;
-    });
-    if (attachmentInputRef.current) {
-      attachmentInputRef.current.value = "";
-    }
-  }
-
-  async function submitComposerFeedback(): Promise<void> {
-    const isSubmissionSuccessful = await onSubmit(
-      feedbackInputText,
-      feedbackAttachmentDraft
-    );
-    if (!isSubmissionSuccessful) {
-      return;
-    }
-
-    setFeedbackInputText("");
-    clearAttachmentDraft();
-  }
-
-  function handleFeedbackKeyDown(
-    keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
-  ): void {
-    if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
-      keyboardEvent.preventDefault();
-      void submitComposerFeedback();
-    }
-  }
-
-  function handleFeedbackPaste(
-    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
-  ): void {
-    const clipboardItemList = Array.from(clipboardEvent.clipboardData.items);
-    const pastedFile = clipboardItemList.find(
-      (clipboardItem) => clipboardItem.kind === "file"
-    )?.getAsFile();
-
-    if (!pastedFile) {
-      return;
-    }
-
-    clipboardEvent.preventDefault();
-    setAttachmentDraftFromFile(pastedFile);
-  }
-
-  function handleAttachmentInputChange(
-    changeEvent: ChangeEvent<HTMLInputElement>
-  ): void {
-    const nextFile = changeEvent.target.files?.[0];
-    if (!nextFile) {
-      return;
-    }
-
-    setAttachmentDraftFromFile(nextFile);
-  }
-
-  return (
-    <div className="devflow-feedback">
-      {feedbackAttachmentDraft ? (
-        <div className="devflow-feedback__attachment">
-          {feedbackAttachmentDraft.previewUrl ? (
-            <img
-              className="devflow-feedback__attachment-preview"
-              src={feedbackAttachmentDraft.previewUrl}
-              alt={feedbackAttachmentDraft.file.name}
-            />
-          ) : (
-            <span className="devflow-feedback__attachment-icon">
-              <PaperclipIcon className="devflow-icon devflow-icon--small" />
-            </span>
-          )}
-
-          <div className="devflow-feedback__attachment-copy">
-            <span className="devflow-feedback__attachment-name">
-              {feedbackAttachmentDraft.file.name}
-            </span>
-            <span className="devflow-feedback__attachment-meta">
-              {feedbackAttachmentDraft.kind === "image"
-                ? "Image attachment"
-                : "File attachment"}
-              {" · "}
-              {formatFileSize(feedbackAttachmentDraft.file.size)}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            className="devflow-feedback__attachment-remove"
-            onClick={clearAttachmentDraft}
-          >
-            <XIcon className="devflow-icon devflow-icon--small" />
-          </button>
-        </div>
-      ) : null}
-
-      <div className="devflow-feedback__composer">
-        <button
-          type="button"
-          className="devflow-feedback__attach"
-          onClick={() => attachmentInputRef.current?.click()}
-          disabled={busy}
-        >
-          <PaperclipIcon className="devflow-icon devflow-icon--small" />
-        </button>
-
-        <textarea
-          className="devflow-feedback__textarea"
-          placeholder="Ask AI to refine the PRD, or paste an image/file directly..."
-          value={feedbackInputText}
-          onChange={(changeEvent) =>
-            setFeedbackInputText(changeEvent.target.value)
-          }
-          onKeyDown={handleFeedbackKeyDown}
-          onPaste={handleFeedbackPaste}
-        />
-
-        <button
-          type="button"
-          className="devflow-feedback__send"
-          onClick={() => {
-            void submitComposerFeedback();
-          }}
-          disabled={busy || !hasFeedbackPayload}
-        >
-          <SendIcon className="devflow-icon devflow-icon--small" />
-        </button>
-
-        <input
-          ref={attachmentInputRef}
-          className="devflow-feedback__file-input"
-          type="file"
-          onChange={handleAttachmentInputChange}
-        />
-      </div>
-      <p className="devflow-feedback__hint">
-        Tip: Press Enter to send, Shift + Enter for new line, or paste an
-        image/file directly into the composer.
-      </p>
     </div>
   );
 }
@@ -2442,10 +2239,9 @@ function ActionButton({
 
 interface StatusBadgeProps {
   status: RequirementStage;
-  label?: string;
 }
 
-function StatusBadge({ status, label }: StatusBadgeProps) {
+function StatusBadge({ status }: StatusBadgeProps) {
   return (
     <span
       className={joinClassNames(
@@ -2453,7 +2249,7 @@ function StatusBadge({ status, label }: StatusBadgeProps) {
         `devflow-badge--${status}`
       )}
     >
-      {label ?? formatStageLabel(status)}
+      {formatStageLabel(status)}
     </span>
   );
 }
@@ -2466,7 +2262,6 @@ function buildRequirementViewModel(
     task: taskItem,
     description: buildRequirementDescription(taskItem, taskDevLogList),
     stage: deriveRequirementStage(taskItem, taskDevLogList),
-    stageLabel: formatDisplayStageLabel(taskItem, taskDevLogList),
     createdLabel: formatMonthDay(taskItem.created_at),
   };
 }
@@ -2570,11 +2365,14 @@ function deriveRequirementSnapshot(
 
 function buildTaskDocumentMarkdown(
   selectedTask: Task,
-  selectedTaskStageLabel: string,
-  requirementSnapshot: RequirementSnapshot,
   selectedTaskDevLogs: DevLog[],
   currentRunAccount: RunAccount | null
 ): string {
+  const selectedTaskStage = deriveRequirementStage(selectedTask, selectedTaskDevLogs);
+  const requirementSnapshot = deriveRequirementSnapshot(
+    selectedTask,
+    selectedTaskDevLogs
+  );
   const highlightedLogList = selectedTaskDevLogs
     .slice(-5)
     .map((devLogItem) => cleanMarkdownPreview(devLogItem.text_content))
@@ -2614,7 +2412,7 @@ function buildTaskDocumentMarkdown(
     requirementSnapshot.summary,
     "",
     "## Current Flow",
-    `- Workflow stage: ${selectedTaskStageLabel}`,
+    `- Workflow stage: ${formatStageLabel(selectedTaskStage)}`,
     `- Repository task status: ${selectedTask.lifecycle_status.toLowerCase()}`,
     `- Timeline entries: ${selectedTaskDevLogs.length}`,
     `- Run account: ${currentRunAccount?.account_display_name || GUEST_USER_LABEL}`,
@@ -2652,44 +2450,52 @@ function deriveRequirementStage(
   return taskItem.workflow_stage;
 }
 
-function deriveSelfReviewDisplayState(
+function canCompleteTask(
   taskItem: Task,
-  taskDevLogList: DevLog[]
-): "running" | "passed_waiting" | null {
-  if (taskItem.workflow_stage !== WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
-    return null;
-  }
-
-  for (let logIndex = taskDevLogList.length - 1; logIndex >= 0; logIndex -= 1) {
-    const logText = taskDevLogList[logIndex].text_content;
-    if (logText.includes(SELF_REVIEW_PASSED_LOG_MARKER)) {
-      return "passed_waiting";
-    }
-    if (logText.includes(SELF_REVIEW_STARTED_LOG_MARKER)) {
-      return "running";
-    }
-  }
-
-  return "running";
-}
-
-function formatDisplayStageLabel(taskItem: Task, taskDevLogList: DevLog[]): string {
-  const selfReviewDisplayState = deriveSelfReviewDisplayState(taskItem, taskDevLogList);
-  if (selfReviewDisplayState === "passed_waiting") {
-    return "Self Review Passed / Waiting to Complete";
-  }
-
-  return formatStageLabel(taskItem.workflow_stage);
-}
-
-function isTaskInActiveExecution(taskItem: Task, taskDevLogList: DevLog[]): boolean {
-  if (!ACTIVE_EXECUTION_STAGE_SET.has(taskItem.workflow_stage)) {
+  taskStage: RequirementStage | null
+): boolean {
+  if (
+    taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
+    taskItem.lifecycle_status === TaskLifecycleStatus.DELETED
+  ) {
     return false;
   }
 
+  if (!taskItem.worktree_path) {
+    return true;
+  }
+
+  if (taskStage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
+    return true;
+  }
+
   return (
-    deriveSelfReviewDisplayState(taskItem, taskDevLogList) !== "passed_waiting"
+    taskStage === WorkflowStage.TEST_IN_PROGRESS ||
+    taskStage === WorkflowStage.PR_PREPARING ||
+    taskStage === WorkflowStage.ACCEPTANCE_IN_PROGRESS
   );
+}
+
+function hasLatestSelfReviewCyclePassed(taskDevLogList: DevLog[]): boolean {
+  for (let index = taskDevLogList.length - 1; index >= 0; index -= 1) {
+    const logText = taskDevLogList[index].text_content;
+    if (
+      SELF_REVIEW_PASSED_LOG_MARKER_LIST.some((markerText) =>
+        logText.includes(markerText)
+      )
+    ) {
+      return true;
+    }
+    if (
+      SELF_REVIEW_STARTED_LOG_MARKER_LIST.some((markerText) =>
+        logText.includes(markerText)
+      )
+    ) {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 function hasRequirementUpdateLog(taskDevLogList: DevLog[]): boolean {
@@ -2878,100 +2684,6 @@ function sortDevLogListByCreatedAt(devLogList: DevLog[]): DevLog[] {
   return [...devLogList].sort(
     (leftDevLog, rightDevLog) =>
       toTimestampValue(leftDevLog.created_at) - toTimestampValue(rightDevLog.created_at)
-  );
-}
-
-function mergeDevLogLists(
-  existingDevLogList: DevLog[],
-  incomingDevLogList: DevLog[]
-): DevLog[] {
-  if (existingDevLogList.length === 0) {
-    return incomingDevLogList;
-  }
-
-  if (incomingDevLogList.length === 0) {
-    return existingDevLogList;
-  }
-
-  const mergedDevLogMap = new Map<string, DevLog>();
-  let hasMeaningfulChange = false;
-
-  existingDevLogList.forEach((devLogItem) => {
-    mergedDevLogMap.set(devLogItem.id, devLogItem);
-  });
-  incomingDevLogList.forEach((devLogItem) => {
-    const previousDevLog = mergedDevLogMap.get(devLogItem.id);
-    if (
-      !previousDevLog ||
-      !areDevLogsEquivalent(previousDevLog, devLogItem)
-    ) {
-      mergedDevLogMap.set(devLogItem.id, devLogItem);
-      hasMeaningfulChange = true;
-    }
-  });
-
-  if (!hasMeaningfulChange) {
-    return existingDevLogList;
-  }
-
-  return sortDevLogListByCreatedAt(Array.from(mergedDevLogMap.values()));
-}
-
-function areDevLogsEquivalent(leftDevLog: DevLog, rightDevLog: DevLog): boolean {
-  return (
-    leftDevLog.id === rightDevLog.id &&
-    leftDevLog.task_id === rightDevLog.task_id &&
-    leftDevLog.run_account_id === rightDevLog.run_account_id &&
-    leftDevLog.created_at === rightDevLog.created_at &&
-    leftDevLog.text_content === rightDevLog.text_content &&
-    leftDevLog.state_tag === rightDevLog.state_tag &&
-    leftDevLog.media_original_image_path === rightDevLog.media_original_image_path &&
-    leftDevLog.media_thumbnail_path === rightDevLog.media_thumbnail_path &&
-    leftDevLog.task_title === rightDevLog.task_title &&
-    leftDevLog.ai_processing_status === rightDevLog.ai_processing_status &&
-    leftDevLog.ai_generated_title === rightDevLog.ai_generated_title &&
-    leftDevLog.ai_analysis_text === rightDevLog.ai_analysis_text &&
-    leftDevLog.ai_extracted_code === rightDevLog.ai_extracted_code &&
-    leftDevLog.ai_confidence_score === rightDevLog.ai_confidence_score
-  );
-}
-
-function areDevLogListsEquivalent(
-  leftDevLogList: DevLog[],
-  rightDevLogList: DevLog[]
-): boolean {
-  if (leftDevLogList.length !== rightDevLogList.length) {
-    return false;
-  }
-
-  return leftDevLogList.every((leftDevLog, index) =>
-    areDevLogsEquivalent(leftDevLog, rightDevLogList[index])
-  );
-}
-
-function areTaskListsEquivalent(leftTaskList: Task[], rightTaskList: Task[]): boolean {
-  if (leftTaskList.length !== rightTaskList.length) {
-    return false;
-  }
-
-  return leftTaskList.every((leftTask, index) =>
-    areTasksEquivalent(leftTask, rightTaskList[index])
-  );
-}
-
-function areTasksEquivalent(leftTask: Task, rightTask: Task): boolean {
-  return (
-    leftTask.id === rightTask.id &&
-    leftTask.run_account_id === rightTask.run_account_id &&
-    leftTask.project_id === rightTask.project_id &&
-    leftTask.task_title === rightTask.task_title &&
-    leftTask.lifecycle_status === rightTask.lifecycle_status &&
-    leftTask.workflow_stage === rightTask.workflow_stage &&
-    leftTask.worktree_path === rightTask.worktree_path &&
-    leftTask.requirement_brief === rightTask.requirement_brief &&
-    leftTask.created_at === rightTask.created_at &&
-    leftTask.closed_at === rightTask.closed_at &&
-    leftTask.log_count === rightTask.log_count
   );
 }
 

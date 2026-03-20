@@ -42,6 +42,10 @@
 5. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
 6. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
 7. 检查阶段是否推进到 `self_review_in_progress`
+8. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
+9. 若闭环最终通过，确认任务仍停留在 `self_review_in_progress`，并等待用户点击 `Complete`；若在通过前人工提前点击 `Complete`，确认时间线新增“已记录人工接管”留痕
+10. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `self_review_in_progress` 任务应显示 `Complete`
+11. 若连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 
 ### 项目与 Worktree
 

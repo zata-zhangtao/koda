@@ -8,7 +8,10 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from dsl.models.dev_log import DevLog
+from dsl.models.enums import DevLogStateTag, WorkflowStage
 from dsl.models.task import Task
+from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskResponseSchema,
@@ -18,12 +21,15 @@ from dsl.schemas.task_schema import (
 )
 from dsl.services.codex_runner import (
     cancel_codex_task,
+    clear_task_background_activity,
     get_task_log_path,
     is_codex_task_running,
+    register_task_background_activity,
     run_codex_completion,
     run_codex_prd,
     run_codex_task,
 )
+from dsl.services.log_service import LogService
 from dsl.services.prd_file_service import find_task_prd_file_path
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
@@ -31,6 +37,15 @@ from utils.database import get_db
 from utils.settings import config
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+_SELF_REVIEW_PASSED_LOG_MARKER_LIST = [
+    "AI 自检闭环完成",
+    "AI 自检完成，未发现阻塞性问题",
+]
+_SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
+    "开始第 1 轮代码评审",
+    "开始执行代码评审",
+]
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -56,6 +71,105 @@ def _get_current_run_account_id(db_session: Session) -> str:
     return active_account.id
 
 
+def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
+    """返回按创建时间排序的任务日志列表.
+
+    Args:
+        task_obj: 任务对象
+
+    Returns:
+        list[DevLog]: 按 `(created_at, id)` 升序排列的日志列表
+    """
+    return sorted(
+        task_obj.dev_logs,
+        key=lambda dev_log_item: (dev_log_item.created_at, dev_log_item.id),
+    )
+
+
+def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> bool:
+    """判断最近一轮 self-review 是否已经出现通过标记.
+
+    Args:
+        task_dev_log_list: 已按时间正序排列的任务日志列表
+
+    Returns:
+        bool: 若最近一轮 self-review 已出现通过标记则返回 True，否则返回 False
+    """
+    for dev_log_item in reversed(task_dev_log_list):
+        log_text = dev_log_item.text_content
+        if any(marker_text in log_text for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST):
+            return True
+        if any(marker_text in log_text for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST):
+            return False
+
+    return False
+
+
+def _create_manual_completion_override_log_if_needed(
+    db_session: Session,
+    task_obj: Task,
+    source_workflow_stage: WorkflowStage | None,
+    ordered_task_dev_log_list: list[DevLog],
+) -> str | None:
+    """在人工提前触发完成时写入留痕日志.
+
+    只有当任务仍停留在 `self_review_in_progress`，且最近一轮 self-review
+    尚未出现通过标记时，才视为一次需要显式记录的人工接管。
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 任务对象
+        source_workflow_stage: 进入完成链路前的原始阶段
+        ordered_task_dev_log_list: 已按时间正序排列的任务日志列表
+
+    Returns:
+        str | None: 若写入了人工接管日志则返回日志文本，否则返回 None
+    """
+    if source_workflow_stage != WorkflowStage.SELF_REVIEW_IN_PROGRESS:
+        return None
+
+    if _has_latest_self_review_cycle_passed(ordered_task_dev_log_list):
+        return None
+
+    manual_override_log_text = (
+        "📝 已记录人工接管：用户在 AI 自检尚未形成“通过”结论时手动触发了 `Complete`。\n"
+        "系统将直接从 `self_review_in_progress` 进入 Git 收尾阶段（pr_preparing）。"
+    )
+    LogService.create_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_obj.id,
+            text_content=manual_override_log_text,
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        ),
+        task_obj.run_account_id,
+    )
+    return manual_override_log_text
+
+
+def _hydrate_task_response(
+    task_obj: Task,
+    *,
+    is_task_running_override: bool | None = None,
+) -> Task:
+    """补齐任务响应中的计算字段.
+
+    Args:
+        task_obj: 任务对象
+        is_task_running_override: 可选的运行态覆盖值
+
+    Returns:
+        Task: 填充了 `log_count` 和 `is_codex_task_running` 的任务对象
+    """
+    task_obj.log_count = len(task_obj.dev_logs)
+    task_obj.is_codex_task_running = (
+        is_codex_task_running(task_obj.id)
+        if is_task_running_override is None
+        else is_task_running_override
+    )
+    return task_obj
+
+
 @router.get("", response_model=list[TaskResponseSchema])
 def list_tasks(
     db_session: Annotated[Session, Depends(get_db)],
@@ -70,13 +184,7 @@ def list_tasks(
     """
     run_account_id = _get_current_run_account_id(db_session)
     task_list = TaskService.get_tasks(db_session, run_account_id)
-    task_id_list = [task_item.id for task_item in task_list]
-    task_log_count_map = TaskService.get_task_log_count_map(db_session, task_id_list)
-
-    for task_item in task_list:
-        task_item.log_count = task_log_count_map.get(task_item.id, 0)
-
-    return task_list
+    return [_hydrate_task_response(task_item) for task_item in task_list]
 
 
 @router.post("", response_model=TaskResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -108,8 +216,7 @@ def create_task(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(validation_error),
         ) from validation_error
-    new_task.log_count = 0
-    return new_task
+    return _hydrate_task_response(new_task)
 
 
 @router.put("/{task_id}/status", response_model=TaskResponseSchema)
@@ -137,8 +244,7 @@ def update_task_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    updated_task.log_count = len(updated_task.dev_logs)
-    return updated_task
+    return _hydrate_task_response(updated_task)
 
 
 @router.put("/{task_id}/stage", response_model=TaskResponseSchema)
@@ -169,8 +275,7 @@ def update_task_stage(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    updated_task.log_count = len(updated_task.dev_logs)
-    return updated_task
+    return _hydrate_task_response(updated_task)
 
 
 @router.post("/{task_id}/start", response_model=TaskResponseSchema)
@@ -236,6 +341,7 @@ def start_task(
             effective_work_dir_path = _Path(project_obj.repo_path)
 
     # 在后台让 codex 生成 PRD，完成后自动推进至 prd_waiting_confirmation
+    register_task_background_activity(task_id)
     background_tasks.add_task(
         run_codex_prd,
         task_id_str=task_id,
@@ -246,8 +352,7 @@ def start_task(
         worktree_path_str=worktree_path_snapshot_str,
     )
 
-    started_task.log_count = len(started_task.dev_logs)
-    return started_task
+    return _hydrate_task_response(started_task)
 
 
 @router.post("/{task_id}/execute", response_model=TaskResponseSchema)
@@ -262,7 +367,7 @@ def execute_task(
     1. 将 workflow_stage 更新为 implementation_in_progress
     2. 在后台异步启动 codex exec，输出实时写入 DevLog 时间线
     3. 实现完成后自动推进至 self_review_in_progress，并立即执行 AI 自检 / 代码评审
-    4. 若自检发现阻塞问题或执行失败，则回退至 changes_requested
+    4. 若自检发现阻塞问题，优先进入自动回改并重新评审；仅在闭环失败或执行失败时回退至 changes_requested
 
     仅允许从 prd_waiting_confirmation 或 changes_requested 阶段触发.
 
@@ -319,6 +424,7 @@ def execute_task(
             effective_work_dir_path = _Path(project_obj.repo_path)
 
     # 在后台异步运行实现阶段；成功后会继续进入真实的 self-review 阶段
+    register_task_background_activity(task_id)
     background_tasks.add_task(
         run_codex_task,
         task_id_str=task_id,
@@ -329,8 +435,7 @@ def execute_task(
         worktree_path_str=worktree_path_snapshot_str,
     )
 
-    executed_task.log_count = len(executed_task.dev_logs)
-    return executed_task
+    return _hydrate_task_response(executed_task)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)
@@ -349,6 +454,8 @@ def complete_task(
     5. 在当前持有 `main` 分支的工作区执行 `git merge <task branch>`
     6. 清理 task worktree 与本地任务分支
 
+    若任务仍处于 `self_review_in_progress` 且尚未出现最近一轮通过标记，
+    接口仍允许人工显式触发 `Complete`，并会先写入一条 DevLog 留痕。
     若在合并到 `main` 前失败，任务回退到 `changes_requested`。
     若已成功合并到 `main` 但清理失败，任务仍会进入 `done`，同时记录人工清理提示。
 
@@ -369,6 +476,9 @@ def complete_task(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task automation is already running for this task.",
         )
+
+    source_task = TaskService.get_task_by_id(db_session, task_id)
+    source_workflow_stage = source_task.workflow_stage if source_task else None
 
     try:
         completion_task = TaskService.prepare_task_completion(db_session, task_id)
@@ -399,14 +509,24 @@ def complete_task(
             detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
         )
 
+    ordered_task_dev_log_list = _get_ordered_task_dev_logs(completion_task)
+    manual_override_log_text = _create_manual_completion_override_log_if_needed(
+        db_session=db_session,
+        task_obj=completion_task,
+        source_workflow_stage=source_workflow_stage,
+        ordered_task_dev_log_list=ordered_task_dev_log_list,
+    )
     dev_log_text_snapshot_list: list[str] = [
-        dev_log_item.text_content for dev_log_item in completion_task.dev_logs
+        dev_log_item.text_content for dev_log_item in ordered_task_dev_log_list
     ]
+    if manual_override_log_text:
+        dev_log_text_snapshot_list.append(manual_override_log_text)
     task_title_snapshot_str: str = completion_task.task_title
     task_summary_snapshot_str: str | None = completion_task.requirement_brief
     run_account_id_snapshot_str: str = completion_task.run_account_id
     worktree_path_snapshot_str: str = completion_task.worktree_path
 
+    register_task_background_activity(task_id)
     background_tasks.add_task(
         run_codex_completion,
         task_id_str=task_id,
@@ -418,7 +538,10 @@ def complete_task(
         worktree_path_str=worktree_path_snapshot_str,
     )
 
-    completion_task.log_count = len(completion_task.dev_logs)
+    completion_task.log_count = len(ordered_task_dev_log_list) + (
+        1 if manual_override_log_text else 0
+    )
+    completion_task.is_codex_task_running = True
     return completion_task
 
 
@@ -454,6 +577,7 @@ def cancel_task(
 
     # 尝试终止正在运行的 codex 进程
     cancel_codex_task(task_id)
+    clear_task_background_activity(task_id)
 
     # 强制将阶段回退至 changes_requested，解除 UI 阻塞
     stage_update_schema = TaskStageUpdateSchema(
@@ -467,8 +591,7 @@ def cancel_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    updated_task.log_count = len(updated_task.dev_logs)
-    return updated_task
+    return _hydrate_task_response(updated_task, is_task_running_override=False)
 
 
 @router.get("/{task_id}/prd-file")
@@ -631,8 +754,7 @@ def update_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    updated_task.log_count = len(updated_task.dev_logs)
-    return updated_task
+    return _hydrate_task_response(updated_task)
 
 
 @router.get("/{task_id}", response_model=TaskResponseSchema)
@@ -658,5 +780,4 @@ def get_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    task_obj.log_count = len(task_obj.dev_logs)
-    return task_obj
+    return _hydrate_task_response(task_obj)

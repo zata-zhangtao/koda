@@ -76,10 +76,11 @@ class TaskResponseSchema(DSLResponseSchema):
         run_account_id: 关联的 RunAccount ID
         task_title: 任务标题
         lifecycle_status: 任务生命周期状态（向后兼容）
-        workflow_stage: 工作流精确阶段（UI 阶段展示的唯一数据源）
+        workflow_stage: 工作流业务阶段；后台运行态由 is_codex_task_running 补充
         created_at: 创建时间
         closed_at: 关闭时间
         log_count: 日志条目数量（计算字段）
+        is_codex_task_running: 后台自动化是否仍在运行
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -90,10 +91,15 @@ class TaskResponseSchema(DSLResponseSchema):
     task_title: str = Field(..., description="任务标题")
     lifecycle_status: TaskLifecycleStatus = Field(..., description="任务生命周期状态")
     workflow_stage: WorkflowStage = Field(
-        default=WorkflowStage.BACKLOG, description="工作流阶段"
+        default=WorkflowStage.BACKLOG,
+        description="工作流业务阶段",
     )
     worktree_path: str | None = Field(None, description="git worktree 绝对路径")
     requirement_brief: str | None = Field(None, description="需求描述文本")
     created_at: datetime = Field(..., description="创建时间")
     closed_at: datetime | None = Field(None, description="关闭时间")
     log_count: int = Field(default=0, description="日志条目数量")
+    is_codex_task_running: bool = Field(
+        default=False,
+        description="该任务的后台自动化是否仍在运行",
+    )

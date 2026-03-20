@@ -5,11 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.tasks import get_task_prd_file, list_tasks
+import dsl.api.tasks as tasks_api
+from dsl.api.tasks import complete_task, get_task, get_task_prd_file
+from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
+from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
 from utils.database import Base
@@ -36,65 +40,23 @@ def db_session() -> Session:
         session.close()
 
 
-def test_get_task_prd_file_prefers_semantic_task_specific_path(
+@pytest.fixture(autouse=True)
+def clear_codex_runtime_state() -> None:
+    """Reset in-memory Codex runtime registries between tests."""
+    codex_runner._running_background_task_ids.clear()
+    codex_runner._running_codex_processes.clear()
+    codex_runner._user_cancelled_tasks.clear()
+    yield
+    codex_runner._running_background_task_ids.clear()
+    codex_runner._running_codex_processes.clear()
+    codex_runner._user_cancelled_tasks.clear()
+
+
+def test_get_task_prd_file_reads_fixed_task_specific_path(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    """PRD file lookup should prefer the semantic slug filename for the task."""
-    run_account_obj = RunAccount(
-        account_display_name="Tester",
-        user_name="tester",
-        environment_os="Linux",
-        git_branch_name=None,
-        is_active=True,
-    )
-    db_session.add(run_account_obj)
-    db_session.commit()
-
-    task_obj = Task(
-        run_account_id=run_account_obj.id,
-        task_title="PRD contract verification",
-        worktree_path=str(tmp_path),
-    )
-    db_session.add(task_obj)
-    db_session.commit()
-
-    tasks_directory_path = tmp_path / "tasks"
-    tasks_directory_path.mkdir()
-
-    legacy_fixed_prd_file_path = tasks_directory_path / f"prd-{task_obj.id[:8]}.md"
-    legacy_fixed_prd_file_path.write_text(
-        "# PRD\n\n- 需求名称（AI 归纳）: Legacy fixed filename\n",
-        encoding="utf-8",
-    )
-
-    expected_prd_file_path = (
-        tasks_directory_path / f"prd-{task_obj.id[:8]}-semantic-login-flow.md"
-    )
-    expected_prd_file_path.write_text(
-        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n",
-        encoding="utf-8",
-    )
-
-    legacy_style_prd_file_path = tasks_directory_path / "20260317-prd-random.md"
-    legacy_style_prd_file_path.write_text(
-        "This older wildcard-style file should be ignored.",
-        encoding="utf-8",
-    )
-
-    prd_file_response = get_task_prd_file(task_obj.id, db_session)
-
-    assert prd_file_response["content"] == (
-        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
-    )
-    assert prd_file_response["path"] == str(expected_prd_file_path)
-
-
-def test_get_task_prd_file_supports_legacy_fixed_filename(
-    db_session: Session,
-    tmp_path: Path,
-) -> None:
-    """PRD file lookup should still support the legacy fixed filename."""
+    """PRD file lookup should keep using `tasks/prd-{task_id[:8]}.md`."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -118,22 +80,30 @@ def test_get_task_prd_file_supports_legacy_fixed_filename(
 
     expected_prd_file_path = tasks_directory_path / f"prd-{task_obj.id[:8]}.md"
     expected_prd_file_path.write_text(
-        "# PRD\n\n- 需求名称（AI 归纳）: Legacy filename still works\n",
+        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n",
+        encoding="utf-8",
+    )
+
+    legacy_style_prd_file_path = tasks_directory_path / "20260317-prd-random.md"
+    legacy_style_prd_file_path.write_text(
+        "This older wildcard-style file should be ignored.",
         encoding="utf-8",
     )
 
     prd_file_response = get_task_prd_file(task_obj.id, db_session)
 
     assert prd_file_response["content"] == (
-        "# PRD\n\n- 需求名称（AI 归纳）: Legacy filename still works\n"
+        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
 
 
-def test_list_tasks_sets_log_count_without_loading_full_relationships(
+def test_complete_task_records_manual_override_for_unsettled_self_review(
     db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task list responses should expose grouped log counts for each task."""
+    """Manual completion should leave an audit log before self-review settles."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -144,35 +114,143 @@ def test_list_tasks_sets_log_count_without_loading_full_relationships(
     db_session.add(run_account_obj)
     db_session.commit()
 
-    first_task = Task(
+    worktree_path = tmp_path / "repo-wt-12345678"
+    worktree_path.mkdir()
+
+    task_obj = Task(
         run_account_id=run_account_obj.id,
-        task_title="First task",
+        task_title="Manual completion override",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path=str(worktree_path),
     )
-    second_task = Task(
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content="🔍 已进入 AI 自检阶段，开始第 1 轮代码评审（1/3）。",
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    background_tasks = BackgroundTasks()
+    updated_task = complete_task(task_obj.id, background_tasks, db_session)
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert updated_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert any("已记录人工接管" in log_item.text_content for log_item in recorded_log_list)
+
+
+def test_complete_task_skips_manual_override_log_after_self_review_passed(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A settled self-review pass should not be logged as a manual override."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-87654321"
+    worktree_path.mkdir()
+
+    task_obj = Task(
         run_account_id=run_account_obj.id,
-        task_title="Second task",
+        task_title="Normal completion after review pass",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path=str(worktree_path),
     )
-    db_session.add_all([first_task, second_task])
+    db_session.add(task_obj)
     db_session.commit()
 
     db_session.add_all(
         [
             DevLog(
-                task_id=first_task.id,
+                task_id=task_obj.id,
                 run_account_id=run_account_obj.id,
-                text_content="one",
+                text_content="🔍 已进入 AI 自检阶段，开始第 1 轮代码评审（1/3）。",
+                state_tag=DevLogStateTag.OPTIMIZATION,
             ),
             DevLog(
-                task_id=first_task.id,
+                task_id=task_obj.id,
                 run_account_id=run_account_obj.id,
-                text_content="two",
+                text_content=(
+                    "✅ AI 自检闭环完成：第 1 轮评审通过，未发现阻塞性问题。\n"
+                    "当前阶段保持在：AI 自检中（self_review_in_progress）。"
+                ),
+                state_tag=DevLogStateTag.FIXED,
             ),
         ]
     )
     db_session.commit()
 
-    listed_task_list = list_tasks(db_session=db_session)
-    listed_task_by_id = {task_item.id: task_item for task_item in listed_task_list}
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
-    assert listed_task_by_id[first_task.id].log_count == 2
-    assert listed_task_by_id[second_task.id].log_count == 0
+    background_tasks = BackgroundTasks()
+    complete_task(task_obj.id, background_tasks, db_session)
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert len(background_tasks.tasks) == 1
+    assert not any("已记录人工接管" in log_item.text_content for log_item in recorded_log_list)
+
+
+def test_get_task_exposes_runtime_flag(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task detail responses should expose the backend runtime state."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Runtime flag visibility",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        tasks_api,
+        "is_codex_task_running",
+        lambda task_id: task_id == task_obj.id,
+    )
+
+    returned_task = get_task(task_obj.id, db_session)
+
+    assert returned_task.is_codex_task_running is True

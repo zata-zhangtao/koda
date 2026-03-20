@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from dsl.services import codex_runner
+from dsl.services import codex_runner, email_service
 
 
 class FakeCodexStdout:
@@ -100,7 +100,7 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
-    """PRD prompt should require both titles and a semantic English filename."""
+    """PRD prompt should require both titles, fallback guidance, and the fixed file path."""
     prd_prompt_text = codex_runner.build_codex_prd_prompt(
         task_title="I hope the generated PRD simultaneously includes the name of the requirement",
         dev_log_text_list=["Need the output contract captured in tests and docs."],
@@ -113,11 +113,45 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "位于主要章节之前" in prd_prompt_text
     assert "回退到原始需求标题的规范化版本" in prd_prompt_text
     assert "不得为空" in prd_prompt_text
-    assert "`tasks/prd-cf2b9461-<english-requirement-slug>.md`" in prd_prompt_text
-    assert "不要把尖括号占位符原样保留在文件名里" in prd_prompt_text
-    assert "小写 kebab-case" in prd_prompt_text
-    assert "不要使用 `random`" in prd_prompt_text
+    assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
+
+
+def test_build_codex_review_fix_prompt_preserves_full_latest_blocker_list() -> None:
+    """Review-fix prompt should keep the full current-round blocker list without markers."""
+    review_fix_prompt_text = codex_runner.build_codex_review_fix_prompt(
+        task_title="Implement review remediation loop",
+        dev_log_text_list=["The first review found blocker-level issues."],
+        review_output_lines=[
+            "blocker-01: docs/architecture/system-design.md is still outdated.",
+            "blocker-02: tests/test_codex_runner.py needs a loop regression.",
+            "blocker-03: ensure the continue shortcut does not restart a parked review.",
+            "blocker-04: keep the completion button hidden before review passes.",
+            "blocker-05: preserve the review summary in DevLog output.",
+            "blocker-06: update the self-review banner wording.",
+            "blocker-07: stop polling once the review loop has passed.",
+            "blocker-08: keep the worktree path instruction in the prompt.",
+            "blocker-09: retain the requirement title in the fix scope.",
+            "blocker-10: include the current-round index.",
+            "blocker-11: remove structured markers from the findings payload.",
+            "blocker-12: do not re-run unrelated implementation work.",
+            "blocker-13: keep the failure-notification timing unchanged.",
+            "blocker-14: ensure no blocker is truncated from the prompt.",
+            "SELF_REVIEW_SUMMARY: sync docs and tests with the loop",
+            "SELF_REVIEW_STATUS: CHANGES_REQUESTED",
+        ],
+        fix_round_index_int=1,
+        max_fix_rounds_int=2,
+        self_review_summary_str="sync docs and tests with the loop",
+        worktree_path_str="/tmp/project-wt-12345678",
+    )
+
+    assert "只修复最近一轮 review 明确指出的阻塞性问题" in review_fix_prompt_text
+    assert "不要重新大范围发散实现" in review_fix_prompt_text
+    assert "sync docs and tests with the loop" in review_fix_prompt_text
+    assert "blocker-01: docs/architecture/system-design.md is still outdated." in review_fix_prompt_text
+    assert "blocker-14: ensure no blocker is truncated from the prompt." in review_fix_prompt_text
+    assert "SELF_REVIEW_STATUS: CHANGES_REQUESTED" not in review_fix_prompt_text
 
 
 def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
@@ -194,24 +228,21 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     assert len(recorded_prompt_text_list) == 2
     assert "不要默认执行 `git commit`" in recorded_prompt_text_list[0]
     assert "SELF_REVIEW_STATUS: PASS" in recorded_prompt_text_list[1]
+    assert "当前是第 1/3 轮 AI 自检" in recorded_prompt_text_list[1]
     assert recorded_stage_value_list == ["self_review_in_progress"]
-    assert any(
-        "开始执行代码评审" in log_text for log_text, _ in recorded_log_entry_list
-    )
-    assert any(
-        "AI 自检完成，未发现阻塞性问题" in log_text
-        for log_text, _ in recorded_log_entry_list
-    )
+    assert any("开始第 1 轮代码评审" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("AI 自检闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-exec" in task_log_text
     assert "=== Koda codex-review" in task_log_text
 
 
-def test_run_codex_task_moves_to_changes_requested_on_review_findings(
+def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     tmp_path: Path,
 ) -> None:
-    """Blocking self-review findings should regress the task to changes requested."""
+    """A blocking review should trigger auto-remediation and re-review before passing."""
+    recorded_prompt_text_list: list[str] = []
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
     fake_process_queue = [
@@ -229,9 +260,26 @@ def test_run_codex_task_moves_to_changes_requested_on_review_findings(
             planned_return_code_int=0,
             pid_int=4444,
         ),
+        FakeCodexProcess(
+            output_line_list=[
+                "Patched the missing error-path handling and updated the regression tests.",
+            ],
+            planned_return_code_int=0,
+            pid_int=5555,
+        ),
+        FakeCodexProcess(
+            output_line_list=[
+                "Re-reviewed the patched flow.",
+                "SELF_REVIEW_SUMMARY: blocker resolved after targeted fix",
+                "SELF_REVIEW_STATUS: PASS",
+            ],
+            planned_return_code_int=0,
+            pid_int=6666,
+        ),
     ]
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        recorded_prompt_text_list.append(kwargs["codex_prompt_text_str"])
         return fake_process_queue.pop(0)
 
     def fake_write_log_to_db(
@@ -277,13 +325,146 @@ def test_run_codex_task_moves_to_changes_requested_on_review_findings(
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
 
+    assert len(recorded_prompt_text_list) == 4
+    assert "只修复最近一轮 review 明确指出的阻塞性问题" in recorded_prompt_text_list[2]
+    assert "当前是第 2/3 轮 AI 自检" in recorded_prompt_text_list[3]
+    assert recorded_stage_value_list == ["self_review_in_progress"]
+    assert any("第 1 轮 AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("第 1 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("AI 自检闭环完成：第 2 轮评审通过" in log_text for log_text, _ in recorded_log_entry_list)
+
+    task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
+    assert "=== Koda codex-review" in task_log_text
+    assert "=== Koda codex-review-fix-round-1" in task_log_text
+    assert "=== Koda codex-review-round-2" in task_log_text
+
+
+def test_run_codex_task_moves_to_changes_requested_after_review_loop_exhausted(
+    tmp_path: Path,
+) -> None:
+    """The task should only regress after the review-fix loop exhausts its retries."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+    fake_process_queue = [
+        FakeCodexProcess(
+            output_line_list=["Implemented the requested flow."],
+            planned_return_code_int=0,
+            pid_int=7001,
+        ),
+        FakeCodexProcess(
+            output_line_list=[
+                "Found missing error handling in the new path.",
+                "SELF_REVIEW_SUMMARY: add error-path handling before testing",
+                "SELF_REVIEW_STATUS: CHANGES_REQUESTED",
+            ],
+            planned_return_code_int=0,
+            pid_int=7002,
+        ),
+        FakeCodexProcess(
+            output_line_list=["Applied the first targeted fix round."],
+            planned_return_code_int=0,
+            pid_int=7003,
+        ),
+        FakeCodexProcess(
+            output_line_list=[
+                "Found a second blocker in the fallback branch.",
+                "SELF_REVIEW_SUMMARY: patch the fallback branch before release",
+                "SELF_REVIEW_STATUS: CHANGES_REQUESTED",
+            ],
+            planned_return_code_int=0,
+            pid_int=7004,
+        ),
+        FakeCodexProcess(
+            output_line_list=["Applied the second targeted fix round."],
+            planned_return_code_int=0,
+            pid_int=7005,
+        ),
+        FakeCodexProcess(
+            output_line_list=[
+                "Still missing the rollback guard in the last error path.",
+                "SELF_REVIEW_SUMMARY: rollback guard is still missing",
+                "SELF_REVIEW_STATUS: CHANGES_REQUESTED",
+            ],
+            planned_return_code_int=0,
+            pid_int=7006,
+        ),
+    ]
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        return fake_process_queue.pop(0)
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_task(
+                task_id_str="12345678-loop-fail",
+                run_account_id_str="run-account-3",
+                task_title_str="Implement review automation",
+                dev_log_text_list=["User requested a real self review phase."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = original_send_task_failed_notification
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
     assert recorded_stage_value_list == [
         "self_review_in_progress",
         "changes_requested",
     ]
-    assert any(
-        "AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list
-    )
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-loop-fail",
+            "Implement review automation",
+            "AI 自检在 2 轮自动回改后仍存在阻塞性问题：rollback guard is still missing",
+        )
+    ]
+    assert any("第 1 轮 AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("第 2 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("已用尽 2 轮自动回改次数" in log_text for log_text, _ in recorded_log_entry_list)
+    assert not any("等待人工确认" in log_text for log_text, _ in recorded_log_entry_list)
 
 
 def test_run_codex_completion_advances_task_to_done_on_success(
@@ -447,9 +628,7 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
 
     assert recorded_stage_value_list == []
     assert recorded_finalize_call_list == [("12345678-clean-warn", False)]
-    assert any(
-        "自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list
-    )
+    assert any("自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list)
 
 
 def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
@@ -527,6 +706,4 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
 
     assert recorded_stage_value_list == ["changes_requested"]
     assert recorded_finalize_call_list == []
-    assert any(
-        "未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list
-    )
+    assert any("未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list)

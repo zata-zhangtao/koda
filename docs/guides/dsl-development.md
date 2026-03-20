@@ -33,7 +33,7 @@
 2. 在 `dsl/services/` 实现业务规则
 3. 在 `dsl/api/` 暴露路由
 4. 在前端 `api/client.ts` 对接接口
-5. 更新 `README.md` 和相关 `docs/` 页面，并执行 `just docs-build`
+5. 更新文档并执行验证
 
 ### 时间处理约定
 
@@ -46,8 +46,8 @@
 前端主入口集中在 `frontend/src/App.tsx`，它承担了三个关键职责：
 
 - 拉取 `RunAccount`、`Task`、`DevLog`、`Project` 四类核心数据
-- 根据 `workflow_stage` 渲染按钮、阶段标签与 PRD 面板
-- 在执行阶段做轻量任务状态轮询，并对当前任务日志使用“全量初次加载 + `created_after` 增量拉取”的方式刷新时间线
+- 根据 `workflow_stage` 渲染阶段标签与 PRD 面板，并结合 `TaskResponse.is_codex_task_running` 判断后台自动化是否仍在执行
+- 在 PRD 生成或编码执行阶段每秒轮询一次后端，实时刷新时间线
 
 除 `App.tsx` 外，以下文件是主要协作点：
 
@@ -67,14 +67,16 @@
 4. 点击“开始执行”，后端进入 `implementation_in_progress`
 5. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
 6. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
-7. 自检若发现阻塞问题，任务自动回退到 `changes_requested`
-8. 点击“Complete”后，后端会进入 `pr_preparing`，执行确定性的 Git 收尾链路，并在成功后推进到 `done`
+7. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环
+8. 只有当闭环最终失败时，任务才会回退到 `changes_requested`
+9. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
 
 ### 已建模但尚未自动化闭环的阶段
 
 以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示，但当前仓库尚未完整实现自动推进器：
 
 - `test_in_progress`
+- `pr_preparing`
 - `acceptance_in_progress`
 - `changes_requested` 到后续更细粒度阶段的闭环
 
@@ -91,18 +93,18 @@
 如果出现“数据库有记录但界面没刷新”的情况，优先检查：
 
 - 当前任务是否处于前端会自动轮询的阶段
-- 当前日志增量轮询传入的 `created_after` 是否与最新已加载日志对齐
-- API 是否返回了预期的 `workflow_stage`
+- API 是否同时返回了预期的 `workflow_stage` 与 `is_codex_task_running`
 - `DevLog` 是否真正写入了当前任务
 
 ## 开发建议
 
 ### 改任务流时
 
-- 把 `workflow_stage` 视为唯一事实来源
+- 把 `workflow_stage` 视为业务阶段事实来源，但不要再把它等同为“后台自动化仍在运行”
 - 后端和前端要同时更新 `WorkflowStage` 相关逻辑
+- 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
-- 如果阶段、命令、端口、环境变量或路径规范变化，要同步更新 `README.md`、相关 `docs/` 页面，并在提交前执行 `just docs-build`
+- `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名
 
 ### 改媒体上传时
 
@@ -114,6 +116,7 @@
 - 先看 `dsl/services/codex_runner.py`
 - 明确是改 PRD Prompt 还是实现 Prompt
 - 注意日志写回、阶段推进和 `/tmp` 实时日志文件三者必须保持一致
+- 若修改 self-review 逻辑，要同时核对 review-only Prompt、review-fix Prompt、失败通知时机以及 `TaskService.execute_task(...)` 的入口契约
 
 ## 推荐开发流程
 

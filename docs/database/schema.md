@@ -125,8 +125,8 @@ erDiagram
 
 需要特别关注的字段：
 
-- `workflow_stage`：前端按钮和状态展示的唯一依据
-- `worktree_path`：决定 Codex 实际工作目录；新值写入前会先完成 worktree 的基础环境准备
+- `workflow_stage`：任务当前所处的业务阶段；若前端需要判断后台自动化是否仍在执行，还要结合 `TaskResponse.is_codex_task_running`
+- `worktree_path`：决定 Codex 实际工作目录
 
 新的任务型 worktree 默认会写成仓库同级 `task/` 目录下的绝对路径。例如项目仓库是 `/Users/zata/code/my-app` 时，新任务通常会保存为 `/Users/zata/code/task/my-app-wt-12345678`。已经落库的历史 `worktree_path` 不会被系统自动改写。
 

@@ -165,7 +165,7 @@ def send_task_failed_notification(
     task_title_str: str,
     failure_reason_str: str = "",
 ) -> bool:
-    """发送任务执行失败/需要修改的通知邮件.
+    """发送任务执行失败/需要人工介入的通知邮件.
 
     Args:
         task_id_str: 任务 ID
@@ -185,7 +185,7 @@ def send_task_failed_notification(
 <html>
 <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
   <h2 style="color: #dc2626;">⚠️ 任务需要您的介入</h2>
-  <p>任务 <strong>{task_title_str}</strong> 已进入 <strong>待修改（changes_requested）</strong> 状态，请前往 Koda 查看详情。</p>
+  <p>任务 <strong>{task_title_str}</strong> 已进入 <strong>待修改（changes_requested）</strong> 状态，表示当前自动化流程无法自行完成闭环，请前往 Koda 查看详情。</p>
   {reason_block_html_str}
   <table style="border-collapse: collapse; margin: 16px 0;">
     <tr>

@@ -32,7 +32,7 @@ class Task(Base):
         project_id (str | None): 关联的 Project ID（可选）
         task_title (str): 任务标题
         lifecycle_status (TaskLifecycleStatus): 任务生命周期状态（向后兼容）
-        workflow_stage (WorkflowStage): 工作流精确阶段，作为 UI 阶段展示的唯一数据源
+        workflow_stage (WorkflowStage): 工作流业务阶段；后台运行态由独立字段补充
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         created_at (datetime): 创建时间
         closed_at (datetime | None): 关闭时间

@@ -16,13 +16,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from dsl.services.prd_file_service import (
-    build_task_prd_output_path_contract,
-    list_task_prd_file_paths,
-)
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
+from utils.settings import config
 
 
 # codex exec 每次最多批量写入的行数
@@ -54,6 +51,30 @@ _SELF_REVIEW_STATUS_MARKER = "SELF_REVIEW_STATUS"
 _SELF_REVIEW_SUMMARY_MARKER = "SELF_REVIEW_SUMMARY"
 _SELF_REVIEW_STATUS_PASS = "PASS"
 _SELF_REVIEW_STATUS_CHANGES_REQUESTED = "CHANGES_REQUESTED"
+
+# self-review 自动回改的最大轮次（对应最多 N 次 fix，再追加一次最终 review）
+_MAX_SELF_REVIEW_FIX_ROUNDS = 2
+
+# self-review 缺失结构化状态时的额外重试次数
+_MAX_SELF_REVIEW_INVALID_STATUS_RETRY = 1
+
+
+def register_task_background_activity(task_id_str: str) -> None:
+    """注册任务后台自动化已进入运行态.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+    """
+    _running_background_task_ids.add(task_id_str)
+
+
+def clear_task_background_activity(task_id_str: str) -> None:
+    """清除任务后台自动化运行态标记.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+    """
+    _running_background_task_ids.discard(task_id_str)
 
 
 @dataclass(slots=True)
@@ -164,6 +185,60 @@ def _extract_self_review_summary(output_lines: list[str]) -> str | None:
     return _extract_trailing_marker_value(output_lines, _SELF_REVIEW_SUMMARY_MARKER)
 
 
+def _filter_self_review_marker_lines(output_lines: list[str]) -> list[str]:
+    """移除 self-review 输出中的结构化标记行.
+
+    Args:
+        output_lines: self-review 阶段输出行列表
+
+    Returns:
+        list[str]: 去除结构化标记后的输出行
+    """
+    filtered_output_line_list: list[str] = []
+    marker_prefix_list = [
+        f"{_SELF_REVIEW_STATUS_MARKER}:".upper(),
+        f"{_SELF_REVIEW_SUMMARY_MARKER}:".upper(),
+    ]
+    for raw_output_line_str in output_lines:
+        stripped_output_line_str = raw_output_line_str.strip()
+        normalized_output_line_str = stripped_output_line_str.upper()
+        if any(
+            normalized_output_line_str.startswith(marker_prefix_str)
+            for marker_prefix_str in marker_prefix_list
+        ):
+            continue
+        if stripped_output_line_str:
+            filtered_output_line_list.append(stripped_output_line_str)
+    return filtered_output_line_list
+
+
+def _build_self_review_findings_block(
+    review_output_lines: list[str],
+    self_review_summary_str: str | None,
+) -> str:
+    """构造最近一轮 self-review 的阻塞问题描述块.
+
+    Args:
+        review_output_lines: 最近一轮 self-review 的输出行
+        self_review_summary_str: 最近一轮 self-review 摘要
+
+    Returns:
+        str: 供自动回改 Prompt 使用的问题描述文本
+    """
+    filtered_review_output_line_list = _filter_self_review_marker_lines(review_output_lines)
+    findings_section_list: list[str] = []
+
+    if self_review_summary_str:
+        findings_section_list.append(f"摘要：{self_review_summary_str}")
+
+    if filtered_review_output_line_list:
+        findings_section_list.append("\n".join(filtered_review_output_line_list))
+
+    if findings_section_list:
+        return "\n\n".join(findings_section_list)
+    return "（本轮 self-review 只确认存在阻塞问题，但没有提供更多细节。）"
+
+
 def _build_recent_context_block(
     dev_log_text_list: list[str],
     max_items_int: int,
@@ -205,6 +280,7 @@ def cancel_codex_task(task_id_str: str) -> bool:
         bool: 若找到并成功发送终止信号则返回 True，否则返回 False
     """
     _user_cancelled_tasks.add(task_id_str)
+    clear_task_background_activity(task_id_str)
 
     codex_process_obj = _running_codex_processes.get(task_id_str)
     if codex_process_obj is None:
@@ -215,9 +291,7 @@ def cancel_codex_task(task_id_str: str) -> bool:
 
     try:
         os.killpg(os.getpgid(codex_process_obj.pid), signal.SIGKILL)
-        logger.info(
-            f"Sent SIGKILL to process group for task {task_id_str[:8]}... (user cancel)"
-        )
+        logger.info(f"Sent SIGKILL to process group for task {task_id_str[:8]}... (user cancel)")
         return True
     except (ProcessLookupError, PermissionError, OSError):
         try:
@@ -346,12 +420,8 @@ def _build_completion_commit_message(
     commit_subject_candidate_list.append(task_title_str)
 
     for raw_commit_subject_candidate_str in commit_subject_candidate_list:
-        summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[
-            0
-        ].strip()
-        normalized_commit_subject_str = " ".join(
-            summary_subject_line_str.split()
-        ).rstrip(".")
+        summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[0].strip()
+        normalized_commit_subject_str = " ".join(summary_subject_line_str.split()).rstrip(".")
         if normalized_commit_subject_str:
             return normalized_commit_subject_str[:72].rstrip()
 
@@ -394,9 +464,7 @@ def _resolve_primary_repo_root_from_worktree(worktree_path: Path) -> Path:
     return resolved_repo_root_path
 
 
-def _resolve_worktree_path_for_branch(
-    repo_path: Path, branch_name_str: str
-) -> Path | None:
+def _resolve_worktree_path_for_branch(repo_path: Path, branch_name_str: str) -> Path | None:
     """Resolve the worktree path that currently has a branch checked out.
 
     Args:
@@ -420,9 +488,7 @@ def _resolve_worktree_path_for_branch(
     target_branch_ref_str = f"refs/heads/{branch_name_str}"
     for output_line_str in completed_process.stdout.splitlines():
         if output_line_str.startswith("worktree "):
-            current_worktree_path = Path(
-                output_line_str.removeprefix("worktree ").strip()
-            )
+            current_worktree_path = Path(output_line_str.removeprefix("worktree ").strip())
             continue
         if output_line_str.startswith("branch ") and current_worktree_path is not None:
             branch_ref_str = output_line_str.removeprefix("branch ").strip()
@@ -455,9 +521,7 @@ def _run_logged_command(
         subprocess.CompletedProcess[str]: Completed process object
     """
     command_display_str = shlex.join(command_argument_list)
-    _append_text_to_task_log(
-        task_log_path, f"$ ({command_log_label_str}) {command_display_str}"
-    )
+    _append_text_to_task_log(task_log_path, f"$ ({command_log_label_str}) {command_display_str}")
 
     completed_process = subprocess.run(
         command_argument_list,
@@ -513,9 +577,7 @@ def _has_unmerged_conflicts(repo_path: Path) -> bool:
     return bool((completed_process.stdout or "").strip())
 
 
-def _is_git_operation_still_in_progress(
-    repo_path: Path, operation_kind_str: str
-) -> bool:
+def _is_git_operation_still_in_progress(repo_path: Path, operation_kind_str: str) -> bool:
     """Check whether a rebase or merge is still active in the repository.
 
     Args:
@@ -637,7 +699,9 @@ def _run_logged_codex_conflict_resolution(
     """
     codex_executable_path_str = shutil.which("codex")
     if not codex_executable_path_str:
-        missing_codex_text = f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
+        missing_codex_text = (
+            f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
+        )
         _append_text_to_task_log(task_log_path, missing_codex_text)
         _write_log_to_db(task_id_str, run_account_id_str, missing_codex_text, "BUG")
         return None
@@ -652,9 +716,7 @@ def _run_logged_codex_conflict_resolution(
         f"codex exec --dangerously-bypass-approvals-and-sandbox "
         f"<{operation_kind_str}-conflict-prompt>"
     )
-    _append_text_to_task_log(
-        task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}"
-    )
+    _append_text_to_task_log(task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}")
 
     _CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
 
@@ -694,7 +756,9 @@ def _run_logged_codex_conflict_resolution(
         _append_text_to_task_log(task_log_path, "(no output)")
     _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
 
-    resolution_status_text = f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
+    resolution_status_text = (
+        f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
+    )
     if combined_output_text:
         resolution_status_text += f"\n{combined_output_text}"
     _write_log_to_db(
@@ -706,9 +770,7 @@ def _run_logged_codex_conflict_resolution(
     return completed_process
 
 
-def _finalize_completion_in_db(
-    task_id_str: str, clear_worktree_path_bool: bool
-) -> None:
+def _finalize_completion_in_db(task_id_str: str, clear_worktree_path_bool: bool) -> None:
     """Mark a task as done after a successful completion flow.
 
     Args:
@@ -822,9 +884,7 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
-    merge_target_worktree_path = _resolve_worktree_path_for_branch(
-        repo_root_path, "main"
-    )
+    merge_target_worktree_path = _resolve_worktree_path_for_branch(repo_root_path, "main")
     if merge_target_worktree_path is None:
         merge_target_worktree_path = repo_root_path
 
@@ -879,9 +939,7 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
-    current_merge_target_branch_name = (
-        merge_target_branch_process.stdout or ""
-    ).strip()
+    current_merge_target_branch_name = (merge_target_branch_process.stdout or "").strip()
     commit_message_str = _build_completion_commit_message(
         task_id_str=task_id_str,
         task_title_str=task_title_str,
@@ -895,15 +953,9 @@ def _execute_git_completion_flow(
         ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
     ]
     if current_merge_target_branch_name != "main":
-        command_plan.append(
-            ("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path)
-        )
+        command_plan.append(("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path))
     command_plan.append(
-        (
-            "merge-feature",
-            ["git", "merge", feature_branch_name],
-            merge_target_worktree_path,
-        )
+        ("merge-feature", ["git", "merge", feature_branch_name], merge_target_worktree_path)
     )
 
     merge_completed_bool = False
@@ -920,13 +972,9 @@ def _execute_git_completion_flow(
         output_line_list.extend((completed_process.stderr or "").splitlines())
         if completed_process.returncode != 0:
             operation_kind_str = ""
-            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(
-                command_cwd_path
-            ):
+            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(command_cwd_path):
                 operation_kind_str = "rebase"
-            elif command_log_label_str == "merge-feature" and _has_unmerged_conflicts(
-                command_cwd_path
-            ):
+            elif command_log_label_str == "merge-feature" and _has_unmerged_conflicts(command_cwd_path):
                 operation_kind_str = "merge"
 
             if operation_kind_str:
@@ -940,19 +988,13 @@ def _execute_git_completion_flow(
                     operation_kind_str=operation_kind_str,
                 )
                 if codex_resolution_process is not None:
-                    output_line_list.extend(
-                        (codex_resolution_process.stdout or "").splitlines()
-                    )
-                    output_line_list.extend(
-                        (codex_resolution_process.stderr or "").splitlines()
-                    )
+                    output_line_list.extend((codex_resolution_process.stdout or "").splitlines())
+                    output_line_list.extend((codex_resolution_process.stderr or "").splitlines())
                 if (
                     codex_resolution_process is not None
                     and codex_resolution_process.returncode == 0
                     and not _has_unmerged_conflicts(command_cwd_path)
-                    and not _is_git_operation_still_in_progress(
-                        command_cwd_path, operation_kind_str
-                    )
+                    and not _is_git_operation_still_in_progress(command_cwd_path, operation_kind_str)
                 ):
                     if command_log_label_str == "merge-feature":
                         merge_completed_bool = True
@@ -963,7 +1005,9 @@ def _execute_git_completion_flow(
                     f"{shlex.join(command_argument_list)}"
                 )
             else:
-                failure_reason_text = f"命令失败：{shlex.join(command_argument_list)}"
+                failure_reason_text = (
+                    f"命令失败：{shlex.join(command_argument_list)}"
+                )
             return GitCompletionExecutionResult(
                 merged_to_main=merge_completed_bool,
                 cleanup_succeeded=False,
@@ -1008,22 +1052,10 @@ def _execute_git_completion_flow(
         )
 
     cleanup_command_plan = [
-        (
-            "remove-worktree",
-            ["git", "worktree", "remove", worktree_path_str],
-            merge_target_worktree_path,
-        ),
-        (
-            "delete-branch",
-            ["git", "branch", "-d", feature_branch_name],
-            merge_target_worktree_path,
-        ),
+        ("remove-worktree", ["git", "worktree", "remove", worktree_path_str], merge_target_worktree_path),
+        ("delete-branch", ["git", "branch", "-d", feature_branch_name], merge_target_worktree_path),
     ]
-    for (
-        command_log_label_str,
-        command_argument_list,
-        command_cwd_path,
-    ) in cleanup_command_plan:
+    for command_log_label_str, command_argument_list, command_cwd_path in cleanup_command_plan:
         completed_process = _run_logged_command(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
@@ -1161,7 +1193,7 @@ def build_codex_prd_prompt(
         separator_str="\n---\n",
         empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
     )
-    prd_output_relative_path_str = build_task_prd_output_path_contract(task_id_str)
+    prd_output_relative_path_str = f"tasks/prd-{task_id_str[:8]}.md"
 
     if worktree_path_str:
         prd_worktree_instruction_block_str = f"""
@@ -1191,12 +1223,8 @@ def build_codex_prd_prompt(
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
-2. 你必须把 `<english-requirement-slug>` 占位符替换成真实文件名片段，不要把尖括号占位符原样保留在文件名里。
-3. 替换后的英文 slug 必须基于需求语义生成英文短语，使用小写 kebab-case，例如 `user-login-redesign`。
-4. 文件名必须体现需求内容，不要使用 `random`、`temp`、`final`、`demo`、日期、task id 之外的随机串，或其他与需求无关的占位词。
-5. 如果原始需求是中文，先理解需求含义，再翻译/归纳为自然的英文 slug。
-6. 必须真正写入文件，不只是输出到终端。
-7. 写完后输出文件路径。
+2. 必须真正写入文件，不只是输出到终端。
+3. 写完后输出文件路径。
 """
 
     return constructed_prd_prompt_text
@@ -1206,6 +1234,8 @@ def build_codex_review_prompt(
     task_title: str,
     dev_log_text_list: list[str],
     worktree_path_str: str | None = None,
+    review_round_index_int: int = 1,
+    total_review_round_count_int: int | None = None,
 ) -> str:
     """根据任务标题和历史日志构建 self-review Prompt.
 
@@ -1213,6 +1243,8 @@ def build_codex_review_prompt(
         task_title: 需求卡片标题
         dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
         worktree_path_str: 预期的 git worktree 绝对路径（可选）
+        review_round_index_int: 当前 review 轮次
+        total_review_round_count_int: 总 review 轮次数（可选）
 
     Returns:
         str: 完整的 self-review Prompt 文本
@@ -1233,10 +1265,20 @@ def build_codex_review_prompt(
     else:
         review_worktree_instruction_block_str = ""
 
+    if total_review_round_count_int is None:
+        review_round_block_str = f"- 当前是第 {review_round_index_int} 轮 AI 自检"
+    else:
+        review_round_block_str = (
+            f"- 当前是第 {review_round_index_int}/{total_review_round_count_int} 轮 AI 自检"
+        )
+
     constructed_review_prompt_text = f"""你现在处于 Koda 工作流的 AI 自检阶段，需要对刚完成的实现做一次代码评审。
 
 ## 需求标题
 {task_title}
+
+## 当前轮次
+{review_round_block_str}
 
 ## 最近上下文（来自任务日志）
 {review_context_block_str}
@@ -1254,6 +1296,75 @@ def build_codex_review_prompt(
 请开始执行代码评审。"""
 
     return constructed_review_prompt_text
+
+
+def build_codex_review_fix_prompt(
+    task_title: str,
+    dev_log_text_list: list[str],
+    review_output_lines: list[str],
+    fix_round_index_int: int,
+    max_fix_rounds_int: int,
+    self_review_summary_str: str | None = None,
+    worktree_path_str: str | None = None,
+) -> str:
+    """根据最近一轮 review 结论构建自动回改 Prompt.
+
+    Args:
+        task_title: 需求卡片标题
+        dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
+        review_output_lines: 最近一轮 self-review 的输出行
+        fix_round_index_int: 当前自动回改轮次
+        max_fix_rounds_int: 自动回改总上限
+        self_review_summary_str: 最近一轮 self-review 摘要
+        worktree_path_str: 预期的 git worktree 绝对路径（可选）
+
+    Returns:
+        str: 完整的自动回改 Prompt 文本
+    """
+    review_fix_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=10,
+        separator_str="\n\n---\n",
+        empty_context_text_str="（暂无额外上下文，请以最近一轮 self-review 结论为准）",
+    )
+    review_findings_block_str = _build_self_review_findings_block(
+        review_output_lines=review_output_lines,
+        self_review_summary_str=self_review_summary_str,
+    )
+
+    if worktree_path_str:
+        review_fix_worktree_instruction_block_str = f"""
+## Git Worktree 说明
+当前工作目录是任务对应的 git worktree：`{worktree_path_str}`
+- 必须继续在这个工作区内完成回改，不要切换到其他目录
+"""
+    else:
+        review_fix_worktree_instruction_block_str = ""
+
+    constructed_review_fix_prompt_text = f"""你现在处于 Koda 工作流的 AI 自动回改阶段，需要根据最近一轮 self-review 的阻塞性结论做定向修复。
+
+## 需求标题
+{task_title}
+
+## 当前轮次
+- 当前是第 {fix_round_index_int}/{max_fix_rounds_int} 轮自动回改
+
+## 最近上下文（来自任务日志）
+{review_fix_context_block_str}
+{review_fix_worktree_instruction_block_str}
+## 最近一轮 self-review 结论
+{review_findings_block_str}
+
+## 回改要求
+1. 这是 review-fix 阶段：只修复最近一轮 review 明确指出的阻塞性问题，不要重新大范围发散实现。
+2. 可以修改代码、测试和文档，但范围必须严格围绕本轮 review blocker。
+3. 如果某条建议不是阻塞项，或与当前 review 无关，不要顺手扩展。
+4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
+5. 完成后请简要说明本轮修复了哪些 blocker、还有哪些剩余风险。
+
+请开始执行自动回改。"""
+
+    return constructed_review_fix_prompt_text
 
 
 def build_codex_completion_prompt(
@@ -1339,9 +1450,7 @@ def _write_log_to_db(
         db_session.add(new_dev_log)
         db_session.commit()
     except Exception as db_write_error:
-        logger.error(
-            f"Failed to write DevLog for task {task_id_str[:8]}...: {db_write_error}"
-        )
+        logger.error(f"Failed to write DevLog for task {task_id_str[:8]}...: {db_write_error}")
         db_session.rollback()
     finally:
         db_session.close()
@@ -1375,9 +1484,7 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
                     task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
                 task_obj.closed_at = None
             db_session.commit()
-            logger.info(
-                f"Task {task_id_str[:8]}... stage advanced to {next_stage_value}"
-            )
+            logger.info(f"Task {task_id_str[:8]}... stage advanced to {next_stage_value}")
     except Exception as stage_update_error:
         logger.error(
             f"Failed to advance stage for task {task_id_str[:8]}...: {stage_update_error}"
@@ -1416,9 +1523,7 @@ async def _run_codex_phase(
     """
     codex_executable_path_str = shutil.which("codex")
     if not codex_executable_path_str:
-        missing_codex_log_text = (
-            "❌ 未找到 codex 可执行文件，请确认 codex CLI 已安装并在 PATH 中。"
-        )
+        missing_codex_log_text = "❌ 未找到 codex 可执行文件，请确认 codex CLI 已安装并在 PATH 中。"
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
@@ -1439,9 +1544,7 @@ async def _run_codex_phase(
             cancelled_log_text_str,
             "BUG",
         )
-        return CodexPhaseExecutionResult(
-            success=False, output_lines=[], was_cancelled=True
-        )
+        return CodexPhaseExecutionResult(success=False, output_lines=[], was_cancelled=True)
 
     task_log_path = get_task_log_path(task_id_str)
     _write_phase_log_header(
@@ -1471,9 +1574,7 @@ async def _run_codex_phase(
                 if not pending_output_line_list:
                     return
 
-                elapsed_seconds_float = (
-                    asyncio.get_running_loop().time() - last_flush_time_float
-                )
+                elapsed_seconds_float = asyncio.get_running_loop().time() - last_flush_time_float
                 if (
                     force
                     or len(pending_output_line_list) >= _LOG_BATCH_SIZE
@@ -1498,9 +1599,7 @@ async def _run_codex_phase(
                 if decoded_stdout_line_str:
                     pending_output_line_list.append(decoded_stdout_line_str)
                     aggregated_output_line_list.append(decoded_stdout_line_str)
-                    logger.debug(
-                        f"[{phase_log_label_str}:{task_id_str[:8]}] {decoded_stdout_line_str}"
-                    )
+                    logger.debug(f"[{phase_log_label_str}:{task_id_str[:8]}] {decoded_stdout_line_str}")
                     _append_text_to_task_log(task_log_path, decoded_stdout_line_str)
                 await flush_pending_output_lines()
 
@@ -1508,9 +1607,7 @@ async def _run_codex_phase(
             await flush_pending_output_lines(force=True)
             _append_exit_code_to_task_log(task_log_path, phase_return_code_int)
 
-            if phase_return_code_int == 0 and not _output_contains_interruption(
-                aggregated_output_line_list
-            ):
+            if phase_return_code_int == 0 and not _output_contains_interruption(aggregated_output_line_list):
                 return CodexPhaseExecutionResult(
                     success=True,
                     output_lines=aggregated_output_line_list,
@@ -1588,9 +1685,7 @@ async def _run_codex_phase(
                     cancelled_log_text_str,
                     "BUG",
                 )
-                return CodexPhaseExecutionResult(
-                    success=False, output_lines=[], was_cancelled=True
-                )
+                return CodexPhaseExecutionResult(success=False, output_lines=[], was_cancelled=True)
 
             if attempt_index < _MAX_AUTO_RETRY:
                 retry_log_text_str = (
@@ -1649,66 +1744,60 @@ async def run_codex_prd(
         work_dir_path: codex 工作目录
         worktree_path_str: git worktree 路径（可选）
     """
-    prd_prompt_text_str = build_codex_prd_prompt(
-        task_title=task_title_str,
-        dev_log_text_list=dev_log_text_list,
-        task_id_str=task_id_str,
-        worktree_path_str=worktree_path_str,
-    )
-
-    existing_task_prd_file_path_list = list_task_prd_file_paths(
-        worktree_dir_path=work_dir_path,
-        task_id_str=task_id_str,
-    )
-    for existing_task_prd_file_path in existing_task_prd_file_path_list:
-        try:
-            existing_task_prd_file_path.unlink()
-            logger.info(f"Removed old PRD file: {existing_task_prd_file_path}")
-        except OSError as cleanup_error:
-            logger.warning(
-                "Could not remove old PRD file %s: %s",
-                existing_task_prd_file_path,
-                cleanup_error,
-            )
-
-    prd_phase_result = await _run_codex_phase(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        codex_prompt_text_str=prd_prompt_text_str,
-        work_dir_path=work_dir_path,
-        phase_log_label_str="codex-prd",
-        phase_display_name_str="PRD 生成",
-        cancelled_log_text_str="🛑 用户手动中断了 PRD 生成。",
-        overwrite_existing_log_bool=True,
-    )
-
-    if not prd_phase_result.success:
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        return
-
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        "✅ PRD 已生成，请先由用户确认 PRD，再决定是否进入后续执行阶段。",
-        "FIXED",
-    )
-    await asyncio.to_thread(
-        _advance_stage_in_db, task_id_str, "prd_waiting_confirmation"
-    )
-    logger.info(f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation")
-
-    # 发送邮件通知：PRD 已生成，等待用户确认
+    register_task_background_activity(task_id_str)
     try:
-        from dsl.services.email_service import send_prd_ready_notification
+        prd_prompt_text_str = build_codex_prd_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=dev_log_text_list,
+            task_id_str=task_id_str,
+            worktree_path_str=worktree_path_str,
+        )
+
+        task_prd_file_path = work_dir_path / "tasks" / f"prd-{task_id_str[:8]}.md"
+        if task_prd_file_path.exists():
+            try:
+                task_prd_file_path.unlink()
+                logger.info(f"Removed old PRD file: {task_prd_file_path}")
+            except OSError as cleanup_error:
+                logger.warning(
+                    f"Could not remove old PRD file {task_prd_file_path}: {cleanup_error}"
+                )
+
+        prd_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=prd_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str="codex-prd",
+            phase_display_name_str="PRD 生成",
+            cancelled_log_text_str="🛑 用户手动中断了 PRD 生成。",
+            overwrite_existing_log_bool=True,
+        )
+
+        if not prd_phase_result.success:
+            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            return
 
         await asyncio.to_thread(
-            send_prd_ready_notification, task_id_str, task_title_str
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            "✅ PRD 已生成，请先由用户确认 PRD，再决定是否进入后续执行阶段。",
+            "FIXED",
         )
-    except Exception as email_error:
-        logger.warning(
-            f"Failed to send PRD ready email for task {task_id_str[:8]}...: {email_error}"
-        )
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "prd_waiting_confirmation")
+        logger.info(f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation")
+
+        # 发送邮件通知：PRD 已生成，等待用户确认
+        try:
+            from dsl.services.email_service import send_prd_ready_notification
+            await asyncio.to_thread(send_prd_ready_notification, task_id_str, task_title_str)
+        except Exception as email_error:
+            logger.warning(
+                f"Failed to send PRD ready email for task {task_id_str[:8]}...: {email_error}"
+            )
+    finally:
+        clear_task_background_activity(task_id_str)
 
 
 async def run_codex_review(
@@ -1729,55 +1818,186 @@ async def run_codex_review(
         work_dir_path: codex 的工作目录
         worktree_path_str: 预期的 git worktree 路径（可选）
     """
-    review_prompt_text_str = build_codex_review_prompt(
-        task_title=task_title_str,
-        dev_log_text_list=dev_log_text_list,
-        worktree_path_str=worktree_path_str,
-    )
+    async def send_manual_intervention_notification(
+        failure_reason_str: str,
+    ) -> None:
+        """发送 self-review 闭环失败通知."""
+        try:
+            from dsl.services.email_service import send_task_failed_notification
 
-    review_phase_result = await _run_codex_phase(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        codex_prompt_text_str=review_prompt_text_str,
-        work_dir_path=work_dir_path,
-        phase_log_label_str="codex-review",
-        phase_display_name_str="AI 自检",
-        cancelled_log_text_str="🛑 用户手动中断了 AI 自检。",
-        overwrite_existing_log_bool=False,
-        clear_cancel_marker_at_start_bool=False,
-    )
+            await asyncio.to_thread(
+                send_task_failed_notification,
+                task_id_str,
+                task_title_str,
+                failure_reason_str,
+            )
+        except Exception as email_error:
+            logger.warning(
+                f"Failed to send changes_requested email for task {task_id_str[:8]}...: {email_error}"
+            )
 
-    if not review_phase_result.success:
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        return
-
-    self_review_status_str = _extract_self_review_status(
-        review_phase_result.output_lines
-    )
-    self_review_summary_str = _extract_self_review_summary(
-        review_phase_result.output_lines
-    )
-
-    if self_review_status_str == _SELF_REVIEW_STATUS_PASS:
-        review_pass_log_text = (
-            "✅ AI 自检完成，未发现阻塞性问题。\n"
-            "当前阶段保持在：AI 自检中（self_review_in_progress）。"
-        )
-        if self_review_summary_str:
-            review_pass_log_text += f"\n摘要：{self_review_summary_str}"
+    async def move_task_to_changes_requested(
+        failure_log_text_str: str,
+        failure_reason_str: str,
+        notify_bool: bool = True,
+    ) -> None:
+        """记录闭环失败并推进任务到人工介入态."""
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            review_pass_log_text,
-            "FIXED",
+            failure_log_text_str,
+            "BUG",
         )
-        logger.info(f"Task {task_id_str[:8]}... self review passed.")
-        return
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+        if notify_bool:
+            await send_manual_intervention_notification(failure_reason_str)
 
-    if self_review_status_str == _SELF_REVIEW_STATUS_CHANGES_REQUESTED:
+    review_context_log_list = list(dev_log_text_list)
+    invalid_status_retry_count_int = 0
+    review_round_index_int = 1
+    total_review_round_count_int = _MAX_SELF_REVIEW_FIX_ROUNDS + 1
+
+    while review_round_index_int <= total_review_round_count_int:
+        review_prompt_text_str = build_codex_review_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=review_context_log_list,
+            worktree_path_str=worktree_path_str,
+            review_round_index_int=review_round_index_int,
+            total_review_round_count_int=total_review_round_count_int,
+        )
+        review_phase_label_str = (
+            "codex-review"
+            if review_round_index_int == 1
+            else f"codex-review-round-{review_round_index_int}"
+        )
+        review_phase_display_name_str = (
+            "AI 自检"
+            if review_round_index_int == 1
+            else f"AI 自检复审（第 {review_round_index_int} 轮）"
+        )
+        review_cancelled_log_text_str = (
+            "🛑 用户手动中断了 AI 自检。"
+            if review_round_index_int == 1
+            else f"🛑 用户手动中断了第 {review_round_index_int} 轮 AI 自检复审。"
+        )
+
+        review_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=review_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str=review_phase_label_str,
+            phase_display_name_str=review_phase_display_name_str,
+            cancelled_log_text_str=review_cancelled_log_text_str,
+            overwrite_existing_log_bool=False,
+            clear_cancel_marker_at_start_bool=False,
+        )
+        review_context_log_list.extend(review_phase_result.output_lines)
+
+        if not review_phase_result.success:
+            if review_phase_result.was_cancelled:
+                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                return
+
+            failure_reason_str = (
+                f"第 {review_round_index_int} 轮 AI 自检阶段执行失败，AI 无法自行完成 review 闭环"
+            )
+            failure_log_text_str = (
+                f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮评审执行失败。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            await move_task_to_changes_requested(
+                failure_log_text_str=failure_log_text_str,
+                failure_reason_str=failure_reason_str,
+            )
+            logger.warning(f"Task {task_id_str[:8]}... self review round {review_round_index_int} failed.")
+            return
+
+        self_review_status_str = _extract_self_review_status(review_phase_result.output_lines)
+        self_review_summary_str = _extract_self_review_summary(review_phase_result.output_lines)
+
+        if self_review_status_str == _SELF_REVIEW_STATUS_PASS:
+            review_pass_log_text = (
+                f"✅ AI 自检闭环完成：第 {review_round_index_int} 轮评审通过，未发现阻塞性问题。\n"
+                "当前阶段保持在：AI 自检中（self_review_in_progress）。"
+            )
+            if self_review_summary_str:
+                review_pass_log_text += f"\n摘要：{self_review_summary_str}"
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                review_pass_log_text,
+                "FIXED",
+            )
+            logger.info(f"Task {task_id_str[:8]}... self review loop passed.")
+            return
+
+        if self_review_status_str is None:
+            if invalid_status_retry_count_int < _MAX_SELF_REVIEW_INVALID_STATUS_RETRY:
+                invalid_status_retry_count_int += 1
+                retry_log_text_str = (
+                    f"⚠️ 第 {review_round_index_int} 轮 AI 自检未产出有效的结构化状态标记，"
+                    f"自动重试评审（{invalid_status_retry_count_int}/{_MAX_SELF_REVIEW_INVALID_STATUS_RETRY}）。"
+                )
+                if self_review_summary_str:
+                    retry_log_text_str += f"\n摘要：{self_review_summary_str}"
+                await asyncio.to_thread(
+                    _write_log_to_db,
+                    task_id_str,
+                    run_account_id_str,
+                    retry_log_text_str,
+                    "BUG",
+                )
+                review_context_log_list.append(retry_log_text_str)
+                logger.warning(
+                    f"Task {task_id_str[:8]}... self review round {review_round_index_int} missing marker, retrying."
+                )
+                continue
+
+            failure_reason_str = (
+                f"第 {review_round_index_int} 轮 AI 自检连续未产出有效结构化状态，AI 无法自行完成 review 闭环"
+            )
+            missing_status_log_text = (
+                f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮评审连续未产出有效结构化状态。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            if self_review_summary_str:
+                missing_status_log_text += f"\n摘要：{self_review_summary_str}"
+            await move_task_to_changes_requested(
+                failure_log_text_str=missing_status_log_text,
+                failure_reason_str=failure_reason_str,
+            )
+            logger.warning(
+                f"Task {task_id_str[:8]}... self review round {review_round_index_int} missing status marker."
+            )
+            return
+
+        invalid_status_retry_count_int = 0
+
+        if review_round_index_int > _MAX_SELF_REVIEW_FIX_ROUNDS:
+            failure_reason_str = (
+                f"AI 自检在 {_MAX_SELF_REVIEW_FIX_ROUNDS} 轮自动回改后仍存在阻塞性问题"
+            )
+            if self_review_summary_str:
+                failure_reason_str = f"{failure_reason_str}：{self_review_summary_str}"
+            exhausted_retry_log_text = (
+                f"❌ AI 自检闭环未完成：已用尽 {_MAX_SELF_REVIEW_FIX_ROUNDS} 轮自动回改次数。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            if self_review_summary_str:
+                exhausted_retry_log_text += f"\n最后一轮摘要：{self_review_summary_str}"
+            await move_task_to_changes_requested(
+                failure_log_text_str=exhausted_retry_log_text,
+                failure_reason_str=failure_reason_str,
+            )
+            logger.info(f"Task {task_id_str[:8]}... self review loop exhausted fix rounds.")
+            return
+
         review_blocker_log_text = (
-            "❌ AI 自检发现阻塞性问题，任务已回退至：待修改（changes_requested）。"
+            f"🛠️ 第 {review_round_index_int} 轮 AI 自检发现阻塞性问题，"
+            f"开始自动回改（{review_round_index_int}/{_MAX_SELF_REVIEW_FIX_ROUNDS}）。"
         )
         if self_review_summary_str:
             review_blocker_log_text += f"\n摘要：{self_review_summary_str}"
@@ -1788,40 +2008,64 @@ async def run_codex_review(
             review_blocker_log_text,
             "BUG",
         )
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        logger.info(f"Task {task_id_str[:8]}... self review requested changes.")
+        review_context_log_list.append(review_blocker_log_text)
 
-        # 发送邮件通知：AI 自检发现阻塞性问题
-        try:
-            from dsl.services.email_service import send_task_failed_notification
+        review_fix_prompt_text_str = build_codex_review_fix_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=review_context_log_list,
+            review_output_lines=review_phase_result.output_lines,
+            fix_round_index_int=review_round_index_int,
+            max_fix_rounds_int=_MAX_SELF_REVIEW_FIX_ROUNDS,
+            self_review_summary_str=self_review_summary_str,
+            worktree_path_str=worktree_path_str,
+        )
+        review_fix_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=review_fix_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str=f"codex-review-fix-round-{review_round_index_int}",
+            phase_display_name_str=f"AI 自动回改（第 {review_round_index_int} 轮）",
+            cancelled_log_text_str=f"🛑 用户手动中断了第 {review_round_index_int} 轮 AI 自动回改。",
+            overwrite_existing_log_bool=False,
+            clear_cancel_marker_at_start_bool=False,
+        )
+        review_context_log_list.extend(review_fix_phase_result.output_lines)
 
-            await asyncio.to_thread(
-                send_task_failed_notification,
-                task_id_str,
-                task_title_str,
-                self_review_summary_str or "AI 自检发现阻塞性问题",
+        if not review_fix_phase_result.success:
+            if review_fix_phase_result.was_cancelled:
+                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                return
+
+            failure_reason_str = (
+                f"第 {review_round_index_int} 轮 AI 自动回改执行失败，AI 无法自行完成 review 闭环"
             )
-        except Exception as email_error:
+            remediation_failure_log_text = (
+                f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮自动回改执行失败。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            await move_task_to_changes_requested(
+                failure_log_text_str=remediation_failure_log_text,
+                failure_reason_str=failure_reason_str,
+            )
             logger.warning(
-                f"Failed to send changes_requested email for task {task_id_str[:8]}...: {email_error}"
+                f"Task {task_id_str[:8]}... self review fix round {review_round_index_int} failed."
             )
-        return
+            return
 
-    missing_status_log_text = (
-        "⚠️ AI 自检已执行，但未产出有效的结构化状态标记，"
-        "任务已回退至：待修改（changes_requested），等待人工确认。"
-    )
-    if self_review_summary_str:
-        missing_status_log_text += f"\n摘要：{self_review_summary_str}"
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        missing_status_log_text,
-        "BUG",
-    )
-    await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-    logger.warning(f"Task {task_id_str[:8]}... self review missing status marker.")
+        remediation_completed_log_text = (
+            f"✅ 第 {review_round_index_int} 轮自动回改完成，"
+            f"开始重新执行 AI 自检（{review_round_index_int + 1}/{total_review_round_count_int}）。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            remediation_completed_log_text,
+            "FIXED",
+        )
+        review_context_log_list.append(remediation_completed_log_text)
+        review_round_index_int += 1
 
 
 async def run_codex_task(
@@ -1845,67 +2089,70 @@ async def run_codex_task(
         work_dir_path: codex 的工作目录（代码仓库根路径）
         worktree_path_str: 预期的 git worktree 路径（可选）
     """
-    implementation_prompt_text_str = build_codex_prompt(
-        task_title=task_title_str,
-        dev_log_text_list=dev_log_text_list,
-        worktree_path_str=worktree_path_str,
-    )
+    register_task_background_activity(task_id_str)
+    try:
+        implementation_prompt_text_str = build_codex_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=dev_log_text_list,
+            worktree_path_str=worktree_path_str,
+        )
 
-    logger.info(
-        f"Starting codex exec for task {task_id_str[:8]}... in work_dir={work_dir_path}"
-    )
+        logger.info(
+            f"Starting codex exec for task {task_id_str[:8]}... in work_dir={work_dir_path}"
+        )
 
-    implementation_phase_result = await _run_codex_phase(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        codex_prompt_text_str=implementation_prompt_text_str,
-        work_dir_path=work_dir_path,
-        phase_log_label_str="codex-exec",
-        phase_display_name_str="codex exec",
-        cancelled_log_text_str="🛑 用户手动中断了任务执行。",
-        overwrite_existing_log_bool=True,
-    )
+        implementation_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=implementation_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str="codex-exec",
+            phase_display_name_str="codex exec",
+            cancelled_log_text_str="🛑 用户手动中断了任务执行。",
+            overwrite_existing_log_bool=True,
+        )
 
-    if not implementation_phase_result.success:
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        return
+        if not implementation_phase_result.success:
+            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            return
 
-    completion_log_text = (
-        "✅ codex exec 执行完成（exit 0）。\n"
-        "工作流阶段即将推进至：AI 自检中（self_review_in_progress）。"
-    )
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        completion_log_text,
-        "FIXED",
-    )
-    await asyncio.to_thread(
-        _advance_stage_in_db, task_id_str, "self_review_in_progress"
-    )
-    await asyncio.to_thread(
-        _write_log_to_db,
-        task_id_str,
-        run_account_id_str,
-        "🔍 已进入 AI 自检阶段，开始执行代码评审。",
-        "OPTIMIZATION",
-    )
-    logger.info(
-        f"Task {task_id_str[:8]}... implementation completed, starting self review."
-    )
+        completion_log_text = (
+            "✅ codex exec 执行完成（exit 0）。\n"
+            "工作流阶段即将推进至：AI 自检中（self_review_in_progress），并启动自动 self-review 闭环。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            completion_log_text,
+            "FIXED",
+        )
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "self_review_in_progress")
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            (
+                "🔍 已进入 AI 自检阶段，开始第 1 轮代码评审"
+                f"（1/{_MAX_SELF_REVIEW_FIX_ROUNDS + 1}）。"
+            ),
+            "OPTIMIZATION",
+        )
+        logger.info(
+            f"Task {task_id_str[:8]}... implementation completed, starting self review."
+        )
 
-    review_context_log_list = (
-        dev_log_text_list + implementation_phase_result.output_lines
-    )
-    await run_codex_review(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        task_title_str=task_title_str,
-        dev_log_text_list=review_context_log_list,
-        work_dir_path=work_dir_path,
-        worktree_path_str=worktree_path_str,
-    )
+        review_context_log_list = dev_log_text_list + implementation_phase_result.output_lines
+        await run_codex_review(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            dev_log_text_list=review_context_log_list,
+            work_dir_path=work_dir_path,
+            worktree_path_str=worktree_path_str,
+        )
+    finally:
+        clear_task_background_activity(task_id_str)
 
 
 async def run_codex_completion(
@@ -1936,7 +2183,7 @@ async def run_codex_completion(
     """
     del work_dir_path
 
-    _running_background_task_ids.add(task_id_str)
+    register_task_background_activity(task_id_str)
     try:
         await asyncio.to_thread(
             _write_log_to_db,
@@ -1969,9 +2216,7 @@ async def run_codex_completion(
                 "任务已回退至：待修改（changes_requested）。",
                 "BUG",
             )
-            await asyncio.to_thread(
-                _advance_stage_in_db, task_id_str, "changes_requested"
-            )
+            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
             return
 
         if completion_result.cleanup_succeeded:
@@ -1983,9 +2228,7 @@ async def run_codex_completion(
                 "FIXED",
             )
             await asyncio.to_thread(_finalize_completion_in_db, task_id_str, True)
-            logger.info(
-                f"Task {task_id_str[:8]}... completion flow merged and cleaned up."
-            )
+            logger.info(f"Task {task_id_str[:8]}... completion flow merged and cleaned up.")
             return
 
         cleanup_warning_text = completion_result.failure_reason_text or (
@@ -2010,4 +2253,4 @@ async def run_codex_completion(
             task_id_str[:8],
         )
     finally:
-        _running_background_task_ids.discard(task_id_str)
+        clear_task_background_activity(task_id_str)
