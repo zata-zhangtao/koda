@@ -112,17 +112,19 @@ flowchart TD
 上图描述的是**完整目标状态机**，而当前代码里真正自动推进到位的部分是：
 
 - `backlog -> prd_generating -> prd_waiting_confirmation`
-- `prd_waiting_confirmation -> implementation_in_progress -> self_review_in_progress`
+- `prd_waiting_confirmation -> implementation_in_progress -> self_review_in_progress -> test_in_progress`
 
 其中 `self_review_in_progress` 不再只是状态切换：`run_codex_task` 在实现完成后会立即触发一次独立的 Codex review，review 输出继续写回 `DevLog`。如果 review 发现阻塞问题，系统会继续在同一个 task worktree 中执行有上限的 `review -> 自动回改 -> review` 闭环；只有当自动回改次数耗尽、review 输出持续无效，或 review / 回改阶段本身执行失败时，任务才会回退到 `changes_requested`。
 
-`changes_requested` 的当前真实含义也随之收窄为“AI 无法自行完成 self-review 闭环，需要人工介入后重新执行”，不再表示“第一次 review 发现 blocker”。PRD 生成后的确认仍然必须由用户触发，review 闭环通过后也不会自动进入 `pr_preparing`；最终 `Complete` 仍由用户明确点击。若任务还停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，用户仍可显式触发 `Complete`，后端会先写一条 `DevLog` 记录这次人工接管。
+当 self-review 闭环通过后，任务会进一步进入 `test_in_progress`，并执行基于 `.pre-commit-config.yaml` 的 `uv run pre-commit run --all-files`。如果 pre-commit 首次执行返回非零，系统会自动重跑一次；若仍失败，则继续在同一个 task worktree 中执行有上限的 `lint -> AI lint 定向修复 -> lint` 闭环。只有当 lint-fix 次数耗尽、lint-fix 阶段本身执行失败，或相关输出无法继续闭环时，任务才会回退到 `changes_requested`。
+
+`changes_requested` 的当前真实含义也随之收窄为“AI 无法自行完成 review / lint 自动闭环，需要人工介入后重新执行”，不再表示“第一次 review 发现 blocker”。PRD 生成后的确认仍然必须由用户触发，review 与 lint 闭环通过后也不会自动进入 `pr_preparing`；最终 `Complete` 仍由用户明确点击。若任务还停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，用户仍可显式触发 `Complete`，后端会先写一条 `DevLog` 记录这次人工接管。
 
 `pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`、基于任务摘要生成 `git commit -m ...`、`git rebase main`，若 rebase / merge 冲突则自动调用 Codex 修复，然后复用当前持有 `main` 分支的工作区完成 merge 与清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。
 
 对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
 
-`test_in_progress` 与 `acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
+`test_in_progress` 现在已有第一种真实落地语义：承载 post-review pre-commit lint 与 lint-fix 闭环；更重的容器级集成测试仍属于后续自动化扩展。`acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
 
 ## 任务与时间线的数据回路
 

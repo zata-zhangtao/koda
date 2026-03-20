@@ -14,6 +14,7 @@
 | 类型 | 命令 | 说明 |
 | --- | --- | --- |
 | Python 测试 | `uv run pytest` | 当前主要覆盖日志器配置 |
+| Pre-commit Lint | `uv run pre-commit run --all-files` | 检查仓库级 hook、Ruff 与本地一致性校验 |
 | 前端构建 | `cd frontend && npm run build` | 检查 TypeScript 与打包是否通过 |
 | 文档构建 | `just docs-build` | 严格模式构建 MkDocs |
 | 本地联调 | `just dsl-dev` | 人工验证任务、日志、附件与阶段流转 |
@@ -43,9 +44,12 @@
 6. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
 7. 检查阶段是否推进到 `self_review_in_progress`
 8. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
-9. 若闭环最终通过，确认任务仍停留在 `self_review_in_progress`，并等待用户点击 `Complete`；若在通过前人工提前点击 `Complete`，确认时间线新增“已记录人工接管”留痕
-10. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `self_review_in_progress` 任务应显示 `Complete`
-11. 若连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
+9. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
+10. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
+11. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
+12. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
+13. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`
+14. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 
 ### 项目与 Worktree
 

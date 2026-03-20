@@ -368,6 +368,8 @@ def execute_task(
     2. 在后台异步启动 codex exec，输出实时写入 DevLog 时间线
     3. 实现完成后自动推进至 self_review_in_progress，并立即执行 AI 自检 / 代码评审
     4. 若自检发现阻塞问题，优先进入自动回改并重新评审；仅在闭环失败或执行失败时回退至 changes_requested
+    5. 若自检通过，任务自动推进到 test_in_progress，并执行 `uv run pre-commit run --all-files`
+    6. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 AI lint 定向修复闭环；仅在 lint 闭环失败时回退至 changes_requested
 
     仅允许从 prd_waiting_confirmation 或 changes_requested 阶段触发.
 

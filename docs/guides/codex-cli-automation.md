@@ -34,9 +34,11 @@
 6. 实现成功后任务推进到 `self_review_in_progress`
 7. 后端立即启动 `run_codex_review` 执行 AI 自检与代码评审
 8. 若 review 发现阻塞问题，系统会在同一个 worktree 中进入有上限的自动回改轮次，再重新执行 review-only 评审
-9. 若 review 闭环在额度内通过，任务保持在 `self_review_in_progress`，等待后续测试自动化或人工点击 `Complete`
-10. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写一条 `DevLog` 记录人工接管
-11. 只有当自动回改次数耗尽、review 输出持续无效，或 review / 回改阶段执行失败时，任务才回退到 `changes_requested`
+9. 若 review 闭环在额度内通过，任务自动推进到 `test_in_progress`，并开始执行 `uv run pre-commit run --all-files`
+10. 若 pre-commit 首次执行返回非零，系统会自动重跑一次，吸收 auto-fix hook 的常见改写场景
+11. 若 lint 在自动重跑后仍失败，系统会在同一个 worktree 中进入有上限的 `lint -> AI lint-fix -> lint` 闭环
+12. 若 lint 闭环在额度内通过，任务保持在 `test_in_progress`，等待用户点击 `Complete`
+13. 只有当 review / lint 自动闭环次数耗尽、输出持续无效，或相关阶段执行失败时，任务才回退到 `changes_requested`
 
 ### 完成收尾链路
 
@@ -116,6 +118,23 @@
 - 必须继续在同一个 task worktree 中执行
 - 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR
 
+### Lint 定向修复 Prompt
+
+由 `build_codex_lint_fix_prompt` 构造，输入包括：
+
+- 任务标题
+- 最近最多 10 条历史日志
+- 最近一次 pre-commit lint 的原始输出
+- 当前 lint 定向修复轮次与回改上限
+- 可选的 worktree 路径
+
+当前 Prompt 会显式要求：
+
+- 这是 lint-fix 阶段，只修复最近一次 lint 输出明确指出的问题
+- 可以修改代码、文档和配置，但不能重新大范围发散实现
+- 必须继续在同一个 task worktree 中执行
+- 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR
+
 ### 完成阶段说明文本
 
 `build_codex_completion_prompt` 现在主要作为完成链路的人类可读说明，输入包括：
@@ -150,7 +169,10 @@ codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"
 
 ### 数据库时间线
 
-Codex 的输出不是单独存放在某个审计表中，而是直接写回 `DevLog` 时间线。这意味着前端可以把 AI 执行过程当成普通日志流来展示。对于 self-review 闭环，时间线里会明确看到“第 N 轮 review 发现问题 -> 第 N 轮自动回改 -> 第 N+1 轮复审”及其摘要。
+Codex 的输出不是单独存放在某个审计表中，而是直接写回 `DevLog` 时间线。这意味着前端可以把 AI 执行过程当成普通日志流来展示。对于当前自动化链路，时间线里会明确看到：
+
+- 第 N 轮 review 发现问题 -> 第 N 轮自动回改 -> 第 N+1 轮复审
+- review 通过 -> pre-commit lint -> AI lint-fix -> lint 复检
 
 ### 本地日志文件
 
@@ -212,12 +234,12 @@ Codex 的工作目录选择顺序如下：
 当前实现已经把 Codex 接进任务编排，但还不是完整代理平台：
 
 - 没有使用结构化 JSON 事件流
-- 还没有把测试、PR 创建、验收代理自动串起来
+- 还没有把容器级集成测试、PR 创建、验收代理自动串起来；当前 `test_in_progress` 首期只真实承载 post-review lint / lint-fix
 - Prompt 仍然写死在 Python 字符串中，没有独立版本管理
 
 同时要注意当前仍保留两个显式人工边界：
 
 - PRD 生成完成后，是否进入执行仍需要用户确认
-- self-review 闭环通过后，是否执行最终 `Complete` 仍需要用户点击；若 AI 自检尚未形成最近一轮“通过”结论但后台已空闲，用户也可以手动点击 `Complete`，系统会把这次人工接管写入 `DevLog`
+- review 与 lint 自动闭环都通过后，是否执行最终 `Complete` 仍需要用户点击；若 AI 自检尚未形成最近一轮“通过”结论但后台已空闲，用户也可以手动点击 `Complete`，系统会把这次人工接管写入 `DevLog`
 
 如果你打算继续扩展这一层，建议先看[Prompt 管理](../core/prompt-management.md)和[系统设计](../architecture/system-design.md)。

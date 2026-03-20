@@ -204,6 +204,11 @@ install-worktree-completion:
     echo "Installed completion script at $completion_script_path"
     echo "Run: source \"$shell_rc_path\""
 
+# Lint and format check (ruff)
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+
 # Run tests (usage: just test [all|local|real])
 #   just test        - Run local tests (no API keys needed)
 #   just test all    - Run all tests
@@ -380,6 +385,14 @@ dsl-dev:
         fi
     }
 
+    find_free_port() {
+        local port="$1"
+        while lsof -tiTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; do
+            port=$((port + 1))
+        done
+        echo "${port}"
+    }
+
     terminate_process_tree() {
         local pid="$1"
 
@@ -406,12 +419,15 @@ dsl-dev:
 
     echo "Starting DSL development environment..."
     just setup-data
-    ensure_port_available 8000 "the backend"
+    BACKEND_PORT=$(find_free_port 8000)
+    if [[ "${BACKEND_PORT}" != "8000" ]]; then
+        echo "Port 8000 is in use, using port ${BACKEND_PORT} for the backend instead."
+    fi
     ensure_port_available 5173 "the frontend"
 
     trap cleanup EXIT INT TERM
 
-    uv run python main.py &
+    KODA_SERVER_PORT="${BACKEND_PORT}" KODA_TUNNEL_UPSTREAM_URL="http://127.0.0.1:${BACKEND_PORT}" uv run python main.py &
     BACKEND_PID=$!
 
     (

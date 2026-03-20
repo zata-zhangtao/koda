@@ -58,6 +58,18 @@ _MAX_SELF_REVIEW_FIX_ROUNDS = 2
 # self-review 缺失结构化状态时的额外重试次数
 _MAX_SELF_REVIEW_INVALID_STATUS_RETRY = 1
 
+# post-review lint 自动回改的最大轮次
+_MAX_POST_REVIEW_LINT_FIX_ROUNDS = 2
+
+# post-review lint 的统一命令合同
+_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST = [
+    "uv",
+    "run",
+    "pre-commit",
+    "run",
+    "--all-files",
+]
+
 
 def register_task_background_activity(task_id_str: str) -> None:
     """注册任务后台自动化已进入运行态.
@@ -111,6 +123,36 @@ class GitCompletionExecutionResult:
     feature_branch_name: str | None = None
     failure_reason_text: str | None = None
     worktree_removed: bool = False
+
+
+@dataclass(slots=True)
+class SelfReviewExecutionResult:
+    """Describe the result of the self-review loop.
+
+    Attributes:
+        passed: Whether the self-review loop reached a passing result
+        context_log_text_list: Updated workflow context to feed into later stages
+        self_review_summary_str: Summary returned by the final passing review
+    """
+
+    passed: bool
+    context_log_text_list: list[str]
+    self_review_summary_str: str | None = None
+
+
+@dataclass(slots=True)
+class PostReviewLintExecutionResult:
+    """Describe the result of the post-review lint loop.
+
+    Attributes:
+        passed: Whether lint eventually passed
+        context_log_text_list: Updated workflow context including lint and lint-fix output
+        latest_lint_output_line_list: The latest pre-commit output used for decisions
+    """
+
+    passed: bool
+    context_log_text_list: list[str]
+    latest_lint_output_line_list: list[str]
 
 
 def _output_contains_interruption(output_lines: list[str]) -> bool:
@@ -237,6 +279,47 @@ def _build_self_review_findings_block(
     if findings_section_list:
         return "\n\n".join(findings_section_list)
     return "（本轮 self-review 只确认存在阻塞问题，但没有提供更多细节。）"
+
+
+def _extract_completed_process_output_lines(
+    completed_process: subprocess.CompletedProcess[str],
+) -> list[str]:
+    """Extract non-empty stdout/stderr lines from a completed command.
+
+    Args:
+        completed_process: Completed process object
+
+    Returns:
+        list[str]: Combined non-empty stdout/stderr lines in display order
+    """
+    combined_output_line_list: list[str] = []
+    for raw_output_text_str in [completed_process.stdout, completed_process.stderr]:
+        if not raw_output_text_str:
+            continue
+        for raw_output_line_str in raw_output_text_str.splitlines():
+            stripped_output_line_str = raw_output_line_str.strip()
+            if stripped_output_line_str:
+                combined_output_line_list.append(stripped_output_line_str)
+    return combined_output_line_list
+
+
+def _build_lint_findings_block(lint_output_lines: list[str]) -> str:
+    """Build the lint findings block passed into the lint-fix prompt.
+
+    Args:
+        lint_output_lines: Latest pre-commit output lines
+
+    Returns:
+        str: Text block for the prompt
+    """
+    filtered_lint_output_line_list = [
+        raw_output_line_str.strip()
+        for raw_output_line_str in lint_output_lines
+        if raw_output_line_str.strip()
+    ]
+    if filtered_lint_output_line_list:
+        return "\n".join(filtered_lint_output_line_list)
+    return "（最近一次 pre-commit lint 未提供更多输出，请基于当前工作区和命令结果自行定位问题。）"
 
 
 def _build_recent_context_block(
@@ -555,6 +638,132 @@ def _run_logged_command(
         "OPTIMIZATION" if completed_process.returncode == 0 else "BUG",
     )
     return completed_process
+
+
+async def _send_manual_intervention_notification(
+    task_id_str: str,
+    task_title_str: str,
+    failure_reason_str: str,
+) -> None:
+    """Send the standard manual-intervention notification.
+
+    Args:
+        task_id_str: Task UUID string
+        task_title_str: Task title
+        failure_reason_str: Human-readable failure reason
+    """
+    try:
+        from dsl.services.email_service import send_task_failed_notification
+
+        await asyncio.to_thread(
+            send_task_failed_notification,
+            task_id_str,
+            task_title_str,
+            failure_reason_str,
+        )
+    except Exception as email_error:
+        logger.warning(
+            f"Failed to send changes_requested email for task {task_id_str[:8]}...: {email_error}"
+        )
+
+
+async def _move_task_to_changes_requested(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    failure_log_text_str: str,
+    failure_reason_str: str,
+    notify_bool: bool = True,
+) -> None:
+    """Record loop failure and move the task into manual-intervention state.
+
+    Args:
+        task_id_str: Task UUID string
+        run_account_id_str: Run account UUID string
+        task_title_str: Task title
+        failure_log_text_str: DevLog text to persist
+        failure_reason_str: Human-readable failure reason
+        notify_bool: Whether to send the failure email
+    """
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        failure_log_text_str,
+        "BUG",
+    )
+    await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+    if notify_bool:
+        await _send_manual_intervention_notification(
+            task_id_str=task_id_str,
+            task_title_str=task_title_str,
+            failure_reason_str=failure_reason_str,
+        )
+
+
+async def _run_post_review_lint_with_auto_rerun(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    work_dir_path: Path,
+    lint_context_log_list: list[str],
+    lint_cycle_label_str: str,
+    command_log_label_prefix_str: str,
+) -> tuple[bool, list[str]]:
+    """Run pre-commit once, then rerun once if the first execution fails.
+
+    Args:
+        task_id_str: Task UUID string
+        run_account_id_str: Run account UUID string
+        task_log_path: Task log file path
+        work_dir_path: Task worktree / repo path
+        lint_context_log_list: Mutable workflow context log list
+        lint_cycle_label_str: Human-readable label for retry logs
+        command_log_label_prefix_str: Prefix used in the task log command labels
+
+    Returns:
+        tuple[bool, list[str]]: Whether lint passed, and the latest lint output lines
+    """
+    first_completed_process = await asyncio.to_thread(
+        _run_logged_command,
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+        cwd_path=work_dir_path,
+        command_log_label_str=command_log_label_prefix_str,
+    )
+    first_output_line_list = _extract_completed_process_output_lines(first_completed_process)
+    lint_context_log_list.extend(first_output_line_list)
+    if first_completed_process.returncode == 0:
+        return True, first_output_line_list
+
+    lint_retry_log_text_str = (
+        f"⚠️ {lint_cycle_label_str}首次执行未通过，"
+        "开始自动重跑一次 pre-commit lint。"
+    )
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        lint_retry_log_text_str,
+        "BUG",
+    )
+    lint_context_log_list.append(lint_retry_log_text_str)
+
+    second_completed_process = await asyncio.to_thread(
+        _run_logged_command,
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+        cwd_path=work_dir_path,
+        command_log_label_str=f"{command_log_label_prefix_str}-rerun",
+    )
+    second_output_line_list = _extract_completed_process_output_lines(second_completed_process)
+    lint_context_log_list.extend(second_output_line_list)
+    return second_completed_process.returncode == 0, second_output_line_list
 
 
 def _has_unmerged_conflicts(repo_path: Path) -> bool:
@@ -1367,6 +1576,74 @@ def build_codex_review_fix_prompt(
     return constructed_review_fix_prompt_text
 
 
+def build_codex_lint_fix_prompt(
+    task_title: str,
+    dev_log_text_list: list[str],
+    lint_output_lines: list[str],
+    fix_round_index_int: int,
+    max_fix_rounds_int: int,
+    worktree_path_str: str | None = None,
+) -> str:
+    """Build the prompt for the post-review lint-fix stage.
+
+    Args:
+        task_title: Requirement card title
+        dev_log_text_list: Existing task log texts in chronological order
+        lint_output_lines: Latest pre-commit output lines
+        fix_round_index_int: Current lint-fix round index
+        max_fix_rounds_int: Max lint-fix rounds
+        worktree_path_str: Expected git worktree path when available
+
+    Returns:
+        str: Full lint-fix prompt text
+    """
+    lint_fix_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=10,
+        separator_str="\n\n---\n",
+        empty_context_text_str="（暂无额外上下文，请以最近一次 pre-commit lint 输出为准）",
+    )
+    lint_findings_block_str = _build_lint_findings_block(lint_output_lines)
+
+    if worktree_path_str:
+        lint_fix_worktree_instruction_block_str = f"""
+## Git Worktree 说明
+当前工作目录是任务对应的 git worktree：`{worktree_path_str}`
+- 必须继续在这个工作区内完成 lint 定向修复，不要切换到其他目录
+"""
+    else:
+        lint_fix_worktree_instruction_block_str = ""
+
+    lint_command_display_str = shlex.join(_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST)
+    constructed_lint_fix_prompt_text = f"""你现在处于 Koda 工作流的 post-review lint 自动回改阶段，需要根据最近一次 pre-commit lint 的失败输出做定向修复。
+
+## 需求标题
+{task_title}
+
+## 当前轮次
+- 当前是第 {fix_round_index_int}/{max_fix_rounds_int} 轮 lint 自动回改
+
+## 最近上下文（来自任务日志）
+{lint_fix_context_block_str}
+{lint_fix_worktree_instruction_block_str}
+## 最近一次 lint 命令
+`{lint_command_display_str}`
+
+## 最近一次 lint 输出
+{lint_findings_block_str}
+
+## 回改要求
+1. 这是 lint-fix 阶段：只修复最近一次 lint 输出明确指出的问题，不要重新大范围发散实现。
+2. 优先处理格式、Ruff、配置和本地 hook 明确指出的 blocker；不要顺手重写无关业务逻辑。
+3. 可以修改代码、文档和配置，但范围必须严格围绕最近一次 lint 输出。
+4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
+5. 完成后请简要说明本轮修复了哪些 lint blocker、还有哪些剩余风险。
+
+请开始执行 lint 定向修复。"""
+
+    return constructed_lint_fix_prompt_text
+
+
 def build_codex_completion_prompt(
     task_title: str,
     dev_log_text_list: list[str],
@@ -1807,7 +2084,7 @@ async def run_codex_review(
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str | None = None,
-) -> None:
+) -> SelfReviewExecutionResult:
     """执行 AI 自检阶段的代码评审.
 
     Args:
@@ -1817,42 +2094,10 @@ async def run_codex_review(
         dev_log_text_list: 历史日志文本列表
         work_dir_path: codex 的工作目录
         worktree_path_str: 预期的 git worktree 路径（可选）
+
+    Returns:
+        SelfReviewExecutionResult: self-review 闭环结果
     """
-    async def send_manual_intervention_notification(
-        failure_reason_str: str,
-    ) -> None:
-        """发送 self-review 闭环失败通知."""
-        try:
-            from dsl.services.email_service import send_task_failed_notification
-
-            await asyncio.to_thread(
-                send_task_failed_notification,
-                task_id_str,
-                task_title_str,
-                failure_reason_str,
-            )
-        except Exception as email_error:
-            logger.warning(
-                f"Failed to send changes_requested email for task {task_id_str[:8]}...: {email_error}"
-            )
-
-    async def move_task_to_changes_requested(
-        failure_log_text_str: str,
-        failure_reason_str: str,
-        notify_bool: bool = True,
-    ) -> None:
-        """记录闭环失败并推进任务到人工介入态."""
-        await asyncio.to_thread(
-            _write_log_to_db,
-            task_id_str,
-            run_account_id_str,
-            failure_log_text_str,
-            "BUG",
-        )
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-        if notify_bool:
-            await send_manual_intervention_notification(failure_reason_str)
-
     review_context_log_list = list(dev_log_text_list)
     invalid_status_retry_count_int = 0
     review_round_index_int = 1
@@ -1898,7 +2143,10 @@ async def run_codex_review(
         if not review_phase_result.success:
             if review_phase_result.was_cancelled:
                 await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-                return
+                return SelfReviewExecutionResult(
+                    passed=False,
+                    context_log_text_list=review_context_log_list,
+                )
 
             failure_reason_str = (
                 f"第 {review_round_index_int} 轮 AI 自检阶段执行失败，AI 无法自行完成 review 闭环"
@@ -1907,12 +2155,19 @@ async def run_codex_review(
                 f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮评审执行失败。\n"
                 "任务已进入：待修改（changes_requested），需要人工介入。"
             )
-            await move_task_to_changes_requested(
+            review_context_log_list.append(failure_log_text_str)
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
                 failure_log_text_str=failure_log_text_str,
                 failure_reason_str=failure_reason_str,
             )
             logger.warning(f"Task {task_id_str[:8]}... self review round {review_round_index_int} failed.")
-            return
+            return SelfReviewExecutionResult(
+                passed=False,
+                context_log_text_list=review_context_log_list,
+            )
 
         self_review_status_str = _extract_self_review_status(review_phase_result.output_lines)
         self_review_summary_str = _extract_self_review_summary(review_phase_result.output_lines)
@@ -1920,7 +2175,7 @@ async def run_codex_review(
         if self_review_status_str == _SELF_REVIEW_STATUS_PASS:
             review_pass_log_text = (
                 f"✅ AI 自检闭环完成：第 {review_round_index_int} 轮评审通过，未发现阻塞性问题。\n"
-                "当前阶段保持在：AI 自检中（self_review_in_progress）。"
+                "工作流阶段即将推进至：自动化验证中（test_in_progress），并开始执行 post-review lint。"
             )
             if self_review_summary_str:
                 review_pass_log_text += f"\n摘要：{self_review_summary_str}"
@@ -1931,8 +2186,13 @@ async def run_codex_review(
                 review_pass_log_text,
                 "FIXED",
             )
+            review_context_log_list.append(review_pass_log_text)
             logger.info(f"Task {task_id_str[:8]}... self review loop passed.")
-            return
+            return SelfReviewExecutionResult(
+                passed=True,
+                context_log_text_list=review_context_log_list,
+                self_review_summary_str=self_review_summary_str,
+            )
 
         if self_review_status_str is None:
             if invalid_status_retry_count_int < _MAX_SELF_REVIEW_INVALID_STATUS_RETRY:
@@ -1965,14 +2225,21 @@ async def run_codex_review(
             )
             if self_review_summary_str:
                 missing_status_log_text += f"\n摘要：{self_review_summary_str}"
-            await move_task_to_changes_requested(
+            review_context_log_list.append(missing_status_log_text)
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
                 failure_log_text_str=missing_status_log_text,
                 failure_reason_str=failure_reason_str,
             )
             logger.warning(
                 f"Task {task_id_str[:8]}... self review round {review_round_index_int} missing status marker."
             )
-            return
+            return SelfReviewExecutionResult(
+                passed=False,
+                context_log_text_list=review_context_log_list,
+            )
 
         invalid_status_retry_count_int = 0
 
@@ -1988,12 +2255,19 @@ async def run_codex_review(
             )
             if self_review_summary_str:
                 exhausted_retry_log_text += f"\n最后一轮摘要：{self_review_summary_str}"
-            await move_task_to_changes_requested(
+            review_context_log_list.append(exhausted_retry_log_text)
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
                 failure_log_text_str=exhausted_retry_log_text,
                 failure_reason_str=failure_reason_str,
             )
             logger.info(f"Task {task_id_str[:8]}... self review loop exhausted fix rounds.")
-            return
+            return SelfReviewExecutionResult(
+                passed=False,
+                context_log_text_list=review_context_log_list,
+            )
 
         review_blocker_log_text = (
             f"🛠️ 第 {review_round_index_int} 轮 AI 自检发现阻塞性问题，"
@@ -2035,7 +2309,10 @@ async def run_codex_review(
         if not review_fix_phase_result.success:
             if review_fix_phase_result.was_cancelled:
                 await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
-                return
+                return SelfReviewExecutionResult(
+                    passed=False,
+                    context_log_text_list=review_context_log_list,
+                )
 
             failure_reason_str = (
                 f"第 {review_round_index_int} 轮 AI 自动回改执行失败，AI 无法自行完成 review 闭环"
@@ -2044,14 +2321,21 @@ async def run_codex_review(
                 f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮自动回改执行失败。\n"
                 "任务已进入：待修改（changes_requested），需要人工介入。"
             )
-            await move_task_to_changes_requested(
+            review_context_log_list.append(remediation_failure_log_text)
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
                 failure_log_text_str=remediation_failure_log_text,
                 failure_reason_str=failure_reason_str,
             )
             logger.warning(
                 f"Task {task_id_str[:8]}... self review fix round {review_round_index_int} failed."
             )
-            return
+            return SelfReviewExecutionResult(
+                passed=False,
+                context_log_text_list=review_context_log_list,
+            )
 
         remediation_completed_log_text = (
             f"✅ 第 {review_round_index_int} 轮自动回改完成，"
@@ -2066,6 +2350,222 @@ async def run_codex_review(
         )
         review_context_log_list.append(remediation_completed_log_text)
         review_round_index_int += 1
+
+    return SelfReviewExecutionResult(
+        passed=False,
+        context_log_text_list=review_context_log_list,
+    )
+
+
+async def run_post_review_lint(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str | None = None,
+) -> PostReviewLintExecutionResult:
+    """Execute post-review pre-commit lint and bounded lint-fix rounds.
+
+    Args:
+        task_id_str: Task UUID string
+        run_account_id_str: Run account UUID string
+        task_title_str: Task title
+        dev_log_text_list: Existing workflow context log texts
+        work_dir_path: Task worktree / repo path
+        worktree_path_str: Expected git worktree path when available
+
+    Returns:
+        PostReviewLintExecutionResult: lint loop result
+    """
+    task_log_path = get_task_log_path(task_id_str)
+    lint_context_log_list = list(dev_log_text_list)
+    latest_lint_output_line_list: list[str] = []
+
+    _write_phase_log_header(
+        task_log_path=task_log_path,
+        task_id_str=task_id_str,
+        phase_log_label_str="post-review-lint",
+        overwrite_existing_log_bool=False,
+    )
+
+    lint_start_log_text = (
+        "🧪 已进入自动化验证阶段，开始执行 post-review lint："
+        f"`{shlex.join(_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST)}`。"
+    )
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        lint_start_log_text,
+        "OPTIMIZATION",
+    )
+    lint_context_log_list.append(lint_start_log_text)
+
+    lint_passed_bool, latest_lint_output_line_list = await _run_post_review_lint_with_auto_rerun(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        work_dir_path=work_dir_path,
+        lint_context_log_list=lint_context_log_list,
+        lint_cycle_label_str="post-review lint",
+        command_log_label_prefix_str="post-review-lint",
+    )
+    if lint_passed_bool:
+        lint_pass_log_text = (
+            "✅ post-review lint 闭环完成：pre-commit 已通过。\n"
+            "当前阶段保持在：自动化验证中（test_in_progress），等待用户点击 `Complete`。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            lint_pass_log_text,
+            "FIXED",
+        )
+        lint_context_log_list.append(lint_pass_log_text)
+        return PostReviewLintExecutionResult(
+            passed=True,
+            context_log_text_list=lint_context_log_list,
+            latest_lint_output_line_list=latest_lint_output_line_list,
+        )
+
+    lint_fix_round_index_int = 1
+    while lint_fix_round_index_int <= _MAX_POST_REVIEW_LINT_FIX_ROUNDS:
+        lint_fix_start_log_text = (
+            f"🛠️ post-review lint 未通过，开始第 {lint_fix_round_index_int}/"
+            f"{_MAX_POST_REVIEW_LINT_FIX_ROUNDS} 轮 AI lint 定向修复。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            lint_fix_start_log_text,
+            "BUG",
+        )
+        lint_context_log_list.append(lint_fix_start_log_text)
+
+        lint_fix_prompt_text_str = build_codex_lint_fix_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=lint_context_log_list,
+            lint_output_lines=latest_lint_output_line_list,
+            fix_round_index_int=lint_fix_round_index_int,
+            max_fix_rounds_int=_MAX_POST_REVIEW_LINT_FIX_ROUNDS,
+            worktree_path_str=worktree_path_str,
+        )
+        lint_fix_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=lint_fix_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str=f"codex-lint-fix-round-{lint_fix_round_index_int}",
+            phase_display_name_str=f"AI Lint 定向修复（第 {lint_fix_round_index_int} 轮）",
+            cancelled_log_text_str=f"🛑 用户手动中断了第 {lint_fix_round_index_int} 轮 AI lint 定向修复。",
+            overwrite_existing_log_bool=False,
+            clear_cancel_marker_at_start_bool=False,
+        )
+        lint_context_log_list.extend(lint_fix_phase_result.output_lines)
+
+        if not lint_fix_phase_result.success:
+            if lint_fix_phase_result.was_cancelled:
+                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                return PostReviewLintExecutionResult(
+                    passed=False,
+                    context_log_text_list=lint_context_log_list,
+                    latest_lint_output_line_list=latest_lint_output_line_list,
+                )
+
+            failure_reason_str = (
+                f"第 {lint_fix_round_index_int} 轮 AI lint 定向修复执行失败，"
+                "AI 无法自行完成 post-review lint 闭环"
+            )
+            lint_fix_failure_log_text = (
+                f"❌ post-review lint 闭环未完成：第 {lint_fix_round_index_int} 轮 AI lint 定向修复执行失败。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            lint_context_log_list.append(lint_fix_failure_log_text)
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                failure_log_text_str=lint_fix_failure_log_text,
+                failure_reason_str=failure_reason_str,
+            )
+            return PostReviewLintExecutionResult(
+                passed=False,
+                context_log_text_list=lint_context_log_list,
+                latest_lint_output_line_list=latest_lint_output_line_list,
+            )
+
+        lint_fix_completed_log_text = (
+            f"✅ 第 {lint_fix_round_index_int} 轮 AI lint 定向修复完成，"
+            "开始重新执行 pre-commit lint。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            lint_fix_completed_log_text,
+            "FIXED",
+        )
+        lint_context_log_list.append(lint_fix_completed_log_text)
+
+        lint_passed_bool, latest_lint_output_line_list = await _run_post_review_lint_with_auto_rerun(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            work_dir_path=work_dir_path,
+            lint_context_log_list=lint_context_log_list,
+            lint_cycle_label_str=f"第 {lint_fix_round_index_int} 轮 lint 定向修复后的 post-review lint",
+            command_log_label_prefix_str=f"post-review-lint-round-{lint_fix_round_index_int}",
+        )
+        if lint_passed_bool:
+            lint_pass_log_text = (
+                "✅ post-review lint 闭环完成：pre-commit 已通过。\n"
+                "当前阶段保持在：自动化验证中（test_in_progress），等待用户点击 `Complete`。"
+            )
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                lint_pass_log_text,
+                "FIXED",
+            )
+            lint_context_log_list.append(lint_pass_log_text)
+            return PostReviewLintExecutionResult(
+                passed=True,
+                context_log_text_list=lint_context_log_list,
+                latest_lint_output_line_list=latest_lint_output_line_list,
+            )
+
+        lint_fix_round_index_int += 1
+
+    latest_lint_summary_str = (
+        latest_lint_output_line_list[0] if latest_lint_output_line_list else "最新 lint 输出为空"
+    )
+    failure_reason_str = (
+        f"post-review lint 在 {_MAX_POST_REVIEW_LINT_FIX_ROUNDS} 轮 AI lint 定向修复后仍未通过："
+        f"{latest_lint_summary_str}"
+    )
+    lint_exhausted_log_text = (
+        f"❌ post-review lint 闭环未完成：已用尽 {_MAX_POST_REVIEW_LINT_FIX_ROUNDS} 轮 AI lint 定向修复次数。\n"
+        "任务已进入：待修改（changes_requested），需要人工介入。"
+    )
+    if latest_lint_output_line_list:
+        lint_exhausted_log_text += f"\n最后一轮输出：{latest_lint_summary_str}"
+    lint_context_log_list.append(lint_exhausted_log_text)
+    await _move_task_to_changes_requested(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_title_str=task_title_str,
+        failure_log_text_str=lint_exhausted_log_text,
+        failure_reason_str=failure_reason_str,
+    )
+    return PostReviewLintExecutionResult(
+        passed=False,
+        context_log_text_list=lint_context_log_list,
+        latest_lint_output_line_list=latest_lint_output_line_list,
+    )
 
 
 async def run_codex_task(
@@ -2143,11 +2643,23 @@ async def run_codex_task(
         )
 
         review_context_log_list = dev_log_text_list + implementation_phase_result.output_lines
-        await run_codex_review(
+        self_review_result = await run_codex_review(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
             task_title_str=task_title_str,
             dev_log_text_list=review_context_log_list,
+            work_dir_path=work_dir_path,
+            worktree_path_str=worktree_path_str,
+        )
+        if not self_review_result.passed:
+            return
+
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "test_in_progress")
+        await run_post_review_lint(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            dev_log_text_list=self_review_result.context_log_text_list,
             work_dir_path=work_dir_path,
             worktree_path_str=worktree_path_str,
         )

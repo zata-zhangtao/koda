@@ -68,14 +68,16 @@
 5. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
 6. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
 7. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环
-8. 只有当闭环最终失败时，任务才会回退到 `changes_requested`
-9. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+8. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
+9. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
+10. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
+11. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
+12. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
 
 ### 已建模但尚未自动化闭环的阶段
 
 以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示，但当前仓库尚未完整实现自动推进器：
 
-- `test_in_progress`
 - `pr_preparing`
 - `acceptance_in_progress`
 - `changes_requested` 到后续更细粒度阶段的闭环
@@ -116,7 +118,7 @@
 - 先看 `dsl/services/codex_runner.py`
 - 明确是改 PRD Prompt 还是实现 Prompt
 - 注意日志写回、阶段推进和 `/tmp` 实时日志文件三者必须保持一致
-- 若修改 self-review 逻辑，要同时核对 review-only Prompt、review-fix Prompt、失败通知时机以及 `TaskService.execute_task(...)` 的入口契约
+- 若修改 self-review / lint 自动化逻辑，要同时核对 review-only Prompt、review-fix Prompt、lint-fix Prompt、失败通知时机以及 `TaskService.execute_task(...)` 的入口契约
 
 ## 推荐开发流程
 

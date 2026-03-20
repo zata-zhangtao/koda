@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 from dsl.services import codex_runner, email_service
@@ -69,6 +70,32 @@ class FakeCodexProcess:
     def kill(self) -> None:
         """Mark the fake process as killed."""
         self.returncode = -9
+
+
+def build_completed_process(
+    *,
+    command_argument_list: list[str],
+    return_code_int: int,
+    stdout_text: str = "",
+    stderr_text: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Build a completed process object for command-level tests.
+
+    Args:
+        command_argument_list: Command arguments represented by the result
+        return_code_int: Exit code to expose
+        stdout_text: Stdout payload
+        stderr_text: Stderr payload
+
+    Returns:
+        subprocess.CompletedProcess[str]: Completed process stub
+    """
+    return subprocess.CompletedProcess(
+        args=command_argument_list,
+        returncode=return_code_int,
+        stdout=stdout_text,
+        stderr=stderr_text,
+    )
 
 
 def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
@@ -154,13 +181,35 @@ def test_build_codex_review_fix_prompt_preserves_full_latest_blocker_list() -> N
     assert "SELF_REVIEW_STATUS: CHANGES_REQUESTED" not in review_fix_prompt_text
 
 
-def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
+def test_build_codex_lint_fix_prompt_preserves_latest_lint_output() -> None:
+    """Lint-fix prompt should focus on the latest pre-commit output and forbid Git finalization."""
+    lint_fix_prompt_text = codex_runner.build_codex_lint_fix_prompt(
+        task_title="Implement post-review lint automation",
+        dev_log_text_list=["Self review already passed; lint is now blocking completion."],
+        lint_output_lines=[
+            "ruff.....................................................................Failed",
+            "tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused",
+            "files were modified by this hook",
+        ],
+        fix_round_index_int=1,
+        max_fix_rounds_int=2,
+        worktree_path_str="/tmp/project-wt-12345678",
+    )
+
+    assert "只修复最近一次 lint 输出明确指出的问题" in lint_fix_prompt_text
+    assert "uv run pre-commit run --all-files" in lint_fix_prompt_text
+    assert "tests/test_codex_runner.py:10:1: F401" in lint_fix_prompt_text
+    assert "不要执行 `git commit`" in lint_fix_prompt_text
+
+
+def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pass(
     tmp_path: Path,
 ) -> None:
-    """A passing self review should run automatically and keep the review stage."""
+    """A passing self review should continue into post-review lint and park in test_in_progress."""
     recorded_prompt_text_list: list[str] = []
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
+    recorded_command_label_list: list[str] = []
     fake_process_queue = [
         FakeCodexProcess(
             output_line_list=["Implemented the requested flow."],
@@ -193,10 +242,27 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
+    def fake_run_logged_command(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_log_path: Path,
+        command_argument_list: list[str],
+        cwd_path: Path,
+        command_log_label_str: str,
+    ) -> subprocess.CompletedProcess[str]:
+        recorded_command_label_list.append(command_log_label_str)
+        return build_completed_process(
+            command_argument_list=command_argument_list,
+            return_code_int=0,
+            stdout_text="pre-commit checks passed",
+        )
+
     original_which = codex_runner.shutil.which
     original_create_codex_subprocess = codex_runner._create_codex_subprocess
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_run_logged_command = codex_runner._run_logged_command
     original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
     try:
@@ -204,6 +270,7 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
         codex_runner._create_codex_subprocess = fake_create_subprocess_exec
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._run_logged_command = fake_run_logged_command
         codex_runner._CODEX_LOG_DIR = tmp_path
 
         asyncio.run(
@@ -221,6 +288,7 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
         codex_runner._create_codex_subprocess = original_create_codex_subprocess
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._run_logged_command = original_run_logged_command
         codex_runner._CODEX_LOG_DIR = original_codex_log_dir
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
@@ -229,13 +297,16 @@ def test_run_codex_task_executes_self_review_and_keeps_stage_on_pass(
     assert "不要默认执行 `git commit`" in recorded_prompt_text_list[0]
     assert "SELF_REVIEW_STATUS: PASS" in recorded_prompt_text_list[1]
     assert "当前是第 1/3 轮 AI 自检" in recorded_prompt_text_list[1]
-    assert recorded_stage_value_list == ["self_review_in_progress"]
+    assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]
+    assert recorded_command_label_list == ["post-review-lint"]
     assert any("开始第 1 轮代码评审" in log_text for log_text, _ in recorded_log_entry_list)
     assert any("AI 自检闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-exec" in task_log_text
     assert "=== Koda codex-review" in task_log_text
+    assert "=== Koda post-review-lint" in task_log_text
 
 
 def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
@@ -245,6 +316,7 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     recorded_prompt_text_list: list[str] = []
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
+    recorded_command_label_list: list[str] = []
     fake_process_queue = [
         FakeCodexProcess(
             output_line_list=["Implemented the requested flow."],
@@ -293,10 +365,27 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
         recorded_stage_value_list.append(next_stage_value)
 
+    def fake_run_logged_command(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_log_path: Path,
+        command_argument_list: list[str],
+        cwd_path: Path,
+        command_log_label_str: str,
+    ) -> subprocess.CompletedProcess[str]:
+        recorded_command_label_list.append(command_log_label_str)
+        return build_completed_process(
+            command_argument_list=command_argument_list,
+            return_code_int=0,
+            stdout_text="pre-commit checks passed after review fix",
+        )
+
     original_which = codex_runner.shutil.which
     original_create_codex_subprocess = codex_runner._create_codex_subprocess
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_run_logged_command = codex_runner._run_logged_command
     original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
     try:
@@ -304,6 +393,7 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
         codex_runner._create_codex_subprocess = fake_create_subprocess_exec
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner._run_logged_command = fake_run_logged_command
         codex_runner._CODEX_LOG_DIR = tmp_path
 
         asyncio.run(
@@ -321,6 +411,7 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
         codex_runner._create_codex_subprocess = original_create_codex_subprocess
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._run_logged_command = original_run_logged_command
         codex_runner._CODEX_LOG_DIR = original_codex_log_dir
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
@@ -328,15 +419,18 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     assert len(recorded_prompt_text_list) == 4
     assert "只修复最近一轮 review 明确指出的阻塞性问题" in recorded_prompt_text_list[2]
     assert "当前是第 2/3 轮 AI 自检" in recorded_prompt_text_list[3]
-    assert recorded_stage_value_list == ["self_review_in_progress"]
+    assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]
+    assert recorded_command_label_list == ["post-review-lint"]
     assert any("第 1 轮 AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
     assert any("第 1 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
     assert any("AI 自检闭环完成：第 2 轮评审通过" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-review" in task_log_text
     assert "=== Koda codex-review-fix-round-1" in task_log_text
     assert "=== Koda codex-review-round-2" in task_log_text
+    assert "=== Koda post-review-lint" in task_log_text
 
 
 def test_run_codex_task_moves_to_changes_requested_after_review_loop_exhausted(
@@ -465,6 +559,252 @@ def test_run_codex_task_moves_to_changes_requested_after_review_loop_exhausted(
     assert any("第 2 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
     assert any("已用尽 2 轮自动回改次数" in log_text for log_text, _ in recorded_log_entry_list)
     assert not any("等待人工确认" in log_text for log_text, _ in recorded_log_entry_list)
+
+
+def test_run_post_review_lint_runs_lint_fix_after_second_failed_lint_and_passes(
+    tmp_path: Path,
+) -> None:
+    """A failed lint rerun should trigger Codex lint-fix before returning success."""
+    recorded_prompt_text_list: list[str] = []
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_command_label_list: list[str] = []
+    lint_process_queue = [
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="ruff.....................................................................Failed",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=0,
+            stdout_text="All pre-commit checks passed",
+        ),
+    ]
+    fake_process_queue = [
+        FakeCodexProcess(
+            output_line_list=[
+                "Removed the unused import and normalized formatting.",
+            ],
+            planned_return_code_int=0,
+            pid_int=8101,
+        ),
+    ]
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        recorded_prompt_text_list.append(kwargs["codex_prompt_text_str"])
+        return fake_process_queue.pop(0)
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_run_logged_command(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_log_path: Path,
+        command_argument_list: list[str],
+        cwd_path: Path,
+        command_log_label_str: str,
+    ) -> subprocess.CompletedProcess[str]:
+        recorded_command_label_list.append(command_log_label_str)
+        return lint_process_queue.pop(0)
+
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_run_logged_command = codex_runner._run_logged_command
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._run_logged_command = fake_run_logged_command
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        lint_result = asyncio.run(
+            codex_runner.run_post_review_lint(
+                task_id_str="12345678-lint-pass",
+                run_account_id_str="run-account-4",
+                task_title_str="Implement post-review lint automation",
+                dev_log_text_list=["Self review already passed."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._run_logged_command = original_run_logged_command
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert lint_result.passed is True
+    assert recorded_command_label_list == [
+        "post-review-lint",
+        "post-review-lint-rerun",
+        "post-review-lint-round-1",
+    ]
+    assert len(recorded_prompt_text_list) == 1
+    assert "tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused" in recorded_prompt_text_list[0]
+    assert "uv run pre-commit run --all-files" in recorded_prompt_text_list[0]
+    assert any("开始第 1/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
+
+    task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
+    assert "=== Koda post-review-lint" in task_log_text
+    assert "=== Koda codex-lint-fix-round-1" in task_log_text
+
+
+def test_run_post_review_lint_moves_to_changes_requested_after_lint_fix_exhausted(
+    tmp_path: Path,
+) -> None:
+    """The task should only regress after all lint-fix rounds fail."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+    lint_process_queue = [
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="ruff.....................................................................Failed",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="tests/test_codex_runner.py:20:1: F401 first blocker",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="ruff.....................................................................Failed again",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="tests/test_codex_runner.py:30:1: F401 second blocker",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="ruff.....................................................................Still failing",
+        ),
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=1,
+            stdout_text="tests/test_codex_runner.py:40:1: F401 final blocker",
+        ),
+    ]
+    fake_process_queue = [
+        FakeCodexProcess(
+            output_line_list=["Applied the first lint fix round."],
+            planned_return_code_int=0,
+            pid_int=8201,
+        ),
+        FakeCodexProcess(
+            output_line_list=["Applied the second lint fix round."],
+            planned_return_code_int=0,
+            pid_int=8202,
+        ),
+    ]
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        return fake_process_queue.pop(0)
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_run_logged_command(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_log_path: Path,
+        command_argument_list: list[str],
+        cwd_path: Path,
+        command_log_label_str: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return lint_process_queue.pop(0)
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    original_which = codex_runner.shutil.which
+    original_create_codex_subprocess = codex_runner._create_codex_subprocess
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_run_logged_command = codex_runner._run_logged_command
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
+        codex_runner._create_codex_subprocess = fake_create_subprocess_exec
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._run_logged_command = fake_run_logged_command
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        lint_result = asyncio.run(
+            codex_runner.run_post_review_lint(
+                task_id_str="12345678-lint-fail",
+                run_account_id_str="run-account-5",
+                task_title_str="Implement post-review lint automation",
+                dev_log_text_list=["Self review already passed."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._create_codex_subprocess = original_create_codex_subprocess
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._run_logged_command = original_run_logged_command
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = original_send_task_failed_notification
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert lint_result.passed is False
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-lint-fail",
+            "Implement post-review lint automation",
+            "post-review lint 在 2 轮 AI lint 定向修复后仍未通过：tests/test_codex_runner.py:40:1: F401 final blocker",
+        )
+    ]
+    assert any("开始第 1/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("开始第 2/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any("已用尽 2 轮 AI lint 定向修复次数" in log_text for log_text, _ in recorded_log_entry_list)
 
 
 def test_run_codex_completion_advances_task_to_done_on_success(
