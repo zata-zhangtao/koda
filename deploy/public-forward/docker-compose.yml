@@ -105,7 +105,7 @@ services:
         mode: 0555
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/Caddyfile.generated && caddy validate --config /tmp/Caddyfile.generated"]
+      test: ["CMD-SHELL", "test -f /tmp/Caddyfile.generated && caddy validate --config /tmp/Caddyfile.generated --adapter caddyfile"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -137,7 +137,7 @@ configs:
           }
 
           handle {
-              basicauth {
+              basic_auth {
                   {$$CADDY_BASICAUTH_USER} __CADDY_BASICAUTH_HASH__
               }
               reverse_proxy gateway:9000
