@@ -96,9 +96,6 @@ services:
       CADDY_BASICAUTH_PASSWORD: ${CADDY_BASICAUTH_PASSWORD:-}
       CADDY_BASICAUTH_HASH: ${CADDY_BASICAUTH_HASH:-}
     entrypoint: ["/bin/sh", "/opt/koda/start-caddy.sh"]
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
       - caddy_data:/data
       - caddy_config:/config
