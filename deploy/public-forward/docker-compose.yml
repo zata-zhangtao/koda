@@ -168,5 +168,5 @@ configs:
       basic_auth_escaped_hash="$$(printf '%s\n' "$$basic_auth_effective_hash" | sed 's/[\\/&]/\\&/g')"
       sed "s/__CADDY_BASICAUTH_HASH__/$$basic_auth_escaped_hash/g" "$$caddyfile_template_path" > "$$generated_caddyfile_path"
 
-      caddy validate --config "$$generated_caddyfile_path"
+      caddy validate --config "$$generated_caddyfile_path" --adapter caddyfile
       exec caddy run --config "$$generated_caddyfile_path" --adapter caddyfile
