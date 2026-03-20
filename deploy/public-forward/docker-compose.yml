@@ -90,15 +90,12 @@ services:
       gateway:
         condition: service_healthy
     environment:
-      KODA_PUBLIC_HOST: ${KODA_PUBLIC_HOST:?KODA_PUBLIC_HOST must be set}
-      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL must be set}
       CADDY_BASICAUTH_USER: ${CADDY_BASICAUTH_USER:?CADDY_BASICAUTH_USER must be set}
       CADDY_BASICAUTH_PASSWORD: ${CADDY_BASICAUTH_PASSWORD:-}
       CADDY_BASICAUTH_HASH: ${CADDY_BASICAUTH_HASH:-}
     entrypoint: ["/bin/sh", "/opt/koda/start-caddy.sh"]
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
+    expose:
+      - "80"
     configs:
       - source: caddyfile_template
         target: /opt/koda/Caddyfile.template
@@ -128,18 +125,10 @@ networks:
   public_forward:
     driver: bridge
 
-volumes:
-  caddy_data:
-  caddy_config:
-
 configs:
   caddyfile_template:
     content: |
-      {
-          email {$CADDY_ACME_EMAIL}
-      }
-
-      {$KODA_PUBLIC_HOST} {
+      :80 {
           encode gzip zstd
 
           @tunnel_ws path /ws/tunnels/*
