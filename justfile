@@ -306,6 +306,57 @@ public-agent:
 
     uv run python -m forwarding_service.agent.main
 
+# 公网模式：同时启动 DSL 应用 + 隧道 agent（两个进程，任一退出则全部终止）
+public-serve:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ ! -f .env ]]; then
+        echo "Missing .env. Copy deploy/public-forward/agent.env.example to .env first."
+        exit 1
+    fi
+
+    terminate_process_tree() {
+        local pid="$1"
+        if [[ -z "${pid}" ]]; then return 0; fi
+        pkill -TERM -P "${pid}" 2>/dev/null || true
+        kill "${pid}" 2>/dev/null || true
+    }
+
+    cleanup() {
+        trap - EXIT INT TERM
+        terminate_process_tree "${APP_PID:-}"
+        terminate_process_tree "${AGENT_PID:-}"
+        wait "${APP_PID:-}" 2>/dev/null || true
+        wait "${AGENT_PID:-}" 2>/dev/null || true
+    }
+
+    trap cleanup EXIT INT TERM
+
+    SERVE_FRONTEND_DIST=true uv run python main.py &
+    APP_PID=$!
+
+    set -a
+    source ./.env
+    set +a
+
+    uv run python -m forwarding_service.agent.main &
+    AGENT_PID=$!
+
+    echo "DSL app PID: ${APP_PID}  |  Agent PID: ${AGENT_PID}"
+
+    while true; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            echo "DSL app exited. Shutting down."
+            exit 1
+        fi
+        if ! kill -0 "${AGENT_PID}" 2>/dev/null; then
+            echo "Agent exited. Shutting down."
+            exit 1
+        fi
+        sleep 1
+    done
+
 # 创建数据目录
 setup-data:
     mkdir -p data/media/original

@@ -1,174 +1,231 @@
 # 公网暴露操作手册
 
-## 目标
+## 架构概览
 
-本手册描述如何通过“服务器 gateway + 本机 agent”的方式，把本机运行的 DSL 受控暴露到公网，而不迁移本地 SQLite、媒体目录、Git 仓库或 Codex CLI。
-
-## 快速流程
-
-### 服务器
-
-```bash
-cd deploy/public-forward
-docker compose up -d --build
+```
+外网用户
+  → Traefik（Dokploy 管理，TLS 终结）
+  → Caddy 容器（Basic Auth + WebSocket 路由）
+  → Gateway 容器（隧道服务端，port 9000）
+    ↕ WebSocket 长连接（wss://）
+本机 Agent
+  → 本机 DSL 应用（http://127.0.0.1:8000）
 ```
 
-这里默认服务器环境变量已经由 shell / CI / systemd 注入；`deploy/public-forward/.env.example` 只作为变量清单。
+所有组件均部署于 `deploy/public-forward/docker-compose.yml`，TLS 由 Dokploy 内置的 Traefik 处理，Caddy 仅负责 Basic Auth 和路由，不做 TLS。
 
-### 本机
+---
+
+## 一、服务器部署（Dokploy）
+
+### 1. 创建 Compose 应用
+
+在 Dokploy 中新建一个 Compose 应用，将仓库根目录作为源，Compose 文件路径填：
+
+```
+deploy/public-forward/docker-compose.yml
+```
+
+### 2. 配置环境变量
+
+在 Dokploy 的 **Environment** 标签中填入以下变量（以实际值替换示例值）：
+
+```env
+# Basic Auth（浏览器访问时弹出的用户名/密码）
+CADDY_BASICAUTH_USER=koda
+CADDY_BASICAUTH_PASSWORD=your-browser-password
+
+# 隧道鉴权（本机 agent 与 gateway 必须一致）
+KODA_TUNNEL_ID=demo-tunnel
+KODA_TUNNEL_SHARED_TOKEN=your-long-random-secret
+
+# Gateway 运行参数（可保持默认）
+GATEWAY_LOG_LEVEL=INFO
+KODA_TUNNEL_RESPONSE_TIMEOUT_SECONDS=30
+KODA_TUNNEL_HEARTBEAT_TIMEOUT_SECONDS=45
+```
+
+> **注意**：Dokploy 的 Environment 变量直接注入容器，不参与 `docker-compose.yml` 的 `${}` 插值，这是正确的设计，无需额外操作。
+
+### 3. 配置域名
+
+在 Dokploy 的 **Domains** 标签中添加域名，配置如下：
+
+| 字段 | 值 |
+|---|---|
+| Service Name | `caddy` |
+| Host | `your-domain.com` |
+| Path | `/` |
+| Container Port | `80` |
+| HTTPS | 开启（Let's Encrypt） |
+
+> Traefik 负责 TLS，Caddy 只监听容器内部的 80 端口。
+
+### 4. 部署
+
+点击 **Deploy**，等待两个容器均变为 `healthy`：
+
+- `gateway`：Python 隧道服务端
+- `caddy`：反向代理 + Basic Auth
+
+验证服务端正常：
 
 ```bash
-cp deploy/public-forward/agent.env.example .env
-npm --prefix frontend run build
+# 在服务器上执行，应返回 {"status":"healthy",...}
+curl https://your-domain.com/_gateway/health -u your-user:your-password
+```
+
+---
+
+## 二、本机启动
+
+### 1. 配置本机 `.env`
+
+参考 `deploy/public-forward/agent.env.example`，在项目根目录创建或修改 `.env`：
+
+```env
+# 必须使用 https://，否则 WebSocket 会用 ws:// 被 Traefik 拒绝
+KODA_PUBLIC_BASE_URL=https://your-domain.com
+KODA_TUNNEL_SERVER_URL=https://your-domain.com
+
+# 与服务器环境变量完全一致
+KODA_TUNNEL_ID=demo-tunnel
+KODA_TUNNEL_SHARED_TOKEN=your-long-random-secret
+
+# 本机 DSL 监听地址
+KODA_TUNNEL_UPSTREAM_URL=http://127.0.0.1:8000
+```
+
+### 2. 构建前端
+
+```bash
+just public-build
+```
+
+### 3. 启动（一条命令）
+
+```bash
+just public-serve
+```
+
+该命令同时启动 DSL 应用（`SERVE_FRONTEND_DIST=true`）和隧道 Agent，任意一个进程退出则全部终止。
+
+正常输出中可看到：
+
+```json
+{"event": "agent_connected", "tunnel_id": "demo-tunnel", ...}
+{"event": "agent_heartbeat_ack", ...}
+```
+
+> 如需分开运行（分别查看日志），也可以：
+>
+> ```bash
+> just public-run    # 终端 1
+> just public-agent  # 终端 2
+> ```
+
+### 5. 访问
+
+浏览器打开 `https://your-domain.com/`，输入 Basic Auth 用户名密码，即可看到 DSL 前端。
+
+---
+
+## 三、启动顺序
+
+```
+服务器                          本机
+──────                          ────
+1. Dokploy 配置环境变量
+2. Dokploy 配置域名
+3. Deploy（gateway + caddy）
+                                4. 修改 .env（https://）
+                                5. just public-build
+                                6. just public-serve
+                                7. 浏览器访问
+```
+
+---
+
+## 四、常见故障排查
+
+### agent 报 `HTTP 404` 无法连接
+
+原因：`KODA_TUNNEL_SERVER_URL` 使用了 `http://` 而不是 `https://`，导致 WebSocket 走 `ws://`，Traefik 无法路由。
+
+```env
+# 错误
+KODA_TUNNEL_SERVER_URL=http://your-domain.com
+
+# 正确
+KODA_TUNNEL_SERVER_URL=https://your-domain.com
+```
+
+### caddy 容器 unhealthy / 报 `Either CADDY_BASICAUTH_PASSWORD or CADDY_BASICAUTH_HASH must be set`
+
+原因：Dokploy Environment 变量未保存，或未 redeploy 使其生效。
+
+处理：确认变量已保存 → 重新 Deploy。
+
+### 浏览器返回 `503 Tunnel Offline`
+
+原因：caddy/gateway 正常，但本机 agent 未连接。
+
+处理：
+
+1. 确认本机 `just public-run` 在运行（`http://127.0.0.1:8000/health` 应返回 200）
+2. 确认本机 `just public-agent` 在运行且输出 `agent_connected`
+3. 确认 `KODA_TUNNEL_ID` 和 `KODA_TUNNEL_SHARED_TOKEN` 与服务器一致
+
+### 浏览器返回 `401 Unauthorized`
+
+原因：Basic Auth 密码错误。
+
+处理：用 Dokploy 里配置的 `CADDY_BASICAUTH_USER` 和 `CADDY_BASICAUTH_PASSWORD` 登录。
+
+### 本机启动报错 `frontend/dist` 不存在
+
+原因：未执行前端构建。
+
+```bash
+just public-build
 just public-run
-just public-agent
 ```
 
-## 运行顺序建议
+---
 
-1. 先准备服务器传给 `docker compose` 的环境变量
-2. 启动服务器 `docker compose up -d --build`
-3. 本机构建 `frontend/dist`
-4. 本机启动 `just public-run`
-5. 本机启动 `just public-agent`
-6. 浏览器访问 `https://<KODA_PUBLIC_HOST>/`
+## 五、日志定位
 
-## 正常行为
-
-当一切正常时：
-
-- 浏览器先看到 Basic Auth 提示框
-- 认证成功后，`/` 会打开 DSL 前端页面
-- 页面内 `/api/*`、`/media/*` 请求继续使用相对路径，不需要改单页应用代码
-- `gateway` 日志会输出 `tunnel_connected`
-- `public-agent` 日志会周期性输出 `agent_heartbeat_sent` / `agent_heartbeat_ack`
-
-## 常见故障与恢复步骤
-
-### 1. 浏览器返回 `401 Unauthorized`
-
-含义：
-
-- Caddy Basic Auth 未通过
-
-检查：
-
-- 服务器传给 `docker compose` 的 `CADDY_BASICAUTH_USER`
-- 服务器传给 `docker compose` 的 `CADDY_BASICAUTH_PASSWORD` 或 `CADDY_BASICAUTH_HASH`
-
-恢复：
-
-1. 如果你用明文模式，更新 `CADDY_BASICAUTH_PASSWORD`
-2. 如果你用哈希模式，重新生成 `CADDY_BASICAUTH_HASH`
-3. 如果两个都设置了，确认你记住的是明文密码，因为容器会优先采用 `CADDY_BASICAUTH_PASSWORD`
-4. 执行 `docker compose up -d`
-
-### 2. 浏览器返回 `503 Tunnel Offline`
-
-含义：
-
-- gateway 已在线，但当前 `KODA_TUNNEL_ID` 没有活动 agent
-
-检查：
-
-- 本机 `just public-run` 是否仍在运行
-- 本机 `just public-agent` 是否仍在运行
-- 本机和服务器的 `KODA_TUNNEL_ID` 是否一致
-- 本机和服务器的 `KODA_TUNNEL_SHARED_TOKEN` 是否一致
-
-恢复：
-
-1. 先确认本机 DSL `http://127.0.0.1:8000/health` 正常
-2. 重启 `just public-agent`
-3. 如仍失败，查看 `docker compose logs gateway` 与本机 agent 日志
-
-### 3. agent 日志反复出现连接失败
-
-含义：
-
-- 公网域名不可达、TLS 证书未就绪，或 token 错误
-
-检查：
-
-- `KODA_TUNNEL_SERVER_URL` 是否指向正确域名
-- `docker compose ps` 中 `caddy`、`gateway` 是否健康
-- `KODA_TUNNEL_SHARED_TOKEN` 是否与服务器一致
-
-恢复：
-
-1. 先确认服务器 `docker compose ps`
-2. 再确认 `docker compose logs gateway`
-3. 修正 token / 域名后重启 `just public-agent`
-
-### 4. 本机 DSL 启动时报错缺少 `frontend/dist`
-
-含义：
-
-- 你启用了 `SERVE_FRONTEND_DIST=true`，但未先构建前端
-
-恢复：
+**服务器**（在 Dokploy Logs 标签或 SSH 执行）：
 
 ```bash
-npm --prefix frontend run build
-just public-run
+docker compose -f deploy/public-forward/docker-compose.yml logs -f gateway
+docker compose -f deploy/public-forward/docker-compose.yml logs -f caddy
 ```
 
-### 5. 页面能打开，但 API 或媒体资源异常
+关键 gateway 事件：
 
-含义：
+| 事件 | 含义 |
+|---|---|
+| `tunnel_connected` | agent 已成功连接 |
+| `tunnel_disconnected` | agent 断开 |
+| `tunnel_auth_rejected` | token 错误 |
+| `gateway_request_failed` | 请求超时或 agent 断线 |
 
-- tunnel 存在，但本机 DSL 路由或本机 upstream 不可用
+**本机 agent** 关键事件：
 
-检查：
+| 事件 | 含义 |
+|---|---|
+| `agent_connected` | 连接服务器成功 |
+| `agent_connection_failed` | 连接失败（含错误原因） |
+| `agent_heartbeat_ack` | 隧道保活正常 |
+| `agent_request_forwarded` | 请求成功转发到本机 DSL |
+| `agent_upstream_failed` | 本机 DSL 无响应 |
 
-- `KODA_TUNNEL_UPSTREAM_URL` 是否仍指向 `http://127.0.0.1:8000`
-- 本机 `http://127.0.0.1:8000/api/...` 是否本来就正常
-- 本机 `http://127.0.0.1:8000/media/...` 是否可访问
+---
 
-恢复：
+## 六、边界说明
 
-1. 先在本机直接访问 DSL 路由
-2. 修正本机 DSL 后，再观察公网入口是否恢复
-
-## 日志定位
-
-服务器：
-
-```bash
-cd deploy/public-forward
-docker compose logs -f gateway
-docker compose logs -f caddy
-```
-
-本机：
-
-```bash
-just public-run
-just public-agent
-```
-
-结构化日志重点看这些事件：
-
-- `tunnel_auth_rejected`
-- `tunnel_connected`
-- `tunnel_disconnected`
-- `agent_connection_failed`
-- `agent_heartbeat_sent`
-- `agent_heartbeat_ack`
-- `agent_upstream_failed`
-
-## 恢复优先级
-
-遇到故障时按这个顺序排查最快：
-
-1. 先看服务器 `docker compose ps`
-2. 再看 gateway 日志里是否有 `tunnel_connected`
-3. 然后看本机 agent 是否在持续重连
-4. 最后直接访问本机 `http://127.0.0.1:8000/health`
-
-## 边界说明
-
-- 本方案只覆盖当前 DSL 所需的 HTTP/HTTPS 流量。
-- 不支持任意 TCP/UDP 透传。
-- 不包含企业级单点登录、WAF、多租户隔离或高可用容灾。
-- 不建议把 Vite 开发服务器直接长期暴露到公网。
+- 仅支持 HTTP/HTTPS 流量，不支持 TCP/UDP 透传。
+- 单租户设计：一个 `KODA_TUNNEL_ID` 对应一个本机实例。
+- 不包含 WAF、多租户隔离、高可用容灾。
+- 不建议将 Vite 开发服务器（port 5173）直接暴露，始终使用 `just public-run`（`SERVE_FRONTEND_DIST=true`）。
