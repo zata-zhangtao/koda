@@ -59,6 +59,7 @@ interface RequirementViewModel {
   task: Task;
   description: string;
   stage: RequirementStage;
+  stageLabel: string;
   createdLabel: string;
 }
 
@@ -297,6 +298,9 @@ function App() {
   const selectedTaskHasSettledSelfReview = selectedTask
     ? hasLatestSelfReviewCyclePassed(selectedTaskDevLogs)
     : false;
+  const selectedTaskStageLabel = selectedTask
+    ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
+    : null;
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
@@ -1592,7 +1596,10 @@ function App() {
                     )}
                   >
                     <div className="devflow-requirement-card__meta">
-                      <StatusBadge status={requirementViewModel.stage} />
+                      <StatusBadge
+                        status={requirementViewModel.stage}
+                        label={requirementViewModel.stageLabel}
+                      />
                       <span className="devflow-requirement-card__date">
                         {requirementViewModel.createdLabel}
                       </span>
@@ -1620,7 +1627,10 @@ function App() {
                           {selectedTask.task_title}
                         </h2>
                         {selectedTaskStage ? (
-                          <StatusBadge status={selectedTaskStage} />
+                          <StatusBadge
+                            status={selectedTaskStage}
+                            label={selectedTaskStageLabel ?? undefined}
+                          />
                         ) : null}
                       </div>
                       <p className="devflow-detail__description">
@@ -2239,9 +2249,10 @@ function ActionButton({
 
 interface StatusBadgeProps {
   status: RequirementStage;
+  label?: string;
 }
 
-function StatusBadge({ status }: StatusBadgeProps) {
+function StatusBadge({ status, label }: StatusBadgeProps) {
   return (
     <span
       className={joinClassNames(
@@ -2249,7 +2260,7 @@ function StatusBadge({ status }: StatusBadgeProps) {
         `devflow-badge--${status}`
       )}
     >
-      {formatStageLabel(status)}
+      {label ?? formatStageLabel(status)}
     </span>
   );
 }
@@ -2262,6 +2273,7 @@ function buildRequirementViewModel(
     task: taskItem,
     description: buildRequirementDescription(taskItem, taskDevLogList),
     stage: deriveRequirementStage(taskItem, taskDevLogList),
+    stageLabel: formatDisplayStageLabel(taskItem, taskDevLogList),
     createdLabel: formatMonthDay(taskItem.created_at),
   };
 }
@@ -2448,6 +2460,33 @@ function deriveRequirementStage(
 ): RequirementStage {
   // workflow_stage is the single source of truth — no log-count heuristics
   return taskItem.workflow_stage;
+}
+
+function deriveSelfReviewDisplayState(
+  taskItem: Task,
+  taskDevLogList: DevLog[]
+): "passed_waiting" | null {
+  if (taskItem.workflow_stage !== WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
+    return null;
+  }
+
+  if (taskItem.is_codex_task_running) {
+    return null;
+  }
+
+  return hasLatestSelfReviewCyclePassed(taskDevLogList) ? "passed_waiting" : null;
+}
+
+function formatDisplayStageLabel(taskItem: Task, taskDevLogList: DevLog[]): string {
+  const selfReviewDisplayState = deriveSelfReviewDisplayState(
+    taskItem,
+    taskDevLogList
+  );
+  if (selfReviewDisplayState === "passed_waiting") {
+    return "Self Review Passed / Waiting to Complete";
+  }
+
+  return formatStageLabel(taskItem.workflow_stage);
 }
 
 function canCompleteTask(
