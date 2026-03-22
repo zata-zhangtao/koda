@@ -60,6 +60,7 @@
 
 - 任务标题
 - 最近几条任务日志
+- 最近日志里解析出的本地图片/附件路径
 - 任务 ID（用于目标文件名）
 - 当前 worktree 路径
 - 生成 PRD 的输出合同
@@ -69,6 +70,7 @@
 - 在 PRD 顶部元数据区域，同时输出 `原始需求标题` 和 `需求名称（AI 归纳）`
 - `需求名称（AI 归纳）` 必须位于主要章节之前，且不能为空
 - 如果上下文不足，`需求名称（AI 归纳）` 必须回退为原始标题的规范化版本
+- 如果上下文里出现 `Attached local files:`，必须显式检查这些本地文件；若某些二进制文件无法完整解析，也不能静默忽略
 - 将完整 PRD 写入任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`，而不是只把内容打印到终端
 - 文件名中的 `<english-requirement-slug>` 必须是基于需求内容归纳出的英文 kebab-case 短语，不能使用随机值
 
@@ -208,6 +210,13 @@ tasks/prd-{task_id[:8]}-<english-requirement-slug>.md
 当前实现里，`changes_requested` 应理解为“自动化流程已经无法自行完成闭环，需要人工介入”。它不是第一次 self-review 失败的同义词。
 
 ### PRD 重新生成
+
+用户在 `prd_waiting_confirmation` 阶段修改需求、补充反馈，或上传图片/附件后，可以调用 `POST /api/tasks/{task_id}/regenerate-prd`：
+
+1. 后端先把任务重新推进到 `prd_generating`
+2. 写入一条“PRD 重新生成请求”时间线日志
+3. 重新收集当前任务的最新上下文
+4. 再次调用 `run_codex_prd`
 
 `run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧 PRD 文件 `tasks/prd-{task_id[:8]}*.md`，避免前端读取到历史版本。
 

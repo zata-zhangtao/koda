@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from dsl.services.prd_file_service import list_task_prd_file_paths
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
@@ -1428,7 +1429,8 @@ def build_codex_prd_prompt(
    - `需求名称（AI 归纳）`：基于任务标题和上下文总结出的规范化需求名称，不得为空。
 3. 不得只保留 `需求名称（AI 归纳）`；`原始需求标题` 必须与 AI 归纳名称同时出现。
 4. 当上下文不足时，`需求名称（AI 归纳）` 必须回退到原始需求标题的规范化版本，输出值不能为空。
-5. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
+5. 如果上下文中出现 `Attached local files:` 段落，请直接检查这些本地图片/附件/视频文件；若当前环境无法完整解析某类二进制文件，也要在 PRD 中显式吸收其文件名、存在性和可确认信息，而不是忽略。
+6. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
@@ -2030,8 +2032,11 @@ async def run_codex_prd(
             worktree_path_str=worktree_path_str,
         )
 
-        task_prd_file_path = work_dir_path / "tasks" / f"prd-{task_id_str[:8]}.md"
-        if task_prd_file_path.exists():
+        existing_prd_file_path_list = list_task_prd_file_paths(
+            worktree_dir_path=work_dir_path,
+            task_id_str=task_id_str,
+        )
+        for task_prd_file_path in existing_prd_file_path_list:
             try:
                 task_prd_file_path.unlink()
                 logger.info(f"Removed old PRD file: {task_prd_file_path}")

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import dsl.api.tasks as tasks_api
-from dsl.api.tasks import complete_task, get_task, get_task_prd_file
+from dsl.api.tasks import complete_task, get_task, get_task_prd_file, regenerate_task_prd
 from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
@@ -96,6 +96,79 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+
+
+def test_regenerate_task_prd_schedules_background_job_with_media_context(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRD regeneration should carry image and attachment file paths into context."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Regenerate with attachments",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_WAITING_CONFIRMATION,
+        worktree_path=str(tmp_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api.config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(tasks_api.config, "MEDIA_STORAGE_PATH", tmp_path / "data" / "media")
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="请根据截图和视频更新交互细节。",
+                media_original_image_path="data/media/original/reference-shot.png",
+            ),
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content=(
+                    "[Attachment: requirement-demo.mp4]"
+                    "(/api/media/7399c41a6c63014b1d048062232027ee.mp4)"
+                ),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    background_tasks = BackgroundTasks()
+    updated_task = regenerate_task_prd(task_obj.id, background_tasks, db_session)
+
+    serialized_context_block_str = "\n\n".join(background_tasks.tasks[0].kwargs["dev_log_text_list"])
+
+    assert updated_task.workflow_stage == WorkflowStage.PRD_GENERATING
+    assert updated_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is tasks_api.run_codex_prd
+    assert str(
+        (tmp_path / "data" / "media" / "original" / "reference-shot.png").resolve()
+    ) in serialized_context_block_str
+    assert str(
+        (
+            tmp_path
+            / "data"
+            / "media"
+            / "original"
+            / "7399c41a6c63014b1d048062232027ee.mp4"
+        ).resolve()
+    ) in serialized_context_block_str
+    assert "Attached local files:" in serialized_context_block_str
 
 
 def test_complete_task_records_manual_override_for_unsettled_self_review(

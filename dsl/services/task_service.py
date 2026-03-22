@@ -26,6 +26,69 @@ class TaskService:
     """
 
     @staticmethod
+    def _ensure_task_worktree_if_needed(
+        db_session: Session,
+        task_obj: Task,
+    ) -> None:
+        """为关联项目的任务创建或复用 worktree.
+
+        Args:
+            db_session: 数据库会话
+            task_obj: 待检查的任务对象
+
+        Raises:
+            ValueError: 当关联仓库路径无效或 worktree 创建失败时
+        """
+        if not task_obj.project_id or task_obj.worktree_path:
+            return
+
+        from pathlib import Path
+
+        from dsl.models.project import Project
+        from dsl.services.project_service import ProjectService
+
+        project_obj = (
+            db_session.query(Project)
+            .filter(Project.id == task_obj.project_id)
+            .first()
+        )
+        if project_obj is None:
+            return
+
+        repo_path_obj = Path(project_obj.repo_path)
+        project_consistency_snapshot = (
+            ProjectService.build_project_consistency_snapshot(project_obj)
+        )
+        if not repo_path_obj.exists():
+            raise ValueError(
+                "关联项目的仓库路径在当前机器上不存在："
+                f"{repo_path_obj}。请先更新项目路径。"
+            )
+        if not (repo_path_obj / ".git").exists():
+            raise ValueError(
+                "关联项目的仓库路径不是有效 Git 仓库："
+                f"{repo_path_obj}。请先更新项目路径。"
+            )
+        if project_consistency_snapshot.is_repo_remote_consistent is False:
+            raise ValueError(
+                "关联项目当前绑定到错误的代码仓库。"
+                "请先把项目重绑到与已同步指纹一致的 Git remote。"
+            )
+
+        from dsl.services.git_worktree_service import GitWorktreeService
+
+        branch_name_str = GitWorktreeService.build_task_branch_name(task_obj.id)
+        created_worktree_path = GitWorktreeService.create_task_worktree(
+            repo_root_path=repo_path_obj,
+            task_id=task_obj.id,
+        )
+        task_obj.worktree_path = str(created_worktree_path)
+        logger.info(
+            f"Task {task_obj.id[:8]}... worktree created: {created_worktree_path} "
+            f"(branch: {branch_name_str})"
+        )
+
+    @staticmethod
     def create_task(
         db_session: Session,
         task_create_schema: TaskCreateSchema,
@@ -237,8 +300,6 @@ class TaskService:
         Raises:
             ValueError: 任务不在 BACKLOG 阶段，或 worktree 创建失败
         """
-        from pathlib import Path
-
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:
             return None
@@ -253,55 +314,62 @@ class TaskService:
         task_obj.workflow_stage = WorkflowStage.PRD_GENERATING
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
 
-        # 若关联了 Project，立即创建 git worktree
-        if task_obj.project_id and not task_obj.worktree_path:
-            from dsl.models.project import Project
-
-            project_obj = (
-                db_session.query(Project)
-                .filter(Project.id == task_obj.project_id)
-                .first()
-            )
-
-            if project_obj:
-                repo_path_obj = Path(project_obj.repo_path)
-                from dsl.services.project_service import ProjectService
-
-                project_consistency_snapshot = (
-                    ProjectService.build_project_consistency_snapshot(project_obj)
-                )
-                if not repo_path_obj.exists():
-                    raise ValueError(
-                        "关联项目的仓库路径在当前机器上不存在："
-                        f"{repo_path_obj}。请先更新项目路径。"
-                    )
-                if not (repo_path_obj / ".git").exists():
-                    raise ValueError(
-                        "关联项目的仓库路径不是有效 Git 仓库："
-                        f"{repo_path_obj}。请先更新项目路径。"
-                    )
-                if project_consistency_snapshot.is_repo_remote_consistent is False:
-                    raise ValueError(
-                        "关联项目当前绑定到错误的代码仓库。"
-                        "请先把项目重绑到与已同步指纹一致的 Git remote。"
-                    )
-                from dsl.services.git_worktree_service import GitWorktreeService
-
-                branch_name_str = GitWorktreeService.build_task_branch_name(task_id)
-                created_worktree_path = GitWorktreeService.create_task_worktree(
-                    repo_root_path=repo_path_obj,
-                    task_id=task_id,
-                )
-                task_obj.worktree_path = str(created_worktree_path)
-                logger.info(
-                    f"Task {task_id[:8]}... worktree created: {created_worktree_path} "
-                    f"(branch: {branch_name_str})"
-                )
+        TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
 
         db_session.commit()
         db_session.refresh(task_obj)
 
         logger.info(f"Task {task_id[:8]}... started → prd_generating")
+        return task_obj
+
+    @staticmethod
+    def request_prd_regeneration(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """将任务重新推进到 PRD_GENERATING 阶段.
+
+        该接口用于在任务已存在 PRD 或需求被修改后，重新生成新的 PRD 草案。
+        只要任务尚未关闭或删除，就允许回到 PRD 生成阶段；若缺少 worktree，
+        会按当前项目绑定关系自动创建或复用。
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 更新后的任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当任务已经关闭/删除，或 worktree 创建失败时
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot regenerate PRD from lifecycle "
+                f"'{task_obj.lifecycle_status.value}'."
+            )
+
+        if task_obj.workflow_stage == WorkflowStage.DONE:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot regenerate PRD from stage 'done'."
+            )
+
+        task_obj.workflow_stage = WorkflowStage.PRD_GENERATING
+        task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+
+        TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(f"Task {task_id[:8]}... PRD regeneration requested → prd_generating")
         return task_obj
 
     @staticmethod

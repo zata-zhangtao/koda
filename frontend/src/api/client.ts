@@ -138,6 +138,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 基于当前需求内容、反馈与附件重新生成 PRD */
+  regeneratePrd: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/regenerate-prd`, {
+      method: "POST",
+    }),
+
   /** 触发任务进入执行阶段（「开始执行」按钮） */
   execute: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/execute`, {

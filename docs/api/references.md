@@ -57,6 +57,7 @@
         - update_task_status
         - update_task_stage
         - start_task
+        - regenerate_task_prd
         - execute_task
         - get_task_prd_file
         - open_task_in_trae

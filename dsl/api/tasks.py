@@ -3,6 +3,8 @@
 提供任务的创建、查询、状态更新、工作流阶段管理和执行触发功能.
 """
 
+import re
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -46,6 +48,9 @@ _SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
     "开始第 1 轮代码评审",
     "开始执行代码评审",
 ]
+_ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(
+    r"\(/api/media/(?P<filename>[^)\s?#]+)"
+)
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -84,6 +89,179 @@ def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
         task_obj.dev_logs,
         key=lambda dev_log_item: (dev_log_item.created_at, dev_log_item.id),
     )
+
+
+def _resolve_task_effective_work_dir_path(
+    db_session: Session,
+    task_obj: Task,
+) -> Path:
+    """解析任务的 Codex 工作目录.
+
+    优先级：task worktree > 关联项目仓库根 > Koda 仓库根目录。
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 任务对象
+
+    Returns:
+        Path: 可用于 Codex 执行的工作目录
+    """
+    effective_work_dir_path = config.BASE_DIR
+    if task_obj.worktree_path:
+        worktree_dir_path = Path(task_obj.worktree_path)
+        if worktree_dir_path.exists():
+            return worktree_dir_path
+
+    if task_obj.project_id:
+        from dsl.models.project import Project
+
+        project_obj = (
+            db_session.query(Project)
+            .filter(Project.id == task_obj.project_id)
+            .first()
+        )
+        if project_obj:
+            project_repo_path = Path(project_obj.repo_path)
+            if project_repo_path.exists():
+                return project_repo_path
+
+    return effective_work_dir_path
+
+
+def _extract_attachment_absolute_path_list(raw_log_text_str: str) -> list[str]:
+    """从日志 Markdown 中提取附件对应的本地绝对路径.
+
+    Args:
+        raw_log_text_str: 日志文本
+
+    Returns:
+        list[str]: 附件绝对路径列表，按出现顺序去重
+    """
+    attachment_absolute_path_list: list[str] = []
+    seen_attachment_path_set: set[str] = set()
+
+    for markdown_match in _ATTACHMENT_MARKDOWN_LINK_PATTERN.finditer(raw_log_text_str):
+        attachment_filename_str = markdown_match.group("filename").strip()
+        if not attachment_filename_str:
+            continue
+        attachment_absolute_path = (
+            Path(config.MEDIA_STORAGE_PATH) / "original" / attachment_filename_str
+        ).resolve()
+        attachment_absolute_path_str = str(attachment_absolute_path)
+        if attachment_absolute_path_str in seen_attachment_path_set:
+            continue
+        seen_attachment_path_set.add(attachment_absolute_path_str)
+        attachment_absolute_path_list.append(attachment_absolute_path_str)
+
+    return attachment_absolute_path_list
+
+
+def _build_task_context_entry(dev_log_item: DevLog) -> str:
+    """把一条 DevLog 转成适合下游 Prompt 的上下文块.
+
+    当日志包含图片或附件时，除了原始文本，还会附带本地文件路径合同，
+    让 Codex 在需要时显式检查这些文件，而不是只看到一段普通文字。
+
+    Args:
+        dev_log_item: 单条任务日志
+
+    Returns:
+        str: 序列化后的上下文块；若该日志没有有效内容则返回空字符串
+    """
+    raw_text_content_str = dev_log_item.text_content.strip()
+    context_line_list: list[str] = []
+    if raw_text_content_str:
+        context_line_list.append(raw_text_content_str)
+
+    local_media_absolute_path_list: list[str] = []
+    seen_media_path_set: set[str] = set()
+
+    if dev_log_item.media_original_image_path:
+        raw_media_path = Path(dev_log_item.media_original_image_path)
+        resolved_media_path = (
+            raw_media_path
+            if raw_media_path.is_absolute()
+            else (config.BASE_DIR / raw_media_path).resolve()
+        )
+        resolved_media_path_str = str(resolved_media_path)
+        seen_media_path_set.add(resolved_media_path_str)
+        local_media_absolute_path_list.append(resolved_media_path_str)
+
+    for attachment_absolute_path_str in _extract_attachment_absolute_path_list(
+        raw_text_content_str
+    ):
+        if attachment_absolute_path_str in seen_media_path_set:
+            continue
+        seen_media_path_set.add(attachment_absolute_path_str)
+        local_media_absolute_path_list.append(attachment_absolute_path_str)
+
+    if local_media_absolute_path_list:
+        if context_line_list:
+            context_line_list.append("")
+        context_line_list.append("Attached local files:")
+        for local_media_absolute_path_str in local_media_absolute_path_list:
+            context_line_list.append(f"- `{local_media_absolute_path_str}`")
+        context_line_list.append(
+            "If these files help clarify the requirement, inspect them directly. "
+            "For non-text binary files that cannot be parsed in this environment, "
+            "do not ignore them silently; at minimum account for their filenames and existence."
+        )
+
+    return "\n".join(context_line_list).strip()
+
+
+def _build_task_context_snapshot_list(task_dev_log_list: list[DevLog]) -> list[str]:
+    """构建任务最近上下文快照.
+
+    Args:
+        task_dev_log_list: 任务日志列表
+
+    Returns:
+        list[str]: 序列化后的日志上下文列表
+    """
+    task_context_snapshot_list: list[str] = []
+    for dev_log_item in task_dev_log_list:
+        serialized_context_entry = _build_task_context_entry(dev_log_item)
+        if serialized_context_entry:
+            task_context_snapshot_list.append(serialized_context_entry)
+    return task_context_snapshot_list
+
+
+def _schedule_prd_generation(
+    task_obj: Task,
+    background_tasks: BackgroundTasks,
+    db_session: Session,
+) -> Task:
+    """调度后台 PRD 生成任务并返回带运行态的任务响应.
+
+    Args:
+        task_obj: 已切换到 `prd_generating` 的任务对象
+        background_tasks: FastAPI 后台任务容器
+        db_session: 数据库会话
+
+    Returns:
+        Task: 带运行态计算字段的任务对象
+    """
+    ordered_task_dev_log_list = _get_ordered_task_dev_logs(task_obj)
+    dev_log_text_snapshot_list = _build_task_context_snapshot_list(
+        ordered_task_dev_log_list
+    )
+    effective_work_dir_path = _resolve_task_effective_work_dir_path(
+        db_session,
+        task_obj,
+    )
+
+    register_task_background_activity(task_obj.id)
+    background_tasks.add_task(
+        run_codex_prd,
+        task_id_str=task_obj.id,
+        run_account_id_str=task_obj.run_account_id,
+        task_title_str=task_obj.task_title,
+        dev_log_text_list=dev_log_text_snapshot_list,
+        work_dir_path=effective_work_dir_path,
+        worktree_path_str=task_obj.worktree_path,
+    )
+    return _hydrate_task_response(task_obj, is_task_running_override=True)
 
 
 def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> bool:
@@ -313,46 +491,80 @@ def start_task(
             detail=f"Task with id {task_id} not found",
         )
 
-    # 收集快照（session 关闭前读取）
-    dev_log_text_snapshot_list: list[str] = [
-        dev_log_item.text_content for dev_log_item in started_task.dev_logs
-    ]
-    task_title_snapshot_str: str = started_task.task_title
-    run_account_id_snapshot_str: str = started_task.run_account_id
-    worktree_path_snapshot_str: str | None = started_task.worktree_path
-
-    # 确定 codex 工作目录（worktree > project repo > koda 自身）
-    from pathlib import Path as _Path
-
-    effective_work_dir_path = config.BASE_DIR
-    if worktree_path_snapshot_str:
-        wt_dir = _Path(worktree_path_snapshot_str)
-        if wt_dir.exists():
-            effective_work_dir_path = wt_dir
-    elif started_task.project_id:
-        from dsl.models.project import Project
-
-        project_obj = (
-            db_session.query(Project)
-            .filter(Project.id == started_task.project_id)
-            .first()
-        )
-        if project_obj:
-            effective_work_dir_path = _Path(project_obj.repo_path)
-
-    # 在后台让 codex 生成 PRD，完成后自动推进至 prd_waiting_confirmation
-    register_task_background_activity(task_id)
-    background_tasks.add_task(
-        run_codex_prd,
-        task_id_str=task_id,
-        run_account_id_str=run_account_id_snapshot_str,
-        task_title_str=task_title_snapshot_str,
-        dev_log_text_list=dev_log_text_snapshot_list,
-        work_dir_path=effective_work_dir_path,
-        worktree_path_str=worktree_path_snapshot_str,
+    return _schedule_prd_generation(
+        task_obj=started_task,
+        background_tasks=background_tasks,
+        db_session=db_session,
     )
 
-    return _hydrate_task_response(started_task)
+
+@router.post("/{task_id}/regenerate-prd", response_model=TaskResponseSchema)
+def regenerate_task_prd(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """重新生成指定任务的 PRD.
+
+    该接口用于用户在查看 PRD 后修改需求、补充反馈、上传图片/附件后，
+    把任务重新推进回 `prd_generating`，并在后台重新调用 Codex 生成 PRD。
+
+    Args:
+        task_id: 任务 ID
+        background_tasks: FastAPI 后台任务容器
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已切换回 `prd_generating` 且后台任务已启动的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在、阶段非法，或当前已有自动化运行时返回错误
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    try:
+        regenerated_task = TaskService.request_prd_regeneration(db_session, task_id)
+    except ValueError as regeneration_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(regeneration_error),
+        ) from regeneration_error
+
+    if not regenerated_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    LogService.create_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_id,
+            text_content=(
+                "🔄 已收到 PRD 重新生成请求。"
+                "系统会基于当前需求内容、最新反馈以及已上传的图片/附件生成新的 PRD 草案。"
+            ),
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        ),
+        regenerated_task.run_account_id,
+    )
+
+    refreshed_task = TaskService.get_task_by_id(db_session, task_id)
+    if refreshed_task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    return _schedule_prd_generation(
+        task_obj=refreshed_task,
+        background_tasks=background_tasks,
+        db_session=db_session,
+    )
 
 
 @router.post("/{task_id}/execute", response_model=TaskResponseSchema)
@@ -398,46 +610,28 @@ def execute_task(
             detail=f"Task with id {task_id} not found",
         )
 
-    # 收集日志文本供 Prompt 构建（在 session 关闭前读取）
-    dev_log_text_snapshot_list: list[str] = [
-        dev_log_item.text_content for dev_log_item in executed_task.dev_logs
-    ]
-    task_title_snapshot_str: str = executed_task.task_title
-    run_account_id_snapshot_str: str = executed_task.run_account_id
-    worktree_path_snapshot_str: str | None = executed_task.worktree_path
-
-    # 决定 codex 工作目录：优先使用已创建的 worktree，其次项目根，最后 Koda 自身目录
-    from pathlib import Path as _Path
-
-    effective_work_dir_path = config.BASE_DIR
-    if executed_task.worktree_path:
-        worktree_dir = _Path(executed_task.worktree_path)
-        if worktree_dir.exists():
-            effective_work_dir_path = worktree_dir
-    elif executed_task.project_id:
-        from dsl.models.project import Project
-
-        project_obj = (
-            db_session.query(Project)
-            .filter(Project.id == executed_task.project_id)
-            .first()
-        )
-        if project_obj:
-            effective_work_dir_path = _Path(project_obj.repo_path)
+    ordered_task_dev_log_list = _get_ordered_task_dev_logs(executed_task)
+    dev_log_text_snapshot_list = _build_task_context_snapshot_list(
+        ordered_task_dev_log_list
+    )
+    effective_work_dir_path = _resolve_task_effective_work_dir_path(
+        db_session,
+        executed_task,
+    )
 
     # 在后台异步运行实现阶段；成功后会继续进入真实的 self-review 阶段
     register_task_background_activity(task_id)
     background_tasks.add_task(
         run_codex_task,
         task_id_str=task_id,
-        run_account_id_str=run_account_id_snapshot_str,
-        task_title_str=task_title_snapshot_str,
+        run_account_id_str=executed_task.run_account_id,
+        task_title_str=executed_task.task_title,
         dev_log_text_list=dev_log_text_snapshot_list,
         work_dir_path=effective_work_dir_path,
-        worktree_path_str=worktree_path_snapshot_str,
+        worktree_path_str=executed_task.worktree_path,
     )
 
-    return _hydrate_task_response(executed_task)
+    return _hydrate_task_response(executed_task, is_task_running_override=True)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)

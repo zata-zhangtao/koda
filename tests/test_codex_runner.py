@@ -142,6 +142,57 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "不得为空" in prd_prompt_text
     assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
+    assert "Attached local files:" in prd_prompt_text
+
+
+def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> None:
+    """PRD regeneration should clear both legacy and semantic task PRD files first."""
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+
+    legacy_prd_file_path = tasks_directory_path / "prd-cf2b9461.md"
+    semantic_prd_file_path = tasks_directory_path / "prd-cf2b9461-refined-scope.md"
+    legacy_prd_file_path.write_text("legacy", encoding="utf-8")
+    semantic_prd_file_path.write_text("semantic", encoding="utf-8")
+
+    async def fake_run_codex_phase(**_: object) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated"],
+        )
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = lambda *args, **kwargs: None
+        codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
+        email_service.send_prd_ready_notification = lambda *args, **kwargs: True
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
+                run_account_id_str="run-account-1",
+                task_title_str="Regenerate PRD",
+                dev_log_text_list=["Need a refreshed PRD."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert not legacy_prd_file_path.exists()
+    assert not semantic_prd_file_path.exists()
 
 
 def test_build_codex_review_fix_prompt_preserves_full_latest_blocker_list() -> None:

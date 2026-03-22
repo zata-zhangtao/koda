@@ -829,6 +829,11 @@ function App() {
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    const shouldAttemptPrdRegeneration =
+      selectedTask.workflow_stage !== WorkflowStage.BACKLOG &&
+      !selectedTask.is_codex_task_running;
+    let didPersistRequirementChange = false;
+
     try {
       await taskApi.update(selectedTask.id, {
         task_title: nextRequirementTitle,
@@ -844,14 +849,34 @@ function App() {
         ),
         state_tag: DevLogStateTag.NONE,
       });
+      didPersistRequirementChange = true;
+
+      let nextSuccessMessage = "Requirement changes were appended to history.";
+      if (shouldAttemptPrdRegeneration) {
+        const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
+        setTaskList((prev) =>
+          prev.map((taskItem) =>
+            taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
+          )
+        );
+        nextSuccessMessage =
+          "Requirement changes were saved. Koda is regenerating the PRD.";
+      } else if (selectedTask.workflow_stage !== WorkflowStage.BACKLOG) {
+        nextSuccessMessage =
+          "Requirement changes were saved. Cancel the running automation if you want to regenerate the PRD now.";
+      }
 
       setWorkspaceView("changes");
       setIsEditPanelOpen(false);
-      setSuccessMessage("Requirement changes were appended to history.");
+      setSuccessMessage(nextSuccessMessage);
       await loadDashboardData(true);
     } catch (updateError) {
       console.error(updateError);
-      setErrorMessage("Failed to update requirement.");
+      setErrorMessage(
+        didPersistRequirementChange && shouldAttemptPrdRegeneration
+          ? "Requirement changes were saved, but PRD regeneration failed."
+          : "Failed to update requirement."
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -947,6 +972,11 @@ function App() {
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    const shouldRegeneratePrdAfterFeedback =
+      selectedTask.workflow_stage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
+      !selectedTask.is_codex_task_running;
+    let didPersistFeedback = false;
+
     try {
       if (feedbackAttachmentDraft) {
         if (feedbackAttachmentDraft.kind === "image") {
@@ -969,6 +999,7 @@ function App() {
           state_tag: DevLogStateTag.NONE,
         });
       }
+      didPersistFeedback = true;
 
       setFeedbackInputText("");
       setFeedbackAttachmentDraft(null);
@@ -976,9 +1007,23 @@ function App() {
         attachmentInputRef.current.value = "";
       }
 
+      if (shouldRegeneratePrdAfterFeedback) {
+        const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
+        setTaskList((prev) =>
+          prev.map((taskItem) =>
+            taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
+          )
+        );
+        setSuccessMessage("Feedback saved. Koda is regenerating the PRD.");
+      }
+
       // 若用户输入了继续指令，根据当前阶段自动恢复执行
       const isContinueCommand = _isContinueCommand(nextFeedbackInputText);
-      if (isContinueCommand && !feedbackAttachmentDraft) {
+      if (
+        isContinueCommand &&
+        !feedbackAttachmentDraft &&
+        !shouldRegeneratePrdAfterFeedback
+      ) {
         const stage = selectedTask.workflow_stage;
         if (stage === WorkflowStage.CHANGES_REQUESTED) {
           // 正常重试：直接触发执行
@@ -1010,7 +1055,11 @@ function App() {
       await loadDashboardData(true);
     } catch (feedbackError) {
       console.error(feedbackError);
-      setErrorMessage("Failed to process feedback.");
+      setErrorMessage(
+        didPersistFeedback && shouldRegeneratePrdAfterFeedback
+          ? "Feedback was saved, but PRD regeneration failed."
+          : "Failed to process feedback."
+      );
     } finally {
       setActiveMutationName(null);
     }
