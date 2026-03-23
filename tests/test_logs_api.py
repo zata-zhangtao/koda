@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from dsl.api.logs import list_logs
@@ -114,3 +114,78 @@ def test_list_logs_rejects_invalid_created_after_timestamp(
 
     assert exc_info.value.status_code == 422
     assert "created_after" in str(exc_info.value.detail)
+
+
+def test_list_logs_fetches_task_titles_without_extra_selects(
+    db_session: Session,
+) -> None:
+    """Log listing should load task titles in the main log query."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Joined task title loading",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="first",
+                state_tag=DevLogStateTag.NONE,
+            ),
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="second",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    task_id_str = task_obj.id
+    task_title_str = task_obj.task_title
+    select_statement_list: list[str] = []
+
+    def _capture_select_statements(
+        _conn,
+        _cursor,
+        statement: str,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statement_list.append(statement)
+
+    assert db_session.bind is not None
+    event.listen(db_session.bind, "before_cursor_execute", _capture_select_statements)
+    try:
+        returned_log_list = list_logs(
+            task_id=task_id_str,
+            limit=20,
+            offset=0,
+            created_after=None,
+            db_session=db_session,
+        )
+    finally:
+        event.remove(
+            db_session.bind,
+            "before_cursor_execute",
+            _capture_select_statements,
+        )
+
+    assert len(select_statement_list) == 2
+    assert all(log_item.task_title == task_title_str for log_item in returned_log_list)

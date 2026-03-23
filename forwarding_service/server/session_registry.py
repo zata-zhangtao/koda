@@ -36,13 +36,19 @@ class TunnelSession:
     websocket: GatewayWebSocketProtocol
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_activity_monotonic: float = field(default_factory=time.monotonic)
-    _pending_response_future_by_request_id: dict[str, asyncio.Future[AgentHttpResponseMessage]] = field(
+    _pending_response_future_by_request_id: dict[
+        str, asyncio.Future[AgentHttpResponseMessage]
+    ] = field(
         default_factory=dict,
         init=False,
         repr=False,
     )
-    _send_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _pending_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _send_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
+    _pending_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
     _closed: bool = field(default=False, init=False, repr=False)
 
     def mark_activity(self) -> None:
@@ -58,7 +64,9 @@ class TunnelSession:
         Returns:
             bool: `True` when the session is stale.
         """
-        return (time.monotonic() - self.last_activity_monotonic) > heartbeat_timeout_seconds
+        return (
+            time.monotonic() - self.last_activity_monotonic
+        ) > heartbeat_timeout_seconds
 
     async def send_message(self, outbound_message: BaseModel) -> None:
         """Serialize and send a Pydantic message over the WebSocket.
@@ -99,12 +107,16 @@ class TunnelSession:
             await self.send_message(outbound_request_message)
             return await asyncio.wait_for(response_future, timeout=timeout_seconds)
         except asyncio.TimeoutError as timeout_error:
-            raise TimeoutError("Timed out waiting for tunnel agent response") from timeout_error
+            raise TimeoutError(
+                "Timed out waiting for tunnel agent response"
+            ) from timeout_error
         finally:
             async with self._pending_lock:
                 self._pending_response_future_by_request_id.pop(request_id, None)
 
-    async def resolve_response(self, response_message: AgentHttpResponseMessage) -> None:
+    async def resolve_response(
+        self, response_message: AgentHttpResponseMessage
+    ) -> None:
         """Resolve a pending request future with the agent response.
 
         Args:
@@ -129,7 +141,9 @@ class TunnelSession:
             if self._closed:
                 return
             self._closed = True
-            pending_future_list = list(self._pending_response_future_by_request_id.values())
+            pending_future_list = list(
+                self._pending_response_future_by_request_id.values()
+            )
             self._pending_response_future_by_request_id.clear()
 
         for pending_future in pending_future_list:

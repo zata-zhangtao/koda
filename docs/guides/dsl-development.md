@@ -17,8 +17,9 @@
 2. `dsl.app.create_application()` 创建 FastAPI 应用
 3. `lifespan` 在启动时调用共享数据库初始化逻辑
 4. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
-5. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
-6. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
+5. 文件型 SQLite 连接会在创建时统一设置 `busy_timeout`、`foreign_keys=ON` 与 `journal_mode=WAL`，降低后台写日志和前台读接口并发时的锁冲突
+6. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
+7. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
 ### 路由与服务分工
 
@@ -26,6 +27,7 @@
 - `dsl/services/`：负责业务规则与状态推进
 - `dsl/models/`：定义数据库实体
 - `dsl/schemas/`：定义请求与响应模型
+- 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 
 新增后端功能时，推荐保持下面的修改顺序：
 

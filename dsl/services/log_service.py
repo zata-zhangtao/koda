@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload
 
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import AIProcessingStatus, DevLogStateTag
@@ -194,7 +194,7 @@ class LogService:
         from dsl.models.task import Task
 
         query = db_session.query(DevLog).options(
-            selectinload(DevLog.task).load_only(Task.id, Task.task_title)
+            joinedload(DevLog.task).load_only(Task.id, Task.task_title)
         )
 
         if task_id:

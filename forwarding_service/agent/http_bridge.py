@@ -92,11 +92,10 @@ class UpstreamHttpBridge:
         """
         rewritten_header_pair_list: list[tuple[str, str]] = []
         for header_name, header_value in raw_header_pairs:
-            if (
-                header_name.lower() == "location"
-                and header_value.startswith(self._upstream_base_url)
+            if header_name.lower() == "location" and header_value.startswith(
+                self._upstream_base_url
             ):
-                relative_location_path = header_value[len(self._upstream_base_url):]
+                relative_location_path = header_value[len(self._upstream_base_url) :]
                 if not relative_location_path.startswith("/"):
                     relative_location_path = "/" + relative_location_path
                 header_value = relative_location_path
@@ -114,7 +113,9 @@ class UpstreamHttpBridge:
             str: Absolute upstream URL.
         """
         parsed_base_url = urlsplit(self._upstream_base_url)
-        normalized_path = request_path if request_path.startswith("/") else f"/{request_path}"
+        normalized_path = (
+            request_path if request_path.startswith("/") else f"/{request_path}"
+        )
         return urlunsplit(
             (
                 parsed_base_url.scheme,

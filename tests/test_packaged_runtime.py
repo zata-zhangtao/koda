@@ -34,7 +34,9 @@ def test_packaged_runtime_serves_frontend_dist_and_spa_fallback(
         "_backfill_missing_project_repo_fingerprints",
         lambda: None,
     )
-    monkeypatch.setattr(dsl_app_module.config, "SERVE_FRONTEND_DIST", True, raising=False)
+    monkeypatch.setattr(
+        dsl_app_module.config, "SERVE_FRONTEND_DIST", True, raising=False
+    )
     monkeypatch.setattr(
         dsl_app_module.config,
         "FRONTEND_DIST_PATH",

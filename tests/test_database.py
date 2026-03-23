@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+import pytest
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
+import utils.database as database_module
 from utils.database import DatabaseSession
 
 
@@ -50,3 +52,31 @@ def test_database_session_bootstraps_empty_sqlite_file(tmp_path: Path) -> None:
         project_column_name_set
     )
     assert "requirement_brief" in task_column_name_set
+
+
+def test_create_database_engine_enables_sqlite_wal_and_busy_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLite engines should enable WAL mode and a longer busy timeout."""
+    database_file_path = tmp_path / "lock-safe.db"
+    monkeypatch.setattr(
+        database_module,
+        "DATABASE_URL",
+        f"sqlite:///{database_file_path}",
+    )
+
+    test_engine = database_module.create_database_engine()
+    try:
+        with test_engine.connect() as database_connection:
+            journal_mode_value = database_connection.execute(
+                text("PRAGMA journal_mode")
+            ).scalar_one()
+            busy_timeout_value = database_connection.execute(
+                text("PRAGMA busy_timeout")
+            ).scalar_one()
+    finally:
+        test_engine.dispose()
+
+    assert str(journal_mode_value).lower() == "wal"
+    assert int(busy_timeout_value) == 30_000

@@ -67,7 +67,7 @@ flowchart LR
 - `Task`：需求卡片与工作流阶段
 - `DevLog`：时间线中的最小记录单元
 
-数据库通过 `utils/database.py` 管理，默认落在 `data/dsl.db`。
+数据库通过 `utils/database.py` 管理，默认落在 `data/dsl.db`。对于文件型 SQLite，连接创建时会统一启用 WAL 和 30 秒 busy timeout，以降低 UI 读接口与后台 DevLog 写入并发时的锁冲突。
 
 ## 启动链路
 
@@ -137,6 +137,8 @@ flowchart TD
 5. 标准输出被批量写回 `DevLog`
 6. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志
 7. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
+
+为了避免这条链路在 SQLite 上放大锁竞争，任务列表使用聚合查询计算 `log_count`，日志列表在同一条查询中联表带回 `task_title`，而不是在响应阶段触发额外的关系懒加载。
 
 ## 外部依赖边界
 

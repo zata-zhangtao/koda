@@ -88,7 +88,9 @@ class TunnelAgent:
 
             try:
                 await self._run_connection_once(resolved_connect_callable)
-                current_reconnect_delay_seconds = self._agent_config.reconnect_delay_seconds
+                current_reconnect_delay_seconds = (
+                    self._agent_config.reconnect_delay_seconds
+                )
             except Exception as connection_error:
                 log_event(
                     self._structured_logger,
@@ -160,7 +162,9 @@ class TunnelAgent:
             for done_task in done_task_set:
                 done_task.result()
 
-    async def _heartbeat_loop(self, websocket_connection: AgentWebSocketProtocol) -> None:
+    async def _heartbeat_loop(
+        self, websocket_connection: AgentWebSocketProtocol
+    ) -> None:
         """Send periodic heartbeat messages while the connection is alive.
 
         Args:
@@ -197,9 +201,13 @@ class TunnelAgent:
                     timeout=self._agent_config.request_timeout_seconds,
                 )
             except asyncio.TimeoutError as timeout_error:
-                raise TimeoutError("No traffic received from gateway within timeout window") from timeout_error
+                raise TimeoutError(
+                    "No traffic received from gateway within timeout window"
+                ) from timeout_error
             except ConnectionClosed as connection_closed_error:
-                raise RuntimeError("Gateway websocket closed") from connection_closed_error
+                raise RuntimeError(
+                    "Gateway websocket closed"
+                ) from connection_closed_error
 
             raw_payload = json.loads(raw_message_text)
             parsed_message = parse_tunnel_message(raw_payload)
@@ -220,10 +228,14 @@ class TunnelAgent:
                 outbound_response_message = await self._handle_http_request_message(
                     parsed_message
                 )
-                await websocket_connection.send(outbound_response_message.model_dump_json())
+                await websocket_connection.send(
+                    outbound_response_message.model_dump_json()
+                )
                 continue
 
-            raise RuntimeError(f"Unsupported gateway message type: {parsed_message.message_type}")
+            raise RuntimeError(
+                f"Unsupported gateway message type: {parsed_message.message_type}"
+            )
 
     async def _handle_http_request_message(
         self,
@@ -238,8 +250,8 @@ class TunnelAgent:
             AgentHttpResponseMessage: Upstream response envelope.
         """
         try:
-            upstream_response_message = await self._upstream_http_bridge.forward_request(
-                request_message
+            upstream_response_message = (
+                await self._upstream_http_bridge.forward_request(request_message)
             )
             log_event(
                 self._structured_logger,

@@ -6,7 +6,7 @@
 from threading import Lock
 from typing import Any, Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.pool import NullPool, StaticPool
@@ -48,6 +48,7 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
 )
 _database_initialization_lock = Lock()
 _initialized_database_keys: set[tuple[int, int]] = set()
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 # 从配置中获取数据库URL
 DATABASE_URL = config.DATABASE_URL
@@ -55,6 +56,45 @@ DATABASE_URL = config.DATABASE_URL
 # 如果是 MySQL 数据库，确保使用 pymysql 驱动
 if DATABASE_URL.startswith("mysql://"):
     DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://")
+
+
+def _is_sqlite_database_url(database_url_str: str) -> bool:
+    """判断数据库 URL 是否使用 SQLite 方言.
+
+    Args:
+        database_url_str: 数据库连接 URL
+
+    Returns:
+        bool: 若为 SQLite URL 则返回 True
+    """
+    return database_url_str.startswith("sqlite")
+
+
+def _configure_sqlite_connection(
+    dbapi_connection: Any,
+    _connection_record: Any,
+) -> None:
+    """为 SQLite 连接设置并发友好的 PRAGMA.
+
+    Args:
+        dbapi_connection: 原生 DB-API 连接对象
+        _connection_record: SQLAlchemy 连接记录（未使用）
+    """
+    sqlite_cursor = dbapi_connection.cursor()
+    try:
+        sqlite_cursor.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+        sqlite_cursor.execute("PRAGMA foreign_keys = ON")
+
+        # WAL 允许读写更好地并行；某些特殊 SQLite 目标不支持时可安全跳过。
+        try:
+            sqlite_cursor.execute("PRAGMA journal_mode = WAL")
+            sqlite_cursor.execute("PRAGMA synchronous = NORMAL")
+        except (
+            Exception
+        ) as sqlite_pragmas_error:  # pragma: no cover - defensive fallback
+            logger.debug("Skipped SQLite WAL pragmas: %s", sqlite_pragmas_error)
+    finally:
+        sqlite_cursor.close()
 
 
 def create_database_engine(**kwargs: Any) -> Engine:
@@ -73,18 +113,30 @@ def create_database_engine(**kwargs: Any) -> Engine:
     default_kwargs: dict[str, Any] = {
         "echo": False,  # 设置为 True 可以看到 SQL 语句，便于调试
     }
+    provided_connect_args = kwargs.pop("connect_args", None)
 
     # SQLite 需要 check_same_thread=False 以支持多线程并发请求
     # 使用 NullPool 避免多请求共享同一连接导致的 cursor 冲突
-    if DATABASE_URL.startswith("sqlite"):
-        default_kwargs["connect_args"] = {"check_same_thread": False}
+    if _is_sqlite_database_url(DATABASE_URL):
+        sqlite_connect_args = {
+            "check_same_thread": False,
+            "timeout": _SQLITE_BUSY_TIMEOUT_MS / 1000,
+        }
+        if provided_connect_args:
+            sqlite_connect_args.update(provided_connect_args)
+        default_kwargs["connect_args"] = sqlite_connect_args
         default_kwargs["poolclass"] = NullPool
     else:
+        if provided_connect_args is not None:
+            default_kwargs["connect_args"] = provided_connect_args
         default_kwargs["poolclass"] = StaticPool
 
     default_kwargs.update(kwargs)
 
-    return create_engine(DATABASE_URL, **default_kwargs)
+    database_engine = create_engine(DATABASE_URL, **default_kwargs)
+    if _is_sqlite_database_url(DATABASE_URL):
+        event.listen(database_engine, "connect", _configure_sqlite_connection)
+    return database_engine
 
 
 # 创建默认引擎

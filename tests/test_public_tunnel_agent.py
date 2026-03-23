@@ -7,7 +7,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from forwarding_service.agent.config import TunnelAgentConfig, build_tunnel_websocket_url
+from forwarding_service.agent.config import (
+    TunnelAgentConfig,
+    build_tunnel_websocket_url,
+)
 from forwarding_service.agent.http_bridge import UpstreamHttpBridge
 from forwarding_service.agent.main import TunnelAgent
 from forwarding_service.shared.http import decode_body_text, encode_body_bytes
@@ -91,7 +94,9 @@ def test_tunnel_agent_config_from_env_rejects_placeholder_shared_token(
     except ValueError as config_error:
         assert "KODA_TUNNEL_SHARED_TOKEN" in str(config_error)
     else:
-        raise AssertionError("Expected TunnelAgentConfig.from_env() to reject placeholder secrets")
+        raise AssertionError(
+            "Expected TunnelAgentConfig.from_env() to reject placeholder secrets"
+        )
 
 
 def test_upstream_http_bridge_forwards_method_path_query_headers_and_body(
@@ -131,7 +136,9 @@ def test_upstream_http_bridge_forwards_method_path_query_headers_and_body(
     response_message = asyncio.run(run_bridge_test())
 
     assert captured_request_kwargs["method"] == "POST"
-    assert captured_request_kwargs["url"] == "http://127.0.0.1:8000/api/echo?hello=world"
+    assert (
+        captured_request_kwargs["url"] == "http://127.0.0.1:8000/api/echo?hello=world"
+    )
     assert captured_request_kwargs["content"] == b"bridge-body"
     assert response_message.status_code == 202
     assert decode_body_text(response_message.body_base64) == b"upstream-response"

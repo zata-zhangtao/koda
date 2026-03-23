@@ -113,8 +113,8 @@ def test_gateway_forwards_http_request_to_active_tunnel() -> None:
             request_id: str,
             timeout_seconds: float,
         ) -> AgentHttpResponseMessage:
-            captured_payload_container["request_payload"] = outbound_request_message.model_dump(
-                mode="json"
+            captured_payload_container["request_payload"] = (
+                outbound_request_message.model_dump(mode="json")
             )
             fake_response_message.request_id = request_id
             assert timeout_seconds == 1.0

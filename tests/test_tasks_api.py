@@ -10,7 +10,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import dsl.api.tasks as tasks_api
-from dsl.api.tasks import complete_task, get_task, get_task_prd_file, regenerate_task_prd
+from dsl.api.tasks import (
+    complete_task,
+    get_task,
+    get_task_prd_file,
+    list_tasks,
+    regenerate_task_prd,
+)
 from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
@@ -225,7 +231,9 @@ def test_complete_task_records_manual_override_for_unsettled_self_review(
     assert updated_task.workflow_stage == WorkflowStage.PR_PREPARING
     assert updated_task.is_codex_task_running is True
     assert len(background_tasks.tasks) == 1
-    assert any("已记录人工接管" in log_item.text_content for log_item in recorded_log_list)
+    assert any(
+        "已记录人工接管" in log_item.text_content for log_item in recorded_log_list
+    )
 
 
 def test_complete_task_skips_manual_override_log_after_self_review_passed(
@@ -291,7 +299,9 @@ def test_complete_task_skips_manual_override_log_after_self_review_passed(
     )
 
     assert len(background_tasks.tasks) == 1
-    assert not any("已记录人工接管" in log_item.text_content for log_item in recorded_log_list)
+    assert not any(
+        "已记录人工接管" in log_item.text_content for log_item in recorded_log_list
+    )
 
 
 def test_get_task_exposes_runtime_flag(
@@ -327,3 +337,43 @@ def test_get_task_exposes_runtime_flag(
     returned_task = get_task(task_obj.id, db_session)
 
     assert returned_task.is_codex_task_running is True
+
+
+def test_list_tasks_uses_precomputed_log_counts(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task list responses should use the grouped log count map on hot reads."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Aggregate count path",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        tasks_api.TaskService,
+        "get_task_log_count_map",
+        lambda _db_session, task_id_list: {
+            task_id_str: 17 for task_id_str in task_id_list
+        },
+    )
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task_list = list_tasks(db_session=db_session)
+
+    assert len(returned_task_list) == 1
+    assert returned_task_list[0].id == task_obj.id
+    assert returned_task_list[0].log_count == 17

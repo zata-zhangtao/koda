@@ -27,7 +27,9 @@ class TunnelHeaderEntry(BaseModel):
 class GatewayHttpRequestMessage(BaseModel):
     """HTTP request envelope sent from the gateway to the local agent."""
 
-    message_type: Literal[TunnelMessageType.HTTP_REQUEST] = TunnelMessageType.HTTP_REQUEST
+    message_type: Literal[TunnelMessageType.HTTP_REQUEST] = (
+        TunnelMessageType.HTTP_REQUEST
+    )
     request_id: str
     method: str
     path: str
@@ -39,7 +41,9 @@ class GatewayHttpRequestMessage(BaseModel):
 class AgentHttpResponseMessage(BaseModel):
     """HTTP response envelope sent from the local agent back to the gateway."""
 
-    message_type: Literal[TunnelMessageType.HTTP_RESPONSE] = TunnelMessageType.HTTP_RESPONSE
+    message_type: Literal[TunnelMessageType.HTTP_RESPONSE] = (
+        TunnelMessageType.HTTP_RESPONSE
+    )
     request_id: str
     status_code: int
     headers: list[TunnelHeaderEntry] = Field(default_factory=list)

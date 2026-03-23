@@ -320,7 +320,9 @@ def test_prepare_task_completion_rejects_changes_requested_tasks(
     created_task.lifecycle_status = TaskLifecycleStatus.OPEN
     db_session.commit()
 
-    with pytest.raises(ValueError, match="cannot complete from stage 'changes_requested'"):
+    with pytest.raises(
+        ValueError, match="cannot complete from stage 'changes_requested'"
+    ):
         TaskService.prepare_task_completion(db_session, created_task.id)
 
 

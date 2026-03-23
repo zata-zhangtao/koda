@@ -275,9 +275,15 @@ def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> boo
     """
     for dev_log_item in reversed(task_dev_log_list):
         log_text = dev_log_item.text_content
-        if any(marker_text in log_text for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST):
+        if any(
+            marker_text in log_text
+            for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST
+        ):
             return True
-        if any(marker_text in log_text for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST):
+        if any(
+            marker_text in log_text
+            for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
+        ):
             return False
 
     return False
@@ -329,17 +335,28 @@ def _hydrate_task_response(
     task_obj: Task,
     *,
     is_task_running_override: bool | None = None,
+    log_count_override: int | None = None,
 ) -> Task:
     """补齐任务响应中的计算字段.
 
     Args:
         task_obj: 任务对象
         is_task_running_override: 可选的运行态覆盖值
+        log_count_override: 可选的日志数量覆盖值
 
     Returns:
         Task: 填充了 `log_count` 和 `is_codex_task_running` 的任务对象
     """
-    task_obj.log_count = len(task_obj.dev_logs)
+    resolved_log_count = log_count_override
+    if resolved_log_count is None:
+        existing_log_count = getattr(task_obj, "log_count", None)
+        resolved_log_count = (
+            int(existing_log_count)
+            if existing_log_count is not None
+            else len(task_obj.dev_logs)
+        )
+
+    task_obj.log_count = resolved_log_count
     task_obj.is_codex_task_running = (
         is_codex_task_running(task_obj.id)
         if is_task_running_override is None
@@ -362,7 +379,17 @@ def list_tasks(
     """
     run_account_id = _get_current_run_account_id(db_session)
     task_list = TaskService.get_tasks(db_session, run_account_id)
-    return [_hydrate_task_response(task_item) for task_item in task_list]
+    task_log_count_map = TaskService.get_task_log_count_map(
+        db_session,
+        [task_item.id for task_item in task_list],
+    )
+    return [
+        _hydrate_task_response(
+            task_item,
+            log_count_override=task_log_count_map.get(task_item.id, 0),
+        )
+        for task_item in task_list
+    ]
 
 
 @router.post("", response_model=TaskResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -976,4 +1003,8 @@ def get_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    return _hydrate_task_response(task_obj)
+    task_log_count_map = TaskService.get_task_log_count_map(db_session, [task_obj.id])
+    return _hydrate_task_response(
+        task_obj,
+        log_count_override=task_log_count_map.get(task_obj.id, 0),
+    )

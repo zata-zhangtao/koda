@@ -1,10 +1,10 @@
 # PRD：AI 自检通过后执行基于 pre-commit 的 lint 校验
 
-**原始需求标题**：`当自检 code review 完成之后，需要进行 lint检查 '/Users/zata/code/koda/.pre-commit-config.yaml'`  
-**需求名称（AI 归纳）**：`AI 自检通过后执行 pre-commit lint 校验`  
-**需求背景/上下文**：`当前 Koda 在 self-review 闭环通过后尚未自动执行仓库级 lint；本需求要求在 AI 自检完成之后，按 .pre-commit-config.yaml 定义补上一轮自动校验。`  
-**文件路径**：`tasks/20260320-163011-prd-post-self-review-pre-commit-lint.md`  
-**创建时间**：`2026-03-20 16:30:11 +0800`  
+**原始需求标题**：`当自检 code review 完成之后，需要进行 lint检查 '/Users/zata/code/koda/.pre-commit-config.yaml'`
+**需求名称（AI 归纳）**：`AI 自检通过后执行 pre-commit lint 校验`
+**需求背景/上下文**：`当前 Koda 在 self-review 闭环通过后尚未自动执行仓库级 lint；本需求要求在 AI 自检完成之后，按 .pre-commit-config.yaml 定义补上一轮自动校验。`
+**文件路径**：`tasks/20260320-163011-prd-post-self-review-pre-commit-lint.md`
+**创建时间**：`2026-03-20 16:30:11 +0800`
 **适用链路**：`dsl/services/codex_runner.py::run_codex_task`、`dsl/services/codex_runner.py::run_codex_review`
 
 ---
@@ -15,47 +15,47 @@
 
 ### 0.1 self-review 通过后，lint 应挂在哪个 workflow stage？
 
-A. 继续停留在 `self_review_in_progress`，仅通过日志说明 lint 正在执行  
-B. 进入 `test_in_progress`，把 lint 视为已落地的第一类自动化验证  
+A. 继续停留在 `self_review_in_progress`，仅通过日志说明 lint 正在执行
+B. 进入 `test_in_progress`，把 lint 视为已落地的第一类自动化验证
 C. self-review 通过后直接进入 `pr_preparing`
 
-> **Recommended: B**  
+> **Recommended: B**
 > `WorkflowStage.TEST_IN_PROGRESS` 已在 `dsl/models/enums.py`、`frontend/src/types/index.ts`、`frontend/src/App.tsx` 和 `dsl/services/task_service.py` 中建模，且前端、轮询与 `Complete` 入口已兼容该阶段。把 post-review lint 作为首个真实落地的自动化验证，最符合现有状态机设计，也比继续挤在 `self_review_in_progress` 更清晰。
 
 ### 0.2 lint 命令应采用什么范围？
 
-A. 执行 `uv run pre-commit run --all-files`，完全以 `.pre-commit-config.yaml` 为准  
-B. 只执行 `just lint`，即 `ruff check` + `ruff format --check`  
+A. 执行 `uv run pre-commit run --all-files`，完全以 `.pre-commit-config.yaml` 为准
+B. 只执行 `just lint`，即 `ruff check` + `ruff format --check`
 C. 只对本次变更文件执行 pre-commit
 
-> **Recommended: A**  
+> **Recommended: A**
 > 用户明确点名了 `.pre-commit-config.yaml`，而该文件顶部注释也直接给出了 `uv run pre-commit run --all-files` 作为标准执行方式。仓库还配置了 `check-yaml`、`check-toml`、`check_guidelines_consistency` 等非 Ruff 钩子；仅跑 `just lint` 会漏掉这部分约束。
 
 ### 0.3 pre-commit 出现“已自动修复文件”时，应如何判定结果？
 
-A. 首次非零退出就视为失败  
-B. 允许自动重跑一次；若第二次通过，则视为 lint 通过  
+A. 首次非零退出就视为失败
+B. 允许自动重跑一次；若第二次通过，则视为 lint 通过
 C. 直接进入新的 Codex 修复轮次
 
-> **Recommended: B**  
+> **Recommended: B**
 > 当前 `.pre-commit-config.yaml` 已启用 `trailing-whitespace`、`end-of-file-fixer`、`ruff --fix`、`ruff-format` 等可自动改写文件的 hook。若第一次执行因为这些自动修复而退出非零，直接判失败会制造伪 blocker；先自动重跑一次更符合 pre-commit 的常规使用方式。
 
 ### 0.4 lint 在自动重跑后仍失败时，任务应如何处理？
 
-A. 写入明确 lint blocker 日志，并推进到 `changes_requested`  
-B. 直接让 Codex 读取 lint 输出并自动继续修复  
+A. 写入明确 lint blocker 日志，并推进到 `changes_requested`
+B. 直接让 Codex 读取 lint 输出并自动继续修复
 C. 允许用户忽略 lint 失败，继续点击 `Complete`
 
-> **Recommended: B**  
+> **Recommended: B**
 > 按当前决策，post-review lint 不会在第二次 pre-commit 失败后立刻结束，而是进入一个有上限的 `lint -> Codex 定向修复 -> lint` 闭环。这个做法也与现有 `dsl/services/codex_runner.py` 中的 `review -> 自动回改 -> review` 设计保持一致：先让 AI 尝试在同一个 worktree 内自愈，只在 lint-fix 额度耗尽后才进入 `changes_requested`。
 
 ### 0.5 lint 通过后是否自动进入 Git 收尾？
 
-A. 不自动提交，任务保持在 `test_in_progress`，等待用户显式点击 `Complete`  
-B. lint 通过后自动进入 `pr_preparing`  
+A. 不自动提交，任务保持在 `test_in_progress`，等待用户显式点击 `Complete`
+B. lint 通过后自动进入 `pr_preparing`
 C. lint 通过后回退到 `self_review_in_progress`
 
-> **Recommended: A**  
+> **Recommended: A**
 > 当前实现 Prompt 与完成链路都明确要求“不要默认执行 `git commit`，必须等待用户确认”。本需求只扩展验证链路，不改变人工控制边界。
 
 以下 PRD 按当前确认选项 **B / A / B / B / A** 起草。

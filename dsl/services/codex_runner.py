@@ -20,7 +20,6 @@ from dsl.services.prd_file_service import list_task_prd_file_paths
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
-from utils.settings import config
 
 
 # codex exec 每次最多批量写入的行数
@@ -268,7 +267,9 @@ def _build_self_review_findings_block(
     Returns:
         str: 供自动回改 Prompt 使用的问题描述文本
     """
-    filtered_review_output_line_list = _filter_self_review_marker_lines(review_output_lines)
+    filtered_review_output_line_list = _filter_self_review_marker_lines(
+        review_output_lines
+    )
     findings_section_list: list[str] = []
 
     if self_review_summary_str:
@@ -375,7 +376,9 @@ def cancel_codex_task(task_id_str: str) -> bool:
 
     try:
         os.killpg(os.getpgid(codex_process_obj.pid), signal.SIGKILL)
-        logger.info(f"Sent SIGKILL to process group for task {task_id_str[:8]}... (user cancel)")
+        logger.info(
+            f"Sent SIGKILL to process group for task {task_id_str[:8]}... (user cancel)"
+        )
         return True
     except (ProcessLookupError, PermissionError, OSError):
         try:
@@ -504,8 +507,12 @@ def _build_completion_commit_message(
     commit_subject_candidate_list.append(task_title_str)
 
     for raw_commit_subject_candidate_str in commit_subject_candidate_list:
-        summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[0].strip()
-        normalized_commit_subject_str = " ".join(summary_subject_line_str.split()).rstrip(".")
+        summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[
+            0
+        ].strip()
+        normalized_commit_subject_str = " ".join(
+            summary_subject_line_str.split()
+        ).rstrip(".")
         if normalized_commit_subject_str:
             return normalized_commit_subject_str[:72].rstrip()
 
@@ -548,7 +555,9 @@ def _resolve_primary_repo_root_from_worktree(worktree_path: Path) -> Path:
     return resolved_repo_root_path
 
 
-def _resolve_worktree_path_for_branch(repo_path: Path, branch_name_str: str) -> Path | None:
+def _resolve_worktree_path_for_branch(
+    repo_path: Path, branch_name_str: str
+) -> Path | None:
     """Resolve the worktree path that currently has a branch checked out.
 
     Args:
@@ -572,7 +581,9 @@ def _resolve_worktree_path_for_branch(repo_path: Path, branch_name_str: str) -> 
     target_branch_ref_str = f"refs/heads/{branch_name_str}"
     for output_line_str in completed_process.stdout.splitlines():
         if output_line_str.startswith("worktree "):
-            current_worktree_path = Path(output_line_str.removeprefix("worktree ").strip())
+            current_worktree_path = Path(
+                output_line_str.removeprefix("worktree ").strip()
+            )
             continue
         if output_line_str.startswith("branch ") and current_worktree_path is not None:
             branch_ref_str = output_line_str.removeprefix("branch ").strip()
@@ -605,7 +616,9 @@ def _run_logged_command(
         subprocess.CompletedProcess[str]: Completed process object
     """
     command_display_str = shlex.join(command_argument_list)
-    _append_text_to_task_log(task_log_path, f"$ ({command_log_label_str}) {command_display_str}")
+    _append_text_to_task_log(
+        task_log_path, f"$ ({command_log_label_str}) {command_display_str}"
+    )
 
     completed_process = subprocess.run(
         command_argument_list,
@@ -735,14 +748,15 @@ async def _run_post_review_lint_with_auto_rerun(
         cwd_path=work_dir_path,
         command_log_label_str=command_log_label_prefix_str,
     )
-    first_output_line_list = _extract_completed_process_output_lines(first_completed_process)
+    first_output_line_list = _extract_completed_process_output_lines(
+        first_completed_process
+    )
     lint_context_log_list.extend(first_output_line_list)
     if first_completed_process.returncode == 0:
         return True, first_output_line_list
 
     lint_retry_log_text_str = (
-        f"⚠️ {lint_cycle_label_str}首次执行未通过，"
-        "开始自动重跑一次 pre-commit lint。"
+        f"⚠️ {lint_cycle_label_str}首次执行未通过，" "开始自动重跑一次 pre-commit lint。"
     )
     await asyncio.to_thread(
         _write_log_to_db,
@@ -762,7 +776,9 @@ async def _run_post_review_lint_with_auto_rerun(
         cwd_path=work_dir_path,
         command_log_label_str=f"{command_log_label_prefix_str}-rerun",
     )
-    second_output_line_list = _extract_completed_process_output_lines(second_completed_process)
+    second_output_line_list = _extract_completed_process_output_lines(
+        second_completed_process
+    )
     lint_context_log_list.extend(second_output_line_list)
     return second_completed_process.returncode == 0, second_output_line_list
 
@@ -787,7 +803,9 @@ def _has_unmerged_conflicts(repo_path: Path) -> bool:
     return bool((completed_process.stdout or "").strip())
 
 
-def _is_git_operation_still_in_progress(repo_path: Path, operation_kind_str: str) -> bool:
+def _is_git_operation_still_in_progress(
+    repo_path: Path, operation_kind_str: str
+) -> bool:
     """Check whether a rebase or merge is still active in the repository.
 
     Args:
@@ -909,9 +927,7 @@ def _run_logged_codex_conflict_resolution(
     """
     codex_executable_path_str = shutil.which("codex")
     if not codex_executable_path_str:
-        missing_codex_text = (
-            f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
-        )
+        missing_codex_text = f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
         _append_text_to_task_log(task_log_path, missing_codex_text)
         _write_log_to_db(task_id_str, run_account_id_str, missing_codex_text, "BUG")
         return None
@@ -926,7 +942,9 @@ def _run_logged_codex_conflict_resolution(
         f"codex exec --dangerously-bypass-approvals-and-sandbox "
         f"<{operation_kind_str}-conflict-prompt>"
     )
-    _append_text_to_task_log(task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}")
+    _append_text_to_task_log(
+        task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}"
+    )
 
     _CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
 
@@ -966,9 +984,7 @@ def _run_logged_codex_conflict_resolution(
         _append_text_to_task_log(task_log_path, "(no output)")
     _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
 
-    resolution_status_text = (
-        f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
-    )
+    resolution_status_text = f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
     if combined_output_text:
         resolution_status_text += f"\n{combined_output_text}"
     _write_log_to_db(
@@ -980,7 +996,9 @@ def _run_logged_codex_conflict_resolution(
     return completed_process
 
 
-def _finalize_completion_in_db(task_id_str: str, clear_worktree_path_bool: bool) -> None:
+def _finalize_completion_in_db(
+    task_id_str: str, clear_worktree_path_bool: bool
+) -> None:
     """Mark a task as done after a successful completion flow.
 
     Args:
@@ -1094,7 +1112,9 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
-    merge_target_worktree_path = _resolve_worktree_path_for_branch(repo_root_path, "main")
+    merge_target_worktree_path = _resolve_worktree_path_for_branch(
+        repo_root_path, "main"
+    )
     if merge_target_worktree_path is None:
         merge_target_worktree_path = repo_root_path
 
@@ -1149,7 +1169,9 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
-    current_merge_target_branch_name = (merge_target_branch_process.stdout or "").strip()
+    current_merge_target_branch_name = (
+        merge_target_branch_process.stdout or ""
+    ).strip()
     commit_message_str = _build_completion_commit_message(
         task_id_str=task_id_str,
         task_title_str=task_title_str,
@@ -1163,9 +1185,15 @@ def _execute_git_completion_flow(
         ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
     ]
     if current_merge_target_branch_name != "main":
-        command_plan.append(("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path))
+        command_plan.append(
+            ("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path)
+        )
     command_plan.append(
-        ("merge-feature", ["git", "merge", feature_branch_name], merge_target_worktree_path)
+        (
+            "merge-feature",
+            ["git", "merge", feature_branch_name],
+            merge_target_worktree_path,
+        )
     )
 
     merge_completed_bool = False
@@ -1182,9 +1210,13 @@ def _execute_git_completion_flow(
         output_line_list.extend((completed_process.stderr or "").splitlines())
         if completed_process.returncode != 0:
             operation_kind_str = ""
-            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(command_cwd_path):
+            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(
+                command_cwd_path
+            ):
                 operation_kind_str = "rebase"
-            elif command_log_label_str == "merge-feature" and _has_unmerged_conflicts(command_cwd_path):
+            elif command_log_label_str == "merge-feature" and _has_unmerged_conflicts(
+                command_cwd_path
+            ):
                 operation_kind_str = "merge"
 
             if operation_kind_str:
@@ -1198,13 +1230,19 @@ def _execute_git_completion_flow(
                     operation_kind_str=operation_kind_str,
                 )
                 if codex_resolution_process is not None:
-                    output_line_list.extend((codex_resolution_process.stdout or "").splitlines())
-                    output_line_list.extend((codex_resolution_process.stderr or "").splitlines())
+                    output_line_list.extend(
+                        (codex_resolution_process.stdout or "").splitlines()
+                    )
+                    output_line_list.extend(
+                        (codex_resolution_process.stderr or "").splitlines()
+                    )
                 if (
                     codex_resolution_process is not None
                     and codex_resolution_process.returncode == 0
                     and not _has_unmerged_conflicts(command_cwd_path)
-                    and not _is_git_operation_still_in_progress(command_cwd_path, operation_kind_str)
+                    and not _is_git_operation_still_in_progress(
+                        command_cwd_path, operation_kind_str
+                    )
                 ):
                     if command_log_label_str == "merge-feature":
                         merge_completed_bool = True
@@ -1215,9 +1253,7 @@ def _execute_git_completion_flow(
                     f"{shlex.join(command_argument_list)}"
                 )
             else:
-                failure_reason_text = (
-                    f"命令失败：{shlex.join(command_argument_list)}"
-                )
+                failure_reason_text = f"命令失败：{shlex.join(command_argument_list)}"
             return GitCompletionExecutionResult(
                 merged_to_main=merge_completed_bool,
                 cleanup_succeeded=False,
@@ -1262,10 +1298,22 @@ def _execute_git_completion_flow(
         )
 
     cleanup_command_plan = [
-        ("remove-worktree", ["git", "worktree", "remove", worktree_path_str], merge_target_worktree_path),
-        ("delete-branch", ["git", "branch", "-d", feature_branch_name], merge_target_worktree_path),
+        (
+            "remove-worktree",
+            ["git", "worktree", "remove", worktree_path_str],
+            merge_target_worktree_path,
+        ),
+        (
+            "delete-branch",
+            ["git", "branch", "-d", feature_branch_name],
+            merge_target_worktree_path,
+        ),
     ]
-    for command_log_label_str, command_argument_list, command_cwd_path in cleanup_command_plan:
+    for (
+        command_log_label_str,
+        command_argument_list,
+        command_cwd_path,
+    ) in cleanup_command_plan:
         completed_process = _run_logged_command(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
@@ -1479,9 +1527,7 @@ def build_codex_review_prompt(
     if total_review_round_count_int is None:
         review_round_block_str = f"- 当前是第 {review_round_index_int} 轮 AI 自检"
     else:
-        review_round_block_str = (
-            f"- 当前是第 {review_round_index_int}/{total_review_round_count_int} 轮 AI 自检"
-        )
+        review_round_block_str = f"- 当前是第 {review_round_index_int}/{total_review_round_count_int} 轮 AI 自检"
 
     constructed_review_prompt_text = f"""你现在处于 Koda 工作流的 AI 自检阶段，需要对刚完成的实现做一次代码评审。
 
@@ -1729,7 +1775,9 @@ def _write_log_to_db(
         db_session.add(new_dev_log)
         db_session.commit()
     except Exception as db_write_error:
-        logger.error(f"Failed to write DevLog for task {task_id_str[:8]}...: {db_write_error}")
+        logger.error(
+            f"Failed to write DevLog for task {task_id_str[:8]}...: {db_write_error}"
+        )
         db_session.rollback()
     finally:
         db_session.close()
@@ -1763,7 +1811,9 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
                     task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
                 task_obj.closed_at = None
             db_session.commit()
-            logger.info(f"Task {task_id_str[:8]}... stage advanced to {next_stage_value}")
+            logger.info(
+                f"Task {task_id_str[:8]}... stage advanced to {next_stage_value}"
+            )
     except Exception as stage_update_error:
         logger.error(
             f"Failed to advance stage for task {task_id_str[:8]}...: {stage_update_error}"
@@ -1802,7 +1852,9 @@ async def _run_codex_phase(
     """
     codex_executable_path_str = shutil.which("codex")
     if not codex_executable_path_str:
-        missing_codex_log_text = "❌ 未找到 codex 可执行文件，请确认 codex CLI 已安装并在 PATH 中。"
+        missing_codex_log_text = (
+            "❌ 未找到 codex 可执行文件，请确认 codex CLI 已安装并在 PATH 中。"
+        )
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
@@ -1823,7 +1875,9 @@ async def _run_codex_phase(
             cancelled_log_text_str,
             "BUG",
         )
-        return CodexPhaseExecutionResult(success=False, output_lines=[], was_cancelled=True)
+        return CodexPhaseExecutionResult(
+            success=False, output_lines=[], was_cancelled=True
+        )
 
     task_log_path = get_task_log_path(task_id_str)
     _write_phase_log_header(
@@ -1853,7 +1907,9 @@ async def _run_codex_phase(
                 if not pending_output_line_list:
                     return
 
-                elapsed_seconds_float = asyncio.get_running_loop().time() - last_flush_time_float
+                elapsed_seconds_float = (
+                    asyncio.get_running_loop().time() - last_flush_time_float
+                )
                 if (
                     force
                     or len(pending_output_line_list) >= _LOG_BATCH_SIZE
@@ -1878,7 +1934,9 @@ async def _run_codex_phase(
                 if decoded_stdout_line_str:
                     pending_output_line_list.append(decoded_stdout_line_str)
                     aggregated_output_line_list.append(decoded_stdout_line_str)
-                    logger.debug(f"[{phase_log_label_str}:{task_id_str[:8]}] {decoded_stdout_line_str}")
+                    logger.debug(
+                        f"[{phase_log_label_str}:{task_id_str[:8]}] {decoded_stdout_line_str}"
+                    )
                     _append_text_to_task_log(task_log_path, decoded_stdout_line_str)
                 await flush_pending_output_lines()
 
@@ -1886,7 +1944,9 @@ async def _run_codex_phase(
             await flush_pending_output_lines(force=True)
             _append_exit_code_to_task_log(task_log_path, phase_return_code_int)
 
-            if phase_return_code_int == 0 and not _output_contains_interruption(aggregated_output_line_list):
+            if phase_return_code_int == 0 and not _output_contains_interruption(
+                aggregated_output_line_list
+            ):
                 return CodexPhaseExecutionResult(
                     success=True,
                     output_lines=aggregated_output_line_list,
@@ -1964,7 +2024,9 @@ async def _run_codex_phase(
                     cancelled_log_text_str,
                     "BUG",
                 )
-                return CodexPhaseExecutionResult(success=False, output_lines=[], was_cancelled=True)
+                return CodexPhaseExecutionResult(
+                    success=False, output_lines=[], was_cancelled=True
+                )
 
             if attempt_index < _MAX_AUTO_RETRY:
                 retry_log_text_str = (
@@ -2057,7 +2119,9 @@ async def run_codex_prd(
         )
 
         if not prd_phase_result.success:
-            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            await asyncio.to_thread(
+                _advance_stage_in_db, task_id_str, "changes_requested"
+            )
             return
 
         await asyncio.to_thread(
@@ -2067,13 +2131,20 @@ async def run_codex_prd(
             "✅ PRD 已生成，请先由用户确认 PRD，再决定是否进入后续执行阶段。",
             "FIXED",
         )
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "prd_waiting_confirmation")
-        logger.info(f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation")
+        await asyncio.to_thread(
+            _advance_stage_in_db, task_id_str, "prd_waiting_confirmation"
+        )
+        logger.info(
+            f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation"
+        )
 
         # 发送邮件通知：PRD 已生成，等待用户确认
         try:
             from dsl.services.email_service import send_prd_ready_notification
-            await asyncio.to_thread(send_prd_ready_notification, task_id_str, task_title_str)
+
+            await asyncio.to_thread(
+                send_prd_ready_notification, task_id_str, task_title_str
+            )
         except Exception as email_error:
             logger.warning(
                 f"Failed to send PRD ready email for task {task_id_str[:8]}...: {email_error}"
@@ -2147,15 +2218,15 @@ async def run_codex_review(
 
         if not review_phase_result.success:
             if review_phase_result.was_cancelled:
-                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                await asyncio.to_thread(
+                    _advance_stage_in_db, task_id_str, "changes_requested"
+                )
                 return SelfReviewExecutionResult(
                     passed=False,
                     context_log_text_list=review_context_log_list,
                 )
 
-            failure_reason_str = (
-                f"第 {review_round_index_int} 轮 AI 自检阶段执行失败，AI 无法自行完成 review 闭环"
-            )
+            failure_reason_str = f"第 {review_round_index_int} 轮 AI 自检阶段执行失败，AI 无法自行完成 review 闭环"
             failure_log_text_str = (
                 f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮评审执行失败。\n"
                 "任务已进入：待修改（changes_requested），需要人工介入。"
@@ -2168,14 +2239,20 @@ async def run_codex_review(
                 failure_log_text_str=failure_log_text_str,
                 failure_reason_str=failure_reason_str,
             )
-            logger.warning(f"Task {task_id_str[:8]}... self review round {review_round_index_int} failed.")
+            logger.warning(
+                f"Task {task_id_str[:8]}... self review round {review_round_index_int} failed."
+            )
             return SelfReviewExecutionResult(
                 passed=False,
                 context_log_text_list=review_context_log_list,
             )
 
-        self_review_status_str = _extract_self_review_status(review_phase_result.output_lines)
-        self_review_summary_str = _extract_self_review_summary(review_phase_result.output_lines)
+        self_review_status_str = _extract_self_review_status(
+            review_phase_result.output_lines
+        )
+        self_review_summary_str = _extract_self_review_summary(
+            review_phase_result.output_lines
+        )
 
         if self_review_status_str == _SELF_REVIEW_STATUS_PASS:
             review_pass_log_text = (
@@ -2221,9 +2298,7 @@ async def run_codex_review(
                 )
                 continue
 
-            failure_reason_str = (
-                f"第 {review_round_index_int} 轮 AI 自检连续未产出有效结构化状态，AI 无法自行完成 review 闭环"
-            )
+            failure_reason_str = f"第 {review_round_index_int} 轮 AI 自检连续未产出有效结构化状态，AI 无法自行完成 review 闭环"
             missing_status_log_text = (
                 f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮评审连续未产出有效结构化状态。\n"
                 "任务已进入：待修改（changes_requested），需要人工介入。"
@@ -2268,7 +2343,9 @@ async def run_codex_review(
                 failure_log_text_str=exhausted_retry_log_text,
                 failure_reason_str=failure_reason_str,
             )
-            logger.info(f"Task {task_id_str[:8]}... self review loop exhausted fix rounds.")
+            logger.info(
+                f"Task {task_id_str[:8]}... self review loop exhausted fix rounds."
+            )
             return SelfReviewExecutionResult(
                 passed=False,
                 context_log_text_list=review_context_log_list,
@@ -2313,15 +2390,15 @@ async def run_codex_review(
 
         if not review_fix_phase_result.success:
             if review_fix_phase_result.was_cancelled:
-                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                await asyncio.to_thread(
+                    _advance_stage_in_db, task_id_str, "changes_requested"
+                )
                 return SelfReviewExecutionResult(
                     passed=False,
                     context_log_text_list=review_context_log_list,
                 )
 
-            failure_reason_str = (
-                f"第 {review_round_index_int} 轮 AI 自动回改执行失败，AI 无法自行完成 review 闭环"
-            )
+            failure_reason_str = f"第 {review_round_index_int} 轮 AI 自动回改执行失败，AI 无法自行完成 review 闭环"
             remediation_failure_log_text = (
                 f"❌ AI 自检闭环未完成：第 {review_round_index_int} 轮自动回改执行失败。\n"
                 "任务已进入：待修改（changes_requested），需要人工介入。"
@@ -2407,7 +2484,10 @@ async def run_post_review_lint(
     )
     lint_context_log_list.append(lint_start_log_text)
 
-    lint_passed_bool, latest_lint_output_line_list = await _run_post_review_lint_with_auto_rerun(
+    (
+        lint_passed_bool,
+        latest_lint_output_line_list,
+    ) = await _run_post_review_lint_with_auto_rerun(
         task_id_str=task_id_str,
         run_account_id_str=run_account_id_str,
         task_log_path=task_log_path,
@@ -2473,7 +2553,9 @@ async def run_post_review_lint(
 
         if not lint_fix_phase_result.success:
             if lint_fix_phase_result.was_cancelled:
-                await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+                await asyncio.to_thread(
+                    _advance_stage_in_db, task_id_str, "changes_requested"
+                )
                 return PostReviewLintExecutionResult(
                     passed=False,
                     context_log_text_list=lint_context_log_list,
@@ -2515,7 +2597,10 @@ async def run_post_review_lint(
         )
         lint_context_log_list.append(lint_fix_completed_log_text)
 
-        lint_passed_bool, latest_lint_output_line_list = await _run_post_review_lint_with_auto_rerun(
+        (
+            lint_passed_bool,
+            latest_lint_output_line_list,
+        ) = await _run_post_review_lint_with_auto_rerun(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
             task_log_path=task_log_path,
@@ -2546,7 +2631,9 @@ async def run_post_review_lint(
         lint_fix_round_index_int += 1
 
     latest_lint_summary_str = (
-        latest_lint_output_line_list[0] if latest_lint_output_line_list else "最新 lint 输出为空"
+        latest_lint_output_line_list[0]
+        if latest_lint_output_line_list
+        else "最新 lint 输出为空"
     )
     failure_reason_str = (
         f"post-review lint 在 {_MAX_POST_REVIEW_LINT_FIX_ROUNDS} 轮 AI lint 定向修复后仍未通过："
@@ -2618,7 +2705,9 @@ async def run_codex_task(
         )
 
         if not implementation_phase_result.success:
-            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            await asyncio.to_thread(
+                _advance_stage_in_db, task_id_str, "changes_requested"
+            )
             return
 
         completion_log_text = (
@@ -2632,7 +2721,9 @@ async def run_codex_task(
             completion_log_text,
             "FIXED",
         )
-        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "self_review_in_progress")
+        await asyncio.to_thread(
+            _advance_stage_in_db, task_id_str, "self_review_in_progress"
+        )
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
@@ -2647,7 +2738,9 @@ async def run_codex_task(
             f"Task {task_id_str[:8]}... implementation completed, starting self review."
         )
 
-        review_context_log_list = dev_log_text_list + implementation_phase_result.output_lines
+        review_context_log_list = (
+            dev_log_text_list + implementation_phase_result.output_lines
+        )
         self_review_result = await run_codex_review(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
@@ -2733,7 +2826,9 @@ async def run_codex_completion(
                 "任务已回退至：待修改（changes_requested）。",
                 "BUG",
             )
-            await asyncio.to_thread(_advance_stage_in_db, task_id_str, "changes_requested")
+            await asyncio.to_thread(
+                _advance_stage_in_db, task_id_str, "changes_requested"
+            )
             return
 
         if completion_result.cleanup_succeeded:
@@ -2745,7 +2840,9 @@ async def run_codex_completion(
                 "FIXED",
             )
             await asyncio.to_thread(_finalize_completion_in_db, task_id_str, True)
-            logger.info(f"Task {task_id_str[:8]}... completion flow merged and cleaned up.")
+            logger.info(
+                f"Task {task_id_str[:8]}... completion flow merged and cleaned up."
+            )
             return
 
         cleanup_warning_text = completion_result.failure_reason_text or (

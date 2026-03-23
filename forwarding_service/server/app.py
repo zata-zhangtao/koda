@@ -16,7 +16,6 @@ from forwarding_service.server.session_registry import (
 from forwarding_service.shared.http import (
     build_header_entry_list,
     build_forwarded_response_header_tuple_list,
-    build_header_tuple_list,
     decode_body_text,
     encode_body_bytes,
 )
@@ -101,7 +100,10 @@ def create_application(
             return
 
         await websocket.accept()
-        active_session, replaced_previous_session = await tunnel_session_registry.register(
+        (
+            active_session,
+            replaced_previous_session,
+        ) = await tunnel_session_registry.register(
             tunnel_id=tunnel_id,
             websocket=websocket,
         )
@@ -217,7 +219,9 @@ def create_application(
             forwarded_response.headers.append(header_name, header_value)
         return forwarded_response
 
-    @application.api_route("/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    @application.api_route(
+        "/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    )
     async def forward_root_request(request: Request) -> Response:
         """Forward the application root path through the active tunnel."""
         return await forward_public_request(request)

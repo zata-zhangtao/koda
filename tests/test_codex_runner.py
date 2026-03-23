@@ -227,8 +227,14 @@ def test_build_codex_review_fix_prompt_preserves_full_latest_blocker_list() -> N
     assert "只修复最近一轮 review 明确指出的阻塞性问题" in review_fix_prompt_text
     assert "不要重新大范围发散实现" in review_fix_prompt_text
     assert "sync docs and tests with the loop" in review_fix_prompt_text
-    assert "blocker-01: docs/architecture/system-design.md is still outdated." in review_fix_prompt_text
-    assert "blocker-14: ensure no blocker is truncated from the prompt." in review_fix_prompt_text
+    assert (
+        "blocker-01: docs/architecture/system-design.md is still outdated."
+        in review_fix_prompt_text
+    )
+    assert (
+        "blocker-14: ensure no blocker is truncated from the prompt."
+        in review_fix_prompt_text
+    )
     assert "SELF_REVIEW_STATUS: CHANGES_REQUESTED" not in review_fix_prompt_text
 
 
@@ -236,7 +242,9 @@ def test_build_codex_lint_fix_prompt_preserves_latest_lint_output() -> None:
     """Lint-fix prompt should focus on the latest pre-commit output and forbid Git finalization."""
     lint_fix_prompt_text = codex_runner.build_codex_lint_fix_prompt(
         task_title="Implement post-review lint automation",
-        dev_log_text_list=["Self review already passed; lint is now blocking completion."],
+        dev_log_text_list=[
+            "Self review already passed; lint is now blocking completion."
+        ],
         lint_output_lines=[
             "ruff.....................................................................Failed",
             "tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused",
@@ -350,9 +358,14 @@ def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pa
     assert "当前是第 1/3 轮 AI 自检" in recorded_prompt_text_list[1]
     assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]
     assert recorded_command_label_list == ["post-review-lint"]
-    assert any("开始第 1 轮代码评审" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "开始第 1 轮代码评审" in log_text for log_text, _ in recorded_log_entry_list
+    )
     assert any("AI 自检闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "post-review lint 闭环完成" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-exec" in task_log_text
@@ -472,10 +485,21 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     assert "当前是第 2/3 轮 AI 自检" in recorded_prompt_text_list[3]
     assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]
     assert recorded_command_label_list == ["post-review-lint"]
-    assert any("第 1 轮 AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("第 1 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("AI 自检闭环完成：第 2 轮评审通过" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "第 1 轮 AI 自检发现阻塞性问题" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "第 1 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "AI 自检闭环完成：第 2 轮评审通过" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "post-review lint 闭环完成" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda codex-review" in task_log_text
@@ -590,7 +614,9 @@ def test_run_codex_task_moves_to_changes_requested_after_review_loop_exhausted(
         codex_runner._create_codex_subprocess = original_create_codex_subprocess
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
-        email_service.send_task_failed_notification = original_send_task_failed_notification
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
         codex_runner._CODEX_LOG_DIR = original_codex_log_dir
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
@@ -606,10 +632,19 @@ def test_run_codex_task_moves_to_changes_requested_after_review_loop_exhausted(
             "AI 自检在 2 轮自动回改后仍存在阻塞性问题：rollback guard is still missing",
         )
     ]
-    assert any("第 1 轮 AI 自检发现阻塞性问题" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("第 2 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("已用尽 2 轮自动回改次数" in log_text for log_text, _ in recorded_log_entry_list)
-    assert not any("等待人工确认" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "第 1 轮 AI 自检发现阻塞性问题" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "第 2 轮自动回改完成" in log_text for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "已用尽 2 轮自动回改次数" in log_text for log_text, _ in recorded_log_entry_list
+    )
+    assert not any(
+        "等待人工确认" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_post_review_lint_runs_lint_fix_after_second_failed_lint_and_passes(
@@ -709,10 +744,19 @@ def test_run_post_review_lint_runs_lint_fix_after_second_failed_lint_and_passes(
         "post-review-lint-round-1",
     ]
     assert len(recorded_prompt_text_list) == 1
-    assert "tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused" in recorded_prompt_text_list[0]
+    assert (
+        "tests/test_codex_runner.py:10:1: F401 `unused_import` imported but unused"
+        in recorded_prompt_text_list[0]
+    )
     assert "uv run pre-commit run --all-files" in recorded_prompt_text_list[0]
-    assert any("开始第 1/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("post-review lint 闭环完成" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "开始第 1/2 轮 AI lint 定向修复" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "post-review lint 闭环完成" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
 
     task_log_text = (tmp_path / "koda-12345678.log").read_text(encoding="utf-8")
     assert "=== Koda post-review-lint" in task_log_text
@@ -839,7 +883,9 @@ def test_run_post_review_lint_moves_to_changes_requested_after_lint_fix_exhauste
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._run_logged_command = original_run_logged_command
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
-        email_service.send_task_failed_notification = original_send_task_failed_notification
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
         codex_runner._CODEX_LOG_DIR = original_codex_log_dir
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
@@ -853,9 +899,18 @@ def test_run_post_review_lint_moves_to_changes_requested_after_lint_fix_exhauste
             "post-review lint 在 2 轮 AI lint 定向修复后仍未通过：tests/test_codex_runner.py:40:1: F401 final blocker",
         )
     ]
-    assert any("开始第 1/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("开始第 2/2 轮 AI lint 定向修复" in log_text for log_text, _ in recorded_log_entry_list)
-    assert any("已用尽 2 轮 AI lint 定向修复次数" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "开始第 1/2 轮 AI lint 定向修复" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "开始第 2/2 轮 AI lint 定向修复" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert any(
+        "已用尽 2 轮 AI lint 定向修复次数" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_completion_advances_task_to_done_on_success(
@@ -1019,7 +1074,9 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
 
     assert recorded_stage_value_list == []
     assert recorded_finalize_call_list == [("12345678-clean-warn", False)]
-    assert any("自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "自动清理没有完全成功" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
@@ -1097,4 +1154,6 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
 
     assert recorded_stage_value_list == ["changes_requested"]
     assert recorded_finalize_call_list == []
-    assert any("未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list)
+    assert any(
+        "未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list
+    )
