@@ -23,6 +23,10 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added requirement_brief column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN stage_updated_at DATETIME",
+        "Migration: added stage_updated_at column to tasks",
+    ),
+    (
         "ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)",
         "Migration: added repo_remote_url column to projects",
     ),
@@ -36,6 +40,11 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: ensured idx_tasks_run_account_created_at",
     ),
     (
+        "CREATE INDEX IF NOT EXISTS idx_tasks_stage_updated_at "
+        "ON tasks (workflow_stage, stage_updated_at)",
+        "Migration: ensured idx_tasks_stage_updated_at",
+    ),
+    (
         "CREATE INDEX IF NOT EXISTS idx_dev_logs_task_created_at "
         "ON dev_logs (task_id, created_at)",
         "Migration: ensured idx_dev_logs_task_created_at",
@@ -44,6 +53,16 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_dev_logs_run_account_created_at "
         "ON dev_logs (run_account_id, created_at)",
         "Migration: ensured idx_dev_logs_run_account_created_at",
+    ),
+    (
+        "ALTER TABLE email_settings ADD COLUMN stalled_task_threshold_minutes "
+        "INTEGER NOT NULL DEFAULT 20",
+        "Migration: added stalled_task_threshold_minutes column to email_settings",
+    ),
+    (
+        "UPDATE tasks SET stage_updated_at = CURRENT_TIMESTAMP "
+        "WHERE stage_updated_at IS NULL",
+        "Migration: backfilled missing stage_updated_at values on tasks",
     ),
 )
 _database_initialization_lock = Lock()

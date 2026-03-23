@@ -3,7 +3,8 @@
 提供 FastAPI 应用的创建和配置功能.
 """
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -47,6 +48,30 @@ def _backfill_missing_project_repo_fingerprints() -> None:
         db_session.close()
 
 
+async def _run_stalled_task_notification_loop() -> None:
+    """后台周期扫描停滞任务并发送提醒."""
+    from dsl.services.task_notification_service import TaskNotificationService
+
+    while True:
+        await asyncio.sleep(60)
+        try:
+            sent_notification_count_int = await asyncio.to_thread(
+                TaskNotificationService.scan_and_send_stalled_task_notifications
+            )
+            if sent_notification_count_int > 0:
+                logger.info(
+                    "Processed %s stalled task reminder notification(s)",
+                    sent_notification_count_int,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as stalled_task_scan_error:
+            logger.exception(
+                "Stalled task notification scan failed: %s",
+                stalled_task_scan_error,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理.
@@ -64,10 +89,19 @@ async def lifespan(app: FastAPI):
     _backfill_missing_project_repo_fingerprints()
     logger.info("DSL tables initialized")
 
-    yield
+    stalled_task_notification_task = asyncio.create_task(
+        _run_stalled_task_notification_loop()
+    )
 
-    # 关闭时清理
-    logger.info("DSL application shutting down")
+    try:
+        yield
+    finally:
+        stalled_task_notification_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await stalled_task_notification_task
+
+        # 关闭时清理
+        logger.info("DSL application shutting down")
 
 
 def create_application() -> FastAPI:

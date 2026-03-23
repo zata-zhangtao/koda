@@ -136,6 +136,7 @@ export interface EmailSettings {
   smtp_use_ssl: boolean;
   receiver_email: string;
   is_enabled: boolean;
+  stalled_task_threshold_minutes: number;
   created_at: string;
   updated_at: string;
 }
@@ -177,6 +178,7 @@ export interface EmailSettingsUpdate {
   smtp_use_ssl: boolean;
   receiver_email: string;
   is_enabled: boolean;
+  stalled_task_threshold_minutes: number;
 }
 
 /** 任务编年史 */

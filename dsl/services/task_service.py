@@ -89,6 +89,24 @@ class TaskService:
         )
 
     @staticmethod
+    def _apply_workflow_stage_transition(
+        task_obj: Task,
+        next_workflow_stage: WorkflowStage,
+    ) -> None:
+        """将任务切换到目标阶段，并维护阶段进入时间.
+
+        Args:
+            task_obj: 待更新的任务对象
+            next_workflow_stage: 目标工作流阶段
+        """
+        if (
+            task_obj.workflow_stage != next_workflow_stage
+            or task_obj.stage_updated_at is None
+        ):
+            task_obj.stage_updated_at = utc_now_naive()
+        task_obj.workflow_stage = next_workflow_stage
+
+    @staticmethod
     def create_task(
         db_session: Session,
         task_create_schema: TaskCreateSchema,
@@ -126,6 +144,7 @@ class TaskService:
             task_title=task_create_schema.task_title,
             lifecycle_status=TaskLifecycleStatus.PENDING,
             workflow_stage=WorkflowStage.BACKLOG,
+            stage_updated_at=utc_now_naive(),
             project_id=normalized_project_id,
             requirement_brief=task_create_schema.requirement_brief,
         )
@@ -230,7 +249,7 @@ class TaskService:
         # 如果关闭任务，记录关闭时间并同步 workflow_stage
         if status_update.lifecycle_status == TaskLifecycleStatus.CLOSED:
             task_obj.closed_at = utc_now_naive()
-            task_obj.workflow_stage = WorkflowStage.DONE
+            TaskService._apply_workflow_stage_transition(task_obj, WorkflowStage.DONE)
         else:
             task_obj.closed_at = None
 
@@ -265,7 +284,10 @@ class TaskService:
             return None
 
         previous_stage_value: str = task_obj.workflow_stage.value
-        task_obj.workflow_stage = stage_update.workflow_stage
+        TaskService._apply_workflow_stage_transition(
+            task_obj,
+            stage_update.workflow_stage,
+        )
 
         # 阶段为 DONE 时同步关闭任务
         if stage_update.workflow_stage == WorkflowStage.DONE:
@@ -311,7 +333,10 @@ class TaskService:
                 f"'{task_obj.workflow_stage.value}'. Only backlog or prd_generating tasks can be restarted."
             )
 
-        task_obj.workflow_stage = WorkflowStage.PRD_GENERATING
+        TaskService._apply_workflow_stage_transition(
+            task_obj,
+            WorkflowStage.PRD_GENERATING,
+        )
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
 
         TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
@@ -411,7 +436,10 @@ class TaskService:
                 f"Allowed: {[s.value for s in allowed_source_stages]}"
             )
 
-        task_obj.workflow_stage = WorkflowStage.IMPLEMENTATION_IN_PROGRESS
+        TaskService._apply_workflow_stage_transition(
+            task_obj,
+            WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        )
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
 
         db_session.commit()
@@ -503,7 +531,10 @@ class TaskService:
                 f"Allowed: {[stage.value for stage in allowed_source_stages]}"
             )
 
-        task_obj.workflow_stage = WorkflowStage.PR_PREPARING
+        TaskService._apply_workflow_stage_transition(
+            task_obj,
+            WorkflowStage.PR_PREPARING,
+        )
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
         task_obj.closed_at = None
 

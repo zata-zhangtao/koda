@@ -1,13 +1,31 @@
-"""邮件通知服务模块.
+"""邮件发送底座服务.
 
-负责从数据库读取 SMTP 配置，并发送任务状态变更通知邮件.
+负责加载 SMTP 配置并发送 HTML 通知邮件，供统一任务通知服务复用.
 """
 
+from __future__ import annotations
+
 import smtplib
+from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from utils.logger import logger
+
+
+@dataclass(frozen=True)
+class EmailDeliveryResult:
+    """邮件投递结果.
+
+    Attributes:
+        success (bool): 是否发送成功
+        receiver_email (str | None): 发送时使用的收件人地址
+        failure_message (str | None): 失败或跳过原因
+    """
+
+    success: bool
+    receiver_email: str | None
+    failure_message: str | None = None
 
 
 def _mask_password(raw_password_str: str) -> str:
@@ -26,7 +44,7 @@ def _mask_password(raw_password_str: str) -> str:
     )
 
 
-def _load_email_settings_from_db():
+def load_email_settings_from_db():
     """从数据库加载邮件设置（同步）.
 
     Returns:
@@ -40,6 +58,8 @@ def _load_email_settings_from_db():
         email_settings_obj = (
             db_session.query(EmailSettings).filter(EmailSettings.id == 1).first()
         )
+        if email_settings_obj is not None:
+            db_session.expunge(email_settings_obj)
         return email_settings_obj
     except Exception as db_load_error:
         logger.error(f"Failed to load email settings: {db_load_error}")
@@ -48,27 +68,37 @@ def _load_email_settings_from_db():
         db_session.close()
 
 
-def send_notification_email(subject_str: str, body_html_str: str) -> bool:
-    """发送 HTML 格式的通知邮件.
-
-    若邮件通知未启用或配置不完整，则静默跳过（不抛异常）。
+def send_notification_email_via_settings(
+    email_settings_obj,
+    subject_str: str,
+    body_html_str: str,
+) -> EmailDeliveryResult:
+    """使用指定的邮件设置发送 HTML 格式通知邮件.
 
     Args:
+        email_settings_obj: EmailSettings ORM 对象，可为 None
         subject_str: 邮件主题
         body_html_str: 邮件正文（HTML 格式）
 
     Returns:
-        bool: 发送成功返回 True，否则返回 False
+        EmailDeliveryResult: 结构化发送结果
     """
-    email_settings_obj = _load_email_settings_from_db()
-
     if not email_settings_obj:
         logger.debug("Email settings not found, skipping notification.")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=None,
+            failure_message="Email settings not configured.",
+        )
 
+    receiver_email_str = email_settings_obj.receiver_email or None
     if not email_settings_obj.is_enabled:
         logger.debug("Email notifications disabled, skipping.")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=receiver_email_str,
+            failure_message="Email notifications are disabled.",
+        )
 
     required_fields_list = [
         email_settings_obj.smtp_host,
@@ -78,19 +108,22 @@ def send_notification_email(subject_str: str, body_html_str: str) -> bool:
     ]
     if not all(required_fields_list):
         logger.warning("Email settings incomplete, skipping notification.")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=receiver_email_str,
+            failure_message="Email settings are incomplete.",
+        )
 
     smtp_host_str = email_settings_obj.smtp_host
     smtp_port_int = email_settings_obj.smtp_port
     smtp_username_str = email_settings_obj.smtp_username
     smtp_password_str = email_settings_obj.smtp_password
     smtp_use_ssl_bool = email_settings_obj.smtp_use_ssl
-    receiver_email_str = email_settings_obj.receiver_email
 
     mime_message_obj = MIMEMultipart("alternative")
     mime_message_obj["Subject"] = subject_str
     mime_message_obj["From"] = smtp_username_str
-    mime_message_obj["To"] = receiver_email_str
+    mime_message_obj["To"] = email_settings_obj.receiver_email
 
     html_part_obj = MIMEText(body_html_str, "html", "utf-8")
     mime_message_obj.attach(html_part_obj)
@@ -105,23 +138,59 @@ def send_notification_email(subject_str: str, body_html_str: str) -> bool:
         smtp_client.login(smtp_username_str, smtp_password_str)
         smtp_client.sendmail(
             smtp_username_str,
-            receiver_email_str,
+            email_settings_obj.receiver_email,
             mime_message_obj.as_string(),
         )
         smtp_client.quit()
 
-        logger.info(f"Email sent to {receiver_email_str}: {subject_str}")
-        return True
+        logger.info(f"Email sent to {email_settings_obj.receiver_email}: {subject_str}")
+        return EmailDeliveryResult(
+            success=True,
+            receiver_email=email_settings_obj.receiver_email,
+        )
 
     except smtplib.SMTPAuthenticationError as auth_error:
         logger.error(f"SMTP authentication failed: {auth_error}")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=email_settings_obj.receiver_email,
+            failure_message=f"SMTP authentication failed: {auth_error}",
+        )
     except smtplib.SMTPException as smtp_error:
         logger.error(f"SMTP error when sending email: {smtp_error}")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=email_settings_obj.receiver_email,
+            failure_message=f"SMTP error when sending email: {smtp_error}",
+        )
     except OSError as conn_error:
         logger.error(f"Network error when connecting to SMTP: {conn_error}")
-        return False
+        return EmailDeliveryResult(
+            success=False,
+            receiver_email=email_settings_obj.receiver_email,
+            failure_message=f"Network error when connecting to SMTP: {conn_error}",
+        )
+
+
+def send_notification_email(subject_str: str, body_html_str: str) -> bool:
+    """发送 HTML 格式的通知邮件.
+
+    若邮件通知未启用或配置不完整，则静默跳过（不抛异常）。
+
+    Args:
+        subject_str: 邮件主题
+        body_html_str: 邮件正文（HTML 格式）
+
+    Returns:
+        bool: 发送成功返回 True，否则返回 False
+    """
+    email_settings_obj = load_email_settings_from_db()
+    delivery_result = send_notification_email_via_settings(
+        email_settings_obj=email_settings_obj,
+        subject_str=subject_str,
+        body_html_str=body_html_str,
+    )
+    return delivery_result.success
 
 
 def send_prd_ready_notification(
@@ -137,27 +206,12 @@ def send_prd_ready_notification(
     Returns:
         bool: 发送成功返回 True
     """
-    subject_str = f"[Koda] PRD 已生成，待确认：{task_title_str}"
-    body_html_str = f"""
-<html>
-<body style="font-family: sans-serif; color: #333; line-height: 1.6;">
-  <h2 style="color: #2563eb;">📋 PRD 已生成，等待您确认</h2>
-  <p>任务 <strong>{task_title_str}</strong> 的 PRD 文档已由 AI 生成完毕，请前往 Koda 查看并决定是否进入执行阶段。</p>
-  <table style="border-collapse: collapse; margin: 16px 0;">
-    <tr>
-      <td style="padding: 4px 12px 4px 0; color: #666;">任务 ID</td>
-      <td style="padding: 4px 0;"><code>{task_id_str}</code></td>
-    </tr>
-    <tr>
-      <td style="padding: 4px 12px 4px 0; color: #666;">当前阶段</td>
-      <td style="padding: 4px 0;">PRD 等待确认（prd_waiting_confirmation）</td>
-    </tr>
-  </table>
-  <p style="color: #666; font-size: 12px;">此邮件由 Koda 自动发送，请勿回复。</p>
-</body>
-</html>
-"""
-    return send_notification_email(subject_str, body_html_str)
+    from dsl.services.task_notification_service import TaskNotificationService
+
+    return TaskNotificationService.send_prd_ready_notification(
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+    )
 
 
 def send_task_failed_notification(
@@ -175,30 +229,34 @@ def send_task_failed_notification(
     Returns:
         bool: 发送成功返回 True
     """
-    subject_str = f"[Koda] 任务需要处理：{task_title_str}"
-    reason_block_html_str = (
-        f"<p><strong>原因摘要：</strong>{failure_reason_str}</p>"
-        if failure_reason_str
-        else ""
+    from dsl.services.task_notification_service import TaskNotificationService
+
+    return TaskNotificationService.send_changes_requested_notification(
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+        failure_reason_str=failure_reason_str,
     )
-    body_html_str = f"""
-<html>
-<body style="font-family: sans-serif; color: #333; line-height: 1.6;">
-  <h2 style="color: #dc2626;">⚠️ 任务需要您的介入</h2>
-  <p>任务 <strong>{task_title_str}</strong> 已进入 <strong>待修改（changes_requested）</strong> 状态，表示当前自动化流程无法自行完成闭环，请前往 Koda 查看详情。</p>
-  {reason_block_html_str}
-  <table style="border-collapse: collapse; margin: 16px 0;">
-    <tr>
-      <td style="padding: 4px 12px 4px 0; color: #666;">任务 ID</td>
-      <td style="padding: 4px 0;"><code>{task_id_str}</code></td>
-    </tr>
-    <tr>
-      <td style="padding: 4px 12px 4px 0; color: #666;">当前阶段</td>
-      <td style="padding: 4px 0; color: #dc2626;">待修改（changes_requested）</td>
-    </tr>
-  </table>
-  <p style="color: #666; font-size: 12px;">此邮件由 Koda 自动发送，请勿回复。</p>
-</body>
-</html>
-"""
-    return send_notification_email(subject_str, body_html_str)
+
+
+def send_manual_interruption_notification(
+    task_id_str: str,
+    task_title_str: str,
+    interrupted_stage_value_str: str | None = None,
+) -> bool:
+    """发送任务被用户手动中断的通知邮件.
+
+    Args:
+        task_id_str: 任务 ID
+        task_title_str: 任务标题
+        interrupted_stage_value_str: 中断动作发生前的阶段值
+
+    Returns:
+        bool: 发送成功返回 True
+    """
+    from dsl.services.task_notification_service import TaskNotificationService
+
+    return TaskNotificationService.send_manual_interruption_notification(
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+        interrupted_stage_value_str=interrupted_stage_value_str,
+    )

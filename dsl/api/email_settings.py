@@ -48,6 +48,9 @@ def _to_response(email_settings_obj: EmailSettings) -> EmailSettingsResponse:
         smtp_use_ssl=email_settings_obj.smtp_use_ssl,
         receiver_email=email_settings_obj.receiver_email,
         is_enabled=email_settings_obj.is_enabled,
+        stalled_task_threshold_minutes=(
+            email_settings_obj.stalled_task_threshold_minutes or 20
+        ),
         created_at=email_settings_obj.created_at,
         updated_at=email_settings_obj.updated_at,
     )
@@ -95,13 +98,21 @@ def upsert_email_settings(
     )
 
     if existing_email_settings_obj:
+        smtp_password_str = (
+            update_payload.smtp_password
+            if update_payload.smtp_password
+            else existing_email_settings_obj.smtp_password
+        )
         existing_email_settings_obj.smtp_host = update_payload.smtp_host
         existing_email_settings_obj.smtp_port = update_payload.smtp_port
         existing_email_settings_obj.smtp_username = update_payload.smtp_username
-        existing_email_settings_obj.smtp_password = update_payload.smtp_password
+        existing_email_settings_obj.smtp_password = smtp_password_str
         existing_email_settings_obj.smtp_use_ssl = update_payload.smtp_use_ssl
         existing_email_settings_obj.receiver_email = update_payload.receiver_email
         existing_email_settings_obj.is_enabled = update_payload.is_enabled
+        existing_email_settings_obj.stalled_task_threshold_minutes = (
+            update_payload.stalled_task_threshold_minutes
+        )
         existing_email_settings_obj.updated_at = utc_now_naive()
         saved_email_settings_obj = existing_email_settings_obj
     else:
@@ -114,6 +125,7 @@ def upsert_email_settings(
             smtp_use_ssl=update_payload.smtp_use_ssl,
             receiver_email=update_payload.receiver_email,
             is_enabled=update_payload.is_enabled,
+            stalled_task_threshold_minutes=update_payload.stalled_task_threshold_minutes,
         )
         db.add(new_email_settings_obj)
         saved_email_settings_obj = new_email_settings_obj
@@ -122,7 +134,10 @@ def upsert_email_settings(
     db.refresh(saved_email_settings_obj)
     logger.info(
         f"Email settings saved: host={update_payload.smtp_host}, "
-        f"receiver={update_payload.receiver_email}, enabled={update_payload.is_enabled}"
+        f"receiver={update_payload.receiver_email}, "
+        f"enabled={update_payload.is_enabled}, "
+        "stalled_task_threshold_minutes="
+        f"{update_payload.stalled_task_threshold_minutes}"
     )
     return _to_response(saved_email_settings_obj)
 

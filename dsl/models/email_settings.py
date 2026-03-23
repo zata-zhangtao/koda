@@ -26,6 +26,7 @@ class EmailSettings(Base):
         smtp_use_ssl (bool): 是否使用 SSL（True=465，False=587+STARTTLS）
         receiver_email (str): 通知接收邮件地址
         is_enabled (bool): 是否启用邮件通知
+        stalled_task_threshold_minutes (int): 停滞提醒阈值（分钟）
         created_at (datetime): 创建时间
         updated_at (datetime): 最后更新时间
     """
@@ -40,6 +41,11 @@ class EmailSettings(Base):
     smtp_use_ssl: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     receiver_email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    stalled_task_threshold_minutes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=20,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, onupdate=utc_now_naive

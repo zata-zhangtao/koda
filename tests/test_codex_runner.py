@@ -4,9 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from datetime import timedelta
 from pathlib import Path
 
+import dsl.models  # noqa: F401
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from dsl.models.run_account import RunAccount
+from dsl.models.task import Task
 from dsl.services import codex_runner, email_service
+from utils.database import Base
+from utils.helpers import utc_now_naive
 
 
 class FakeCodexStdout:
@@ -96,6 +107,77 @@ def build_completed_process(
         stdout=stdout_text,
         stderr=stderr_text,
     )
+
+
+def _build_db_session_factory():
+    """Build an in-memory session factory for persistence-oriented runner tests."""
+    test_engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=test_engine)
+    return sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine,
+    )
+
+
+def test_finalize_completion_in_db_refreshes_stage_updated_at() -> None:
+    """The completion finalizer should stamp DONE as a fresh stage window."""
+    session_factory = _build_db_session_factory()
+    seed_session = session_factory()
+    try:
+        run_account_obj = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="Linux",
+            git_branch_name=None,
+            is_active=True,
+        )
+        seed_session.add(run_account_obj)
+        seed_session.commit()
+
+        original_stage_updated_at = utc_now_naive() - timedelta(minutes=45)
+        task_obj = Task(
+            run_account_id=run_account_obj.id,
+            task_title="Finalize completion timestamp",
+            workflow_stage=WorkflowStage.PR_PREPARING,
+            lifecycle_status=TaskLifecycleStatus.OPEN,
+            stage_updated_at=original_stage_updated_at,
+            worktree_path="/tmp/repo-wt-12345678",
+        )
+        seed_session.add(task_obj)
+        seed_session.commit()
+        task_id_str = task_obj.id
+
+        original_session_local = codex_runner.SessionLocal
+        codex_runner.SessionLocal = session_factory
+        try:
+            codex_runner._finalize_completion_in_db(
+                task_id_str=task_id_str,
+                clear_worktree_path_bool=True,
+            )
+        finally:
+            codex_runner.SessionLocal = original_session_local
+
+        verification_session = session_factory()
+        try:
+            reloaded_task_obj = (
+                verification_session.query(Task).filter(Task.id == task_id_str).first()
+            )
+            assert reloaded_task_obj is not None
+            assert reloaded_task_obj.workflow_stage == WorkflowStage.DONE
+            assert reloaded_task_obj.lifecycle_status == TaskLifecycleStatus.CLOSED
+            assert reloaded_task_obj.stage_updated_at is not None
+            assert reloaded_task_obj.stage_updated_at > original_stage_updated_at
+            assert reloaded_task_obj.closed_at == reloaded_task_obj.stage_updated_at
+            assert reloaded_task_obj.worktree_path is None
+        finally:
+            verification_session.close()
+    finally:
+        seed_session.close()
 
 
 def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
@@ -259,6 +341,168 @@ def test_build_codex_lint_fix_prompt_preserves_latest_lint_output() -> None:
     assert "uv run pre-commit run --all-files" in lint_fix_prompt_text
     assert "tests/test_codex_runner.py:10:1: F401" in lint_fix_prompt_text
     assert "不要执行 `git commit`" in lint_fix_prompt_text
+
+
+def test_run_codex_prd_moves_to_changes_requested_and_sends_failure_notification(
+    tmp_path: Path,
+) -> None:
+    """A failed PRD generation should notify through the unified changes-requested path."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+
+    async def fake_run_codex_phase(
+        *args, **kwargs
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=False,
+            output_lines=["PRD generation failed after retries."],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="12345678-prd-fail",
+                run_account_id_str="run-account-prd",
+                task_title_str="Generate PRD",
+                dev_log_text_list=["Need a PRD before implementation."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-prd-fail",
+            "Generate PRD",
+            "PRD 生成阶段执行失败，未能自动产出可确认的 PRD。",
+        )
+    ]
+    assert any("PRD 生成失败" in log_text for log_text, _ in recorded_log_entry_list)
+
+
+def test_run_codex_task_moves_to_changes_requested_and_sends_failure_notification_on_initial_exec_failure(
+    tmp_path: Path,
+) -> None:
+    """An implementation-phase failure should notify through the unified changes-requested path."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+
+    async def fake_run_codex_phase(
+        *args, **kwargs
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=False,
+            output_lines=["Initial implementation failed after retries."],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+
+        asyncio.run(
+            codex_runner.run_codex_task(
+                task_id_str="12345678-exec-fail",
+                run_account_id_str="run-account-exec",
+                task_title_str="Implement automation",
+                dev_log_text_list=["Implementation should start from this context."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-exec-fail",
+            "Implement automation",
+            "codex exec 执行失败，AI 未能完成初次实现阶段。",
+        )
+    ]
+    assert any(
+        "codex exec 执行失败" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pass(
@@ -1086,6 +1330,7 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
     recorded_log_entry_list: list[tuple[str, str]] = []
     recorded_stage_value_list: list[str] = []
     recorded_finalize_call_list: list[tuple[str, bool]] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
 
     def fake_execute_git_completion_flow(
         *,
@@ -1121,16 +1366,28 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
     ) -> None:
         recorded_finalize_call_list.append((task_id_str, clear_worktree_path_bool))
 
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
     original_execute_git_completion_flow = codex_runner._execute_git_completion_flow
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_finalize_completion_in_db = codex_runner._finalize_completion_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
 
     try:
         codex_runner._execute_git_completion_flow = fake_execute_git_completion_flow
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
         codex_runner._finalize_completion_in_db = fake_finalize_completion_in_db
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
 
         asyncio.run(
             codex_runner.run_codex_completion(
@@ -1148,12 +1405,22 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
         codex_runner._finalize_completion_in_db = original_finalize_completion_in_db
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
         codex_runner._running_background_task_ids.clear()
         codex_runner._running_codex_processes.clear()
         codex_runner._user_cancelled_tasks.clear()
 
     assert recorded_stage_value_list == ["changes_requested"]
     assert recorded_finalize_call_list == []
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-finish-fail",
+            "Finalize branch",
+            "rebase conflict on app.py",
+        )
+    ]
     assert any(
         "未能完成分支收尾与合并" in log_text for log_text, _ in recorded_log_entry_list
     )

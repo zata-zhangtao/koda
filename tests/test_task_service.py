@@ -14,7 +14,7 @@ from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.project import Project
 from dsl.models.run_account import RunAccount
-from dsl.schemas.task_schema import TaskCreateSchema
+from dsl.schemas.task_schema import TaskCreateSchema, TaskStageUpdateSchema
 from dsl.services.task_service import TaskService
 from utils.database import Base
 
@@ -179,6 +179,46 @@ def test_create_task_allows_unlinked_tasks(db_session: Session) -> None:
 
     assert created_task.project_id is None
     assert created_task.lifecycle_status.value == "PENDING"
+    assert created_task.stage_updated_at is not None
+
+
+def test_update_workflow_stage_refreshes_stage_updated_at_only_on_stage_change(
+    db_session: Session,
+) -> None:
+    """Stage timestamps should only refresh when the task actually enters a new stage."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(task_title="Stage timestamp test"),
+        run_account_id=run_account_obj.id,
+    )
+    original_stage_updated_at = created_task.stage_updated_at
+
+    same_stage_task = TaskService.update_workflow_stage(
+        db_session,
+        created_task.id,
+        TaskStageUpdateSchema(workflow_stage=WorkflowStage.BACKLOG),
+    )
+    assert same_stage_task is not None
+    assert same_stage_task.stage_updated_at == original_stage_updated_at
+
+    updated_task = TaskService.update_workflow_stage(
+        db_session,
+        created_task.id,
+        TaskStageUpdateSchema(workflow_stage=WorkflowStage.PRD_GENERATING),
+    )
+    assert updated_task is not None
+    assert updated_task.stage_updated_at >= original_stage_updated_at
+    assert updated_task.workflow_stage == WorkflowStage.PRD_GENERATING
 
 
 def test_get_task_log_count_map_returns_grouped_counts(db_session: Session) -> None:

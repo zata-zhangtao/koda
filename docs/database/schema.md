@@ -2,12 +2,14 @@
 
 ## 总览
 
-当前数据库围绕四个核心实体组织：
+当前数据库围绕六个核心实体组织：
 
 - `RunAccount`：谁在当前机器上运行 DSL
 - `Project`：可被任务绑定的本地 Git 仓库
 - `Task`：需求卡片与工作流阶段
 - `DevLog`：任务时间线中的文本、附件与 AI 结果
+- `EmailSettings`：SMTP 与提醒阈值的单例配置
+- `TaskNotification`：任务通知的审计记录与去重窗口
 
 ## 时间语义契约
 
@@ -23,6 +25,7 @@ erDiagram
     RUN_ACCOUNT ||--o{ DEV_LOG : writes
     PROJECT ||--o{ TASK : scopes
     TASK ||--o{ DEV_LOG : contains
+    TASK ||--o{ TASK_NOTIFICATION : emits
 
     RUN_ACCOUNT {
         string id PK
@@ -49,6 +52,7 @@ erDiagram
         string task_title
         string lifecycle_status
         string workflow_stage
+        datetime stage_updated_at
         string worktree_path
         datetime created_at
         datetime closed_at
@@ -68,6 +72,30 @@ erDiagram
         text ai_analysis_text
         text ai_extracted_code
         float ai_confidence_score
+    }
+
+    EMAIL_SETTINGS {
+        int id PK
+        string smtp_host
+        int smtp_port
+        string smtp_username
+        string receiver_email
+        bool is_enabled
+        int stalled_task_threshold_minutes
+        datetime created_at
+        datetime updated_at
+    }
+
+    TASK_NOTIFICATION {
+        string id PK
+        string task_id FK
+        string event_type
+        string workflow_stage_snapshot
+        string dedup_key
+        string receiver_email_snapshot
+        bool send_success
+        string failure_message
+        datetime created_at
     }
 ```
 
@@ -120,15 +148,46 @@ erDiagram
 | `task_title` | 需求标题 |
 | `lifecycle_status` | 生命周期状态 |
 | `workflow_stage` | 当前工作流阶段 |
+| `stage_updated_at` | 最近一次进入当前阶段的 UTC 时间 |
 | `worktree_path` | 任务 worktree 绝对路径 |
 | `closed_at` | 完成或关闭时间 |
 
 需要特别关注的字段：
 
 - `workflow_stage`：任务当前所处的业务阶段；若前端需要判断后台自动化是否仍在执行，还要结合 `TaskResponse.is_codex_task_running`
+- `stage_updated_at`：停滞提醒的计算基准。系统只会在任务真正进入新阶段时刷新该值，因此它也是“同一阶段停留窗口”去重的锚点
 - `worktree_path`：决定 Codex 实际工作目录
 
 新的任务型 worktree 默认会写成仓库同级 `task/` 目录下的绝对路径。例如项目仓库是 `/Users/zata/code/my-app` 时，新任务通常会保存为 `/Users/zata/code/task/my-app-wt-12345678`。已经落库的历史 `worktree_path` 不会被系统自动改写。
+
+### EmailSettings
+
+`EmailSettings` 仍然保持单例（`id=1`）设计，是所有任务邮件通知的配置来源。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `smtp_host` / `smtp_port` / `smtp_username` / `smtp_password` | SMTP 连接参数 |
+| `receiver_email` | 当前通知收件人 |
+| `is_enabled` | 邮件通知总开关 |
+| `stalled_task_threshold_minutes` | `prd_waiting_confirmation` / `changes_requested` 的停滞提醒阈值，默认 20 分钟 |
+
+### TaskNotification
+
+`TaskNotification` 记录任务通知的发送审计结果。默认通知类型会保留成功或失败结果；`stalled_reminder` 若当前不可投递或临时投递失败，则不会占用该阶段窗口，方便管理员修复配置后重试。它同时承担“同一阶段窗口只提醒一次”的去重职责。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `event_type` | 通知事件类型，如 `prd_ready`、`manual_interruption`、`stalled_reminder` |
+| `workflow_stage_snapshot` | 发送时任务所处的阶段 |
+| `dedup_key` | 幂等键；同一任务、同一事件、同一阶段窗口复用同一个键 |
+| `receiver_email_snapshot` | 发送时生效的收件人地址 |
+| `send_success` | 实际投递是否成功 |
+| `failure_message` | SMTP 失败或跳过原因 |
 
 ### DevLog
 

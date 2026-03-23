@@ -16,10 +16,11 @@
 1. `main.py` 调用 `uvicorn.run("dsl.app:app", ...)`
 2. `dsl.app.create_application()` 创建 FastAPI 应用
 3. `lifespan` 在启动时调用共享数据库初始化逻辑
-4. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
-5. 文件型 SQLite 连接会在创建时统一设置 `busy_timeout`、`foreign_keys=ON` 与 `journal_mode=WAL`，降低后台写日志和前台读接口并发时的锁冲突
-6. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 路由
-7. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
+4. `lifespan` 同时启动每 60 秒一次的停滞任务提醒扫描器
+5. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
+6. 文件型 SQLite 连接会在创建时统一设置 `busy_timeout`、`foreign_keys=ON` 与 `journal_mode=WAL`，降低后台写日志和前台读接口并发时的锁冲突
+7. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle`、`email_settings` 路由
+8. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
 ### 路由与服务分工
 
@@ -27,6 +28,7 @@
 - `dsl/services/`：负责业务规则与状态推进
 - `dsl/models/`：定义数据库实体
 - `dsl/schemas/`：定义请求与响应模型
+- 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 
 新增后端功能时，推荐保持下面的修改顺序：
@@ -66,15 +68,17 @@
 1. 创建任务，默认进入 `backlog`
 2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
 3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后推进到 `prd_waiting_confirmation`，等待用户确认
-4. 点击“开始执行”，后端进入 `implementation_in_progress`
-5. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
-6. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
-7. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环
-8. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
-9. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
-10. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
-11. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
-12. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+4. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
+5. 点击“开始执行”，后端进入 `implementation_in_progress`
+6. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
+7. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
+8. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环，并通过统一通知服务发送 `changes_requested` 邮件
+9. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
+10. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
+11. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
+12. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
+13. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
+14. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
 
 ### 已建模但尚未自动化闭环的阶段
 
@@ -109,6 +113,7 @@
 - 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
 - `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名
+- 任何会改变 `workflow_stage` 的新逻辑，都要同步考虑 `stage_updated_at` 是否应该刷新，以及是否需要进入统一通知服务
 
 ### 改媒体上传时
 

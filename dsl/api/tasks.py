@@ -36,6 +36,7 @@ from dsl.services.prd_file_service import find_task_prd_file_path
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
 from utils.database import get_db
+from utils.logger import logger
 from utils.settings import config
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -797,6 +798,8 @@ def cancel_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
+    previous_workflow_stage_value_str = task_obj.workflow_stage.value
+    task_title_str = task_obj.task_title
 
     # 尝试终止正在运行的 codex 进程
     cancel_codex_task(task_id)
@@ -813,6 +816,21 @@ def cancel_task(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
+        )
+
+    try:
+        from dsl.services.email_service import send_manual_interruption_notification
+
+        send_manual_interruption_notification(
+            task_id_str=task_id,
+            task_title_str=task_title_str,
+            interrupted_stage_value_str=previous_workflow_stage_value_str,
+        )
+    except Exception as email_error:
+        logger.warning(
+            "Failed to send manual interruption email for task %s...: %s",
+            task_id[:8],
+            email_error,
         )
     return _hydrate_task_response(updated_task, is_task_running_override=False)
 

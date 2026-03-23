@@ -1015,9 +1015,11 @@ def _finalize_completion_in_db(
         if task_obj is None:
             return
 
+        completion_finalized_at = utc_now_naive()
+        task_obj.stage_updated_at = completion_finalized_at
         task_obj.workflow_stage = WorkflowStage.DONE
         task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
-        task_obj.closed_at = utc_now_naive()
+        task_obj.closed_at = completion_finalized_at
         if clear_worktree_path_bool:
             task_obj.worktree_path = None
         db_session.commit()
@@ -1799,6 +1801,11 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
         task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
         if task_obj:
             next_workflow_stage = WorkflowStage(next_stage_value)
+            if (
+                task_obj.workflow_stage != next_workflow_stage
+                or task_obj.stage_updated_at is None
+            ):
+                task_obj.stage_updated_at = utc_now_naive()
             task_obj.workflow_stage = next_workflow_stage
             if next_workflow_stage == WorkflowStage.DONE:
                 task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
@@ -2119,8 +2126,20 @@ async def run_codex_prd(
         )
 
         if not prd_phase_result.success:
-            await asyncio.to_thread(
-                _advance_stage_in_db, task_id_str, "changes_requested"
+            if prd_phase_result.was_cancelled:
+                await asyncio.to_thread(
+                    _advance_stage_in_db, task_id_str, "changes_requested"
+                )
+                return
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                failure_log_text_str=(
+                    "❌ PRD 生成失败，无法自动产出待确认的 PRD。\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                ),
+                failure_reason_str="PRD 生成阶段执行失败，未能自动产出可确认的 PRD。",
             )
             return
 
@@ -2705,8 +2724,20 @@ async def run_codex_task(
         )
 
         if not implementation_phase_result.success:
-            await asyncio.to_thread(
-                _advance_stage_in_db, task_id_str, "changes_requested"
+            if implementation_phase_result.was_cancelled:
+                await asyncio.to_thread(
+                    _advance_stage_in_db, task_id_str, "changes_requested"
+                )
+                return
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                failure_log_text_str=(
+                    "❌ codex exec 执行失败，任务实现阶段未能完成。\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                ),
+                failure_reason_str="codex exec 执行失败，AI 未能完成初次实现阶段。",
             )
             return
 
@@ -2817,17 +2848,16 @@ async def run_codex_completion(
             failure_reason_text = completion_result.failure_reason_text or (
                 "Git 收尾在合并到 main 之前失败。"
             )
-            await asyncio.to_thread(
-                _write_log_to_db,
-                task_id_str,
-                run_account_id_str,
-                "❌ Koda 未能完成分支收尾与合并："
-                f"{failure_reason_text}\n"
-                "任务已回退至：待修改（changes_requested）。",
-                "BUG",
-            )
-            await asyncio.to_thread(
-                _advance_stage_in_db, task_id_str, "changes_requested"
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                failure_log_text_str=(
+                    "❌ Koda 未能完成分支收尾与合并："
+                    f"{failure_reason_text}\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                ),
+                failure_reason_str=failure_reason_text,
             )
             return
 

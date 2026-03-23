@@ -35,6 +35,7 @@ const DEFAULT_EMAIL_FORM: EmailSettingsUpdate = {
   smtp_use_ssl: true,
   receiver_email: "",
   is_enabled: true,
+  stalled_task_threshold_minutes: 20,
 };
 
 const DEFAULT_WEBDAV_FORM: WebDAVSettingsUpdate = {
@@ -114,6 +115,8 @@ function EmailTab() {
           smtp_use_ssl: existingSettings.smtp_use_ssl,
           receiver_email: existingSettings.receiver_email,
           is_enabled: existingSettings.is_enabled,
+          stalled_task_threshold_minutes:
+            existingSettings.stalled_task_threshold_minutes,
         });
       })
       .catch(() => { /* not yet configured — keep defaults */ })
@@ -123,6 +126,10 @@ function EmailTab() {
   const handleSave = async () => {
     if (!formState.smtp_host || !formState.smtp_username || !formState.receiver_email) {
       setStatus({ text: "Please fill in SMTP host, username, and receiver email.", isError: true });
+      return;
+    }
+    if (formState.stalled_task_threshold_minutes < 1) {
+      setStatus({ text: "Reminder threshold must be at least 1 minute.", isError: true });
       return;
     }
     setIsSaving(true);
@@ -199,6 +206,23 @@ function EmailTab() {
         <input style={s.input} type="email" placeholder="notify@example.com"
           value={formState.receiver_email}
           onChange={(e) => setFormState((p) => ({ ...p, receiver_email: e.target.value }))} />
+      </Field>
+
+      <Field label="Stalled reminder threshold (minutes)">
+        <input
+          style={s.input}
+          type="number"
+          min={1}
+          step={1}
+          placeholder="20"
+          value={formState.stalled_task_threshold_minutes}
+          onChange={(e) =>
+            setFormState((p) => ({
+              ...p,
+              stalled_task_threshold_minutes: parseInt(e.target.value, 10) || 20,
+            }))
+          }
+        />
       </Field>
 
       <StatusBanner status={status} />

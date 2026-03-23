@@ -82,3 +82,19 @@ class AIProcessingStatus(str, Enum):
     PROCESSING = "PROCESSING"
     WAITING_REVIEW = "WAITING_REVIEW"
     CONFIRMED = "CONFIRMED"
+
+
+class TaskNotificationEventType(str, Enum):
+    """任务通知事件类型.
+
+    Attributes:
+        PRD_READY: PRD 已生成，等待人工确认
+        CHANGES_REQUESTED: 自动化失败后进入待修改
+        MANUAL_INTERRUPTION: 用户手动中断当前任务
+        STALLED_REMINDER: 任务在人工等待阶段停留过久的提醒
+    """
+
+    PRD_READY = "prd_ready"
+    CHANGES_REQUESTED = "changes_requested"
+    MANUAL_INTERRUPTION = "manual_interruption"
+    STALLED_REMINDER = "stalled_reminder"

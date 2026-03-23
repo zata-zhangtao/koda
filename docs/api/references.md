@@ -48,6 +48,14 @@
         - open_project_in_trae
         - delete_project
 
+::: dsl.api.email_settings
+    handler: python
+    options:
+      members:
+        - get_email_settings
+        - upsert_email_settings
+        - test_email_settings
+
 ::: dsl.api.tasks
     handler: python
     options:
@@ -59,6 +67,7 @@
         - start_task
         - regenerate_task_prd
         - execute_task
+        - cancel_task
         - get_task_prd_file
         - open_task_in_trae
         - open_task_terminal
@@ -106,6 +115,12 @@
 ::: dsl.models.dev_log.DevLog
     handler: python
 
+::: dsl.models.email_settings.EmailSettings
+    handler: python
+
+::: dsl.models.task_notification.TaskNotification
+    handler: python
+
 ::: dsl.models.enums
     handler: python
     options:
@@ -114,6 +129,7 @@
         - TaskLifecycleStatus
         - WorkflowStage
         - AIProcessingStatus
+        - TaskNotificationEventType
 
 ## 服务层
 
@@ -139,6 +155,16 @@
         - execute_task
         - update_task_title
         - get_active_task
+
+::: dsl.services.task_notification_service.TaskNotificationService
+    handler: python
+    options:
+      members:
+        - send_prd_ready_notification
+        - send_changes_requested_notification
+        - send_manual_interruption_notification
+        - send_stalled_task_notification
+        - scan_and_send_stalled_task_notifications
 
 ::: dsl.services.log_service.LogService
     handler: python

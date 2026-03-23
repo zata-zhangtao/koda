@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from dsl.models.dev_log import DevLog
     from dsl.models.project import Project
     from dsl.models.run_account import RunAccount
+    from dsl.models.task_notification import TaskNotification
 
 
 class Task(Base):
@@ -33,6 +34,7 @@ class Task(Base):
         task_title (str): 任务标题
         lifecycle_status (TaskLifecycleStatus): 任务生命周期状态（向后兼容）
         workflow_stage (WorkflowStage): 工作流业务阶段；后台运行态由独立字段补充
+        stage_updated_at (datetime): 最近一次进入当前工作流阶段的时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         created_at (datetime): 创建时间
         closed_at (datetime | None): 关闭时间
@@ -64,6 +66,10 @@ class Task(Base):
         default=WorkflowStage.BACKLOG,
         server_default=WorkflowStage.BACKLOG.value,
     )
+    stage_updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now_naive,
+    )
     worktree_path: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
@@ -92,6 +98,11 @@ class Task(Base):
     )
     dev_logs: Mapped[list["DevLog"]] = relationship(
         "DevLog",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+    task_notifications: Mapped[list["TaskNotification"]] = relationship(
+        "TaskNotification",
         back_populates="task",
         cascade="all, delete-orphan",
     )

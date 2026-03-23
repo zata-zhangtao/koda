@@ -6,6 +6,7 @@
 from dsl.models.enums import (
     AIProcessingStatus,
     DevLogStateTag,
+    TaskNotificationEventType,
     TaskLifecycleStatus,
     WorkflowStage,
 )
@@ -14,11 +15,13 @@ from dsl.models.project import Project
 from dsl.models.task import Task
 from dsl.models.dev_log import DevLog
 from dsl.models.email_settings import EmailSettings
+from dsl.models.task_notification import TaskNotification
 from dsl.models.webdav_settings import WebDAVSettings
 
 __all__ = [
     "AIProcessingStatus",
     "DevLogStateTag",
+    "TaskNotificationEventType",
     "TaskLifecycleStatus",
     "WorkflowStage",
     "RunAccount",
@@ -26,5 +29,6 @@ __all__ = [
     "Task",
     "DevLog",
     "EmailSettings",
+    "TaskNotification",
     "WebDAVSettings",
 ]

@@ -16,6 +16,7 @@
 - 新数据库首次启动时会自动创建缺失表
 - 不需要手工执行建表脚本
 - 对本地快速迭代很方便
+- 新增表（例如 `task_notifications`）可以继续由 `create_all` 自动补齐
 
 ### 明确限制
 
@@ -54,10 +55,14 @@
 虽然项目没有 Alembic，但 `dsl.app` 里已经有少量启动期补丁逻辑，会对少数已知列执行 `ALTER TABLE ... ADD COLUMN`。例如：
 
 - `tasks.requirement_brief`
+- `tasks.stage_updated_at`
 - `projects.repo_remote_url`
 - `projects.repo_head_commit_hash`
+- `email_settings.stalled_task_threshold_minutes`
 
-这类补丁只适合非常有限的“新增可空列”场景，仍然不能替代正式迁移系统。
+除此之外，启动期补丁还会做少量轻量数据修复，例如把历史任务缺失的 `stage_updated_at` 回填为迁移时刻的 UTC 时间，避免系统在升级后立即把旧任务误判为“已经超时”。
+
+这类补丁只适合非常有限的“新增列 + 轻量回填”场景，仍然不能替代正式迁移系统。
 
 ## 推荐变更清单
 

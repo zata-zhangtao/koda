@@ -206,8 +206,7 @@ install-worktree-completion:
 
 # Lint and format check (ruff)
 lint:
-    uv run ruff check .
-    uv run ruff format --check .
+    uv run pre-commit run --all-files
 
 # Run tests (usage: just test [all|local|real])
 #   just test        - Run local tests (no API keys needed)

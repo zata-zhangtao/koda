@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+import dsl.models  # noqa: F401
 import dsl.api.tasks as tasks_api
 from dsl.api.tasks import (
     complete_task,
@@ -377,3 +378,59 @@ def test_list_tasks_uses_precomputed_log_counts(
     assert len(returned_task_list) == 1
     assert returned_task_list[0].id == task_obj.id
     assert returned_task_list[0].log_count == 17
+
+
+def test_cancel_task_sends_manual_interruption_notification(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancel should move the task to changes_requested and emit the manual interruption email."""
+    from dsl.services import email_service
+
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Manual interruption target",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    recorded_notification_argument_list: list[tuple[str, str, str | None]] = []
+
+    monkeypatch.setattr(tasks_api, "cancel_codex_task", lambda task_id: True)
+    monkeypatch.setattr(
+        tasks_api, "clear_task_background_activity", lambda task_id: None
+    )
+    monkeypatch.setattr(
+        email_service,
+        "send_manual_interruption_notification",
+        lambda task_id_str, task_title_str, interrupted_stage_value_str=None: (
+            recorded_notification_argument_list.append(
+                (task_id_str, task_title_str, interrupted_stage_value_str)
+            )
+            or True
+        ),
+    )
+
+    updated_task = tasks_api.cancel_task(task_obj.id, db_session)
+
+    assert updated_task.workflow_stage == WorkflowStage.CHANGES_REQUESTED
+    assert updated_task.is_codex_task_running is False
+    assert recorded_notification_argument_list == [
+        (
+            task_obj.id,
+            "Manual interruption target",
+            WorkflowStage.IMPLEMENTATION_IN_PROGRESS.value,
+        )
+    ]
