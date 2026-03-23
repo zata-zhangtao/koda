@@ -135,8 +135,9 @@ flowchart TD
 3. 后端根据任务上下文构造 Prompt
 4. `codex exec` 在项目根目录或 worktree 中执行
 5. 标准输出被批量写回 `DevLog`
-6. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志
-7. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
+6. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志，而不是重复重拉大批量时间线
+7. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
+8. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
 
 为了避免这条链路在 SQLite 上放大锁竞争，任务列表使用聚合查询计算 `log_count`，日志列表在同一条查询中联表带回 `task_title`，而不是在响应阶段触发额外的关系懒加载。
 

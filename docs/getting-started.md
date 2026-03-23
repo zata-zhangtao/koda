@@ -17,6 +17,12 @@ just dsl-dev
 - 后端 API：`http://localhost:8000`
 - 健康检查：`http://localhost:8000/health`
 
+如果你需要手动指定端口：
+
+```bash
+just dsl-dev backend_port=8100 frontend_port=5174
+```
+
 ## 环境要求
 
 ### 必需工具
@@ -77,11 +83,12 @@ just dsl-dev
 这个命令会做以下事情：
 
 1. 创建 `data/media/original` 与 `data/media/thumbnail`
-2. 先检查 `8000` 和 `5173` 端口是否空闲
-3. 启动 FastAPI 后端
-4. 启动 Vite 前端
+2. 若未显式传入 `backend_port`，则从 `8000` 开始为后端寻找空闲端口；若显式传入，则要求该端口必须空闲
+3. 检查 `frontend_port`（默认 `5173`）是否空闲
+4. 按选定端口启动 FastAPI 后端
+5. 让 Vite 前端把 `/api` 与 `/media` 代理到当前后端端口
 
-如果任一端口已被占用，`just dsl-dev` 会立即退出并打印当前监听进程，避免出现“前端还在跑、后端已启动失败”这类半启动状态。命令退出时，也会主动清理本次启动的子进程。
+如果你显式指定的端口已被占用，`just dsl-dev` 会立即退出并打印当前监听进程，避免出现“前端还在跑、后端已启动失败”这类半启动状态。命令退出时，也会主动清理本次启动的子进程。
 
 如果你需要分别调试前后端，可以拆开运行：
 
@@ -127,11 +134,11 @@ just docs-build
 
 ### 前端能打开，但接口请求失败
 
-优先确认后端是否已经启动，并检查 `http://localhost:8000/health` 是否返回 JSON。
+优先确认后端是否已经启动，并检查当前后端端口上的 `/health` 是否返回 JSON；如果你使用了自定义端口，请把 `8000` 替换成实际端口。
 
 ### `just dsl-dev` 提示 `Address already in use`
 
-这通常表示 `8000` 或 `5173` 上已经有旧的开发进程在监听。先根据命令输出里打印的监听进程定位并停止它，再重新运行 `just dsl-dev`。
+这通常表示你请求的端口已经有旧进程在监听。先根据命令输出里打印的监听进程定位并停止它，再重新运行 `just dsl-dev`；如果只是想换端口，也可以直接执行 `just dsl-dev backend_port=8100 frontend_port=5174`。
 
 ### 任务点击“开始任务”后没有自动生成 PRD
 

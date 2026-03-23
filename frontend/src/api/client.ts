@@ -28,6 +28,7 @@ type ApiErrorPayload = {
 
 type LogListOptions = {
   createdAfter?: string | null;
+  offset?: number;
 };
 
 function extractApiErrorMessage(
@@ -247,6 +248,9 @@ export const logApi = {
       searchParams.set("task_id", taskId);
     }
     searchParams.set("limit", String(limit));
+    if (typeof options?.offset === "number") {
+      searchParams.set("offset", String(options.offset));
+    }
     if (options?.createdAfter) {
       searchParams.set("created_after", options.createdAfter);
     }

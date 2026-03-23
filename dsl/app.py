@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -27,6 +28,15 @@ from dsl.api import (
 from utils.database import SessionLocal, ensure_database_schema_ready
 from utils.logger import logger
 from utils.settings import config
+
+
+def _build_dev_cors_origins() -> list[str]:
+    """构建本地开发模式下的 CORS 白名单."""
+    frontend_port_str = os.getenv("KODA_DEV_FRONTEND_PORT", "5173")
+    return [
+        f"http://localhost:{frontend_port_str}",
+        f"http://127.0.0.1:{frontend_port_str}",
+    ]
 
 
 def _backfill_missing_project_repo_fingerprints() -> None:
@@ -120,10 +130,7 @@ def create_application() -> FastAPI:
     # 配置 CORS
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],  # Vite 开发服务器
+        allow_origins=_build_dev_cors_origins(),  # Vite 开发服务器
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

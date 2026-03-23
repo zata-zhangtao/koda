@@ -49,9 +49,9 @@
 
 前端主入口集中在 `frontend/src/App.tsx`，它承担了三个关键职责：
 
-- 拉取 `RunAccount`、`Task`、`DevLog`、`Project` 四类核心数据
+- 拉取 `RunAccount`、`Task`、`DevLog` 三类核心数据，并在初始加载或打开项目面板时按需刷新 `Project`
 - 根据 `workflow_stage` 渲染阶段标签与 PRD 面板，并结合 `TaskResponse.is_codex_task_running` 判断后台自动化是否仍在执行
-- 在 PRD 生成或编码执行阶段每秒轮询一次后端，实时刷新时间线
+- 在执行阶段做轻量任务状态轮询，并对当前任务通过 `created_after` 增量拉取新增日志，避免反复重拉完整时间线
 
 除 `App.tsx` 外，以下文件是主要协作点：
 
@@ -101,6 +101,7 @@
 如果出现“数据库有记录但界面没刷新”的情况，优先检查：
 
 - 当前任务是否处于前端会自动轮询的阶段
+- 当前任务日志轮询是否拿到了正确的 `created_after` 时间戳
 - API 是否同时返回了预期的 `workflow_stage` 与 `is_codex_task_running`
 - `DevLog` 是否真正写入了当前任务
 

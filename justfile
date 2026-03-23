@@ -367,9 +367,23 @@ setup-data:
     mkdir -p data/media/thumbnail
 
 # 启动 DSL 完整开发环境 (后端 + 前端)
-dsl-dev:
+# Usage:
+#   just dsl-dev
+#   just dsl-dev backend_port=8100 frontend_port=5174
+#   just dsl-dev 8100 5174
+dsl-dev arg1="" arg2="":
     #!/usr/bin/env bash
     set -euo pipefail
+
+    validate_port_number() {
+        local port="$1"
+        local service_name="$2"
+
+        if ! [[ "${port}" =~ ^[0-9]+$ ]] || ((10#${port} < 1 || 10#${port} > 65535)); then
+            echo "Invalid ${service_name} port: ${port}. Expected an integer between 1 and 65535."
+            return 1
+        fi
+    }
 
     ensure_port_available() {
         local port="$1"
@@ -418,25 +432,68 @@ dsl-dev:
 
     echo "Starting DSL development environment..."
     just setup-data
-    BACKEND_PORT=$(find_free_port 8000)
-    if [[ "${BACKEND_PORT}" != "8000" ]]; then
-        echo "Port 8000 is in use, using port ${BACKEND_PORT} for the backend instead."
+    REQUESTED_BACKEND_PORT=""
+    REQUESTED_FRONTEND_PORT=""
+    POSITIONAL_PORTS=()
+
+    for raw_arg in "{{arg1}}" "{{arg2}}"; do
+        if [[ -z "${raw_arg}" ]]; then
+            continue
+        fi
+
+        case "${raw_arg}" in
+            backend_port=*)
+                REQUESTED_BACKEND_PORT="${raw_arg#backend_port=}"
+                ;;
+            frontend_port=*)
+                REQUESTED_FRONTEND_PORT="${raw_arg#frontend_port=}"
+                ;;
+            *)
+                POSITIONAL_PORTS+=("${raw_arg}")
+                ;;
+        esac
+    done
+
+    if [[ -z "${REQUESTED_BACKEND_PORT}" ]] && (( ${#POSITIONAL_PORTS[@]} >= 1 )); then
+        REQUESTED_BACKEND_PORT="${POSITIONAL_PORTS[0]}"
     fi
-    ensure_port_available 5173 "the frontend"
+
+    if [[ -z "${REQUESTED_FRONTEND_PORT}" ]] && (( ${#POSITIONAL_PORTS[@]} >= 2 )); then
+        REQUESTED_FRONTEND_PORT="${POSITIONAL_PORTS[1]}"
+    fi
+
+    FRONTEND_PORT="${REQUESTED_FRONTEND_PORT:-5173}"
+
+    validate_port_number "${FRONTEND_PORT}" "frontend"
+
+    if [[ -n "${REQUESTED_BACKEND_PORT}" ]]; then
+        validate_port_number "${REQUESTED_BACKEND_PORT}" "backend"
+        BACKEND_PORT="${REQUESTED_BACKEND_PORT}"
+        ensure_port_available "${BACKEND_PORT}" "the backend"
+    else
+        BACKEND_PORT=$(find_free_port 8000)
+        if [[ "${BACKEND_PORT}" != "8000" ]]; then
+            echo "Port 8000 is in use, using port ${BACKEND_PORT} for the backend instead."
+        fi
+    fi
+
+    ensure_port_available "${FRONTEND_PORT}" "the frontend"
 
     trap cleanup EXIT INT TERM
 
-    KODA_SERVER_PORT="${BACKEND_PORT}" KODA_TUNNEL_UPSTREAM_URL="http://127.0.0.1:${BACKEND_PORT}" uv run python main.py &
+    KODA_SERVER_PORT="${BACKEND_PORT}" KODA_DEV_FRONTEND_PORT="${FRONTEND_PORT}" KODA_TUNNEL_UPSTREAM_URL="http://127.0.0.1:${BACKEND_PORT}" uv run python main.py &
     BACKEND_PID=$!
 
     (
         cd frontend
-        npm run dev
+        KODA_VITE_PORT="${FRONTEND_PORT}" KODA_VITE_BACKEND_TARGET="http://127.0.0.1:${BACKEND_PORT}" npm run dev
     ) &
     FRONTEND_PID=$!
 
     echo "Backend PID: $BACKEND_PID"
     echo "Frontend PID: $FRONTEND_PID"
+    echo "Backend URL: http://127.0.0.1:${BACKEND_PORT}"
+    echo "Frontend URL: http://127.0.0.1:${FRONTEND_PORT}"
 
     while true; do
         if ! kill -0 "${BACKEND_PID}" 2>/dev/null; then

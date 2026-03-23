@@ -5,7 +5,7 @@
 当前仓库现在有两种明确运行形态：
 
 1. **本地开发模式**
-   使用 `just dsl-dev`，后端仍然跑在 `:8000`，前端继续使用 Vite `:5173` 代理。
+   使用 `just dsl-dev`，默认后端跑在 `:8000`、前端使用 Vite `:5173` 代理；如有需要，也可以手动改端口。
 2. **公网暴露模式**
    本机继续运行 DSL 和 Codex CLI，公网服务器只部署 `caddy + gateway`，由本机 `public-agent` 主动连出形成反向 HTTP 隧道。
 
@@ -51,10 +51,16 @@ just dsl-dev
 
 该模式下：
 
-- 前端仍使用 Vite `:5173`
-- `/api` 与 `/media` 继续代理到 `http://localhost:8000`
+- 前端默认使用 Vite `:5173`
+- `/api` 与 `/media` 默认代理到 `http://localhost:8000`
 - 不需要 `frontend/dist`
 - 不需要 `public-agent`
+
+如果本机端口有冲突，也可以这样启动：
+
+```bash
+just dsl-dev backend_port=8100 frontend_port=5174
+```
 
 ## 公网暴露模式
 

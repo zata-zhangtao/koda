@@ -6,11 +6,21 @@
 import type {
   ChangeEvent,
   ClipboardEvent,
+  Dispatch,
   KeyboardEvent,
   ReactNode,
+  SetStateAction,
   SVGProps,
 } from "react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  memo,
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -43,15 +53,15 @@ import {
 type RequirementStage = WorkflowStage;
 
 type TimelineKind = "ai_log" | "human_review" | "system_event";
-type ConversationTurnKind = "human" | "ai";
-
-interface ConversationTurn {
-  turnId: string;
-  kind: ConversationTurnKind;
-  authorName: string;
-  timeLabel: string;
-  items: TimelineViewModel[];
-}
+type CompactTimelineCategory =
+  | "general"
+  | "prd"
+  | "coding"
+  | "review"
+  | "test"
+  | "delivery"
+  | "system"
+  | "changes";
 type WorkspaceView = "active" | "completed" | "changes";
 type AttachmentKind = "image" | "file";
 
@@ -69,6 +79,24 @@ interface TimelineViewModel {
   authorName: string;
   timeLabel: string;
 }
+
+interface CompactTimelineGroup {
+  groupId: string;
+  items: TimelineViewModel[];
+  category: CompactTimelineCategory;
+  label: string;
+  tone: "default" | "error" | "success";
+}
+
+type TimelineRenderBlock =
+  | {
+      kind: "human";
+      item: TimelineViewModel;
+    }
+  | {
+      kind: "compact_group";
+      group: CompactTimelineGroup;
+    };
 
 interface RequirementSnapshot {
   summary: string;
@@ -121,6 +149,25 @@ const SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
   "开始第 1 轮代码评审",
   "开始执行代码评审",
 ];
+const ACTIVE_DASHBOARD_POLL_INTERVAL_MS = 3000;
+const SELECTED_TASK_LOG_POLL_INTERVAL_MS = 2000;
+const SELECTED_TASK_LOG_INITIAL_LIMIT = 300;
+const SELECTED_TASK_LOG_OLDER_BATCH_LIMIT = 300;
+const SELECTED_TASK_LOG_INCREMENTAL_LIMIT = 200;
+const INITIAL_VISIBLE_CONVERSATION_TURN_COUNT = 12;
+const VISIBLE_CONVERSATION_TURN_INCREMENT = 20;
+const COMPACT_TIMELINE_GROUP_VISIBLE_COUNT = 3;
+const COMPACT_TIMELINE_GROUP_MAX_SIZE = 6;
+const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
+const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
+  WorkflowStage.PRD_WAITING_CONFIRMATION,
+  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+  WorkflowStage.TEST_IN_PROGRESS,
+  WorkflowStage.PR_PREPARING,
+  WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+  WorkflowStage.CHANGES_REQUESTED,
+]);
 
 function _isContinueCommand(text: string): boolean {
   const trimmed = text.trim();
@@ -129,8 +176,6 @@ function _isContinueCommand(text: string): boolean {
 
 function App() {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
-  const aiTurnBodyElementByTurnIdRef = useRef<Record<string, HTMLDivElement | null>>({});
-  const previousExpandedTurnIdSetRef = useRef<Set<string>>(new Set());
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -155,7 +200,12 @@ function App() {
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
-  const [expandedTurnIdSet, setExpandedTurnIdSet] = useState<Set<string>>(new Set());
+  const [visibleConversationTurnCount, setVisibleConversationTurnCount] = useState(
+    INITIAL_VISIBLE_CONVERSATION_TURN_COUNT
+  );
+  const [expandedCompactTimelineGroupIdSet, setExpandedCompactTimelineGroupIdSet] =
+    useState<Set<string>>(new Set());
+  const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
@@ -191,6 +241,13 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isProjectPanelOpen) {
+      return;
+    }
+    void loadProjectList();
+  }, [isProjectPanelOpen]);
+
+  useEffect(() => {
     return () => {
       if (feedbackAttachmentDraft?.previewUrl) {
         URL.revokeObjectURL(feedbackAttachmentDraft.previewUrl);
@@ -220,87 +277,163 @@ function App() {
     }
   }, [editingProjectId, projectList]);
 
-  const devLogsByTaskId = buildDevLogsByTaskId(allDevLogList);
-  const activeTaskList = taskList.filter(
-    (taskItem) =>
-      taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-      taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
-      !hasRequirementUpdateLog(devLogsByTaskId[taskItem.id] ?? [])
+  const devLogsByTaskId = useMemo(
+    () => buildDevLogsByTaskId(allDevLogList),
+    [allDevLogList]
   );
-  const completedTaskList = taskList.filter(
-    (taskItem) => taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED
+  const activeTaskList = useMemo(
+    () =>
+      taskList.filter(
+        (taskItem) =>
+          taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+          taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+          !hasRequirementUpdateLog(devLogsByTaskId[taskItem.id] ?? [])
+      ),
+    [taskList, devLogsByTaskId]
   );
-  const changedTaskList = taskList.filter((taskItem) => {
-    const taskDevLogList = devLogsByTaskId[taskItem.id] ?? [];
-    return (
-      taskItem.lifecycle_status === TaskLifecycleStatus.DELETED ||
-      (taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-        hasRequirementUpdateLog(taskDevLogList))
-    );
-  });
-  const visibleTaskList =
-    workspaceView === "active"
-      ? activeTaskList
-      : workspaceView === "completed"
-        ? completedTaskList
-        : changedTaskList;
-  const visibleTaskIds = visibleTaskList.map((taskItem) => taskItem.id).join(",");
+  const completedTaskList = useMemo(
+    () =>
+      taskList.filter(
+        (taskItem) => taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED
+      ),
+    [taskList]
+  );
+  const changedTaskList = useMemo(
+    () =>
+      taskList.filter((taskItem) => {
+        const taskDevLogList = devLogsByTaskId[taskItem.id] ?? [];
+        return (
+          taskItem.lifecycle_status === TaskLifecycleStatus.DELETED ||
+          (taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+            hasRequirementUpdateLog(taskDevLogList))
+        );
+      }),
+    [taskList, devLogsByTaskId]
+  );
+  const visibleTaskList = useMemo(() => {
+    if (workspaceView === "completed") {
+      return completedTaskList;
+    }
+
+    if (workspaceView === "changes") {
+      return changedTaskList;
+    }
+
+    return activeTaskList;
+  }, [activeTaskList, changedTaskList, completedTaskList, workspaceView]);
+  const visibleTaskIds = useMemo(
+    () => visibleTaskList.map((taskItem) => taskItem.id).join(","),
+    [visibleTaskList]
+  );
+  const deferredSelectedTaskId = useDeferredValue(selectedTaskId);
+  const detailTaskId = deferredSelectedTaskId;
+  const isTaskSelectionPending =
+    selectedTaskId !== null && selectedTaskId !== deferredSelectedTaskId;
   // Primary: find in current workspace view.
   // Fallback: find in full task list so the timeline never disappears when a task
   // transitions to a different workspace view (e.g. CLOSED → completed tab).
-  const selectedTask =
-    visibleTaskList.find((taskItem) => taskItem.id === selectedTaskId) ??
-    (selectedTaskId
-      ? taskList.find((taskItem) => taskItem.id === selectedTaskId) ?? null
-      : null);
-  const selectedTaskDevLogs = selectedTask
-    ? (selectedTaskLogList.length > 0
-        ? selectedTaskLogList
-        : devLogsByTaskId[selectedTask.id] ?? [])
-    : [];
-  const selectedTaskSnapshot = selectedTask
-    ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
-    : null;
-  const hasProjectConsistencyIssues = projectList.some(
-    (projectItem) =>
-      !isProjectSelectable(projectItem) ||
-      projectItem.is_repo_head_consistent === false
+  const selectedTask = useMemo(
+    () =>
+      visibleTaskList.find((taskItem) => taskItem.id === detailTaskId) ??
+      (detailTaskId
+        ? taskList.find((taskItem) => taskItem.id === detailTaskId) ?? null
+        : null),
+    [detailTaskId, taskList, visibleTaskList]
   );
-  const requirementViewModelList = visibleTaskList.map((taskItem) =>
-    buildRequirementViewModel(taskItem, devLogsByTaskId[taskItem.id] ?? [])
+  const selectedTaskDevLogs = useMemo(() => {
+    if (!selectedTask) {
+      return [];
+    }
+
+    return selectedTaskLogList.length > 0
+      ? selectedTaskLogList
+      : devLogsByTaskId[selectedTask.id] ?? [];
+  }, [devLogsByTaskId, selectedTask, selectedTaskLogList]);
+  const selectedTaskSnapshot = useMemo(
+    () =>
+      selectedTask
+        ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
+        : null,
+    [selectedTask, selectedTaskDevLogs]
   );
-  const selectedTimelineItemList = selectedTask
-    ? selectedTaskDevLogs.map((devLogItem) =>
-        buildTimelineViewModel(devLogItem, currentRunAccount)
-      )
-    : [];
-  const selectedTaskStage = selectedTask
-    ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
-    : null;
-  const conversationTurnList = groupTimelineIntoConversationTurns(selectedTimelineItemList);
-  const latestAiConversationTurn =
-    [...conversationTurnList].reverse().find((turnItem) => turnItem.kind === "ai") ?? null;
-  const lastAiTurnId = latestAiConversationTurn?.turnId ?? null;
-  const latestAiTurnLastItemId =
-    latestAiConversationTurn && latestAiConversationTurn.items.length > 0
-      ? latestAiConversationTurn.items[latestAiConversationTurn.items.length - 1].log.id
-      : null;
-  const selectedTaskDocumentMarkdown = selectedTask
-    ? buildTaskDocumentMarkdown(
-        selectedTask,
-        selectedTaskDevLogs,
-        currentRunAccount
-      )
-    : "";
+  const hasProjectConsistencyIssues = useMemo(
+    () =>
+      projectList.some(
+        (projectItem) =>
+          !isProjectSelectable(projectItem) ||
+          projectItem.is_repo_head_consistent === false
+      ),
+    [projectList]
+  );
+  const requirementViewModelList = useMemo(
+    () =>
+      visibleTaskList.map((taskItem) =>
+        buildRequirementViewModel(taskItem, devLogsByTaskId[taskItem.id] ?? [])
+      ),
+    [devLogsByTaskId, visibleTaskList]
+  );
+  const selectedTimelineItemList = useMemo(
+    () =>
+      selectedTask
+        ? selectedTaskDevLogs.map((devLogItem) =>
+            buildTimelineViewModel(devLogItem, currentRunAccount))
+        : [],
+    [currentRunAccount, selectedTask, selectedTaskDevLogs]
+  );
+  const selectedTaskStage = useMemo(
+    () =>
+      selectedTask
+        ? deriveRequirementStage(selectedTask, selectedTaskDevLogs)
+        : null,
+    [selectedTask, selectedTaskDevLogs]
+  );
+  const visibleTimelineItemList = useMemo(
+    () =>
+      visibleConversationTurnCount >= selectedTimelineItemList.length
+        ? selectedTimelineItemList
+        : selectedTimelineItemList.slice(-visibleConversationTurnCount),
+    [selectedTimelineItemList, visibleConversationTurnCount]
+  );
+  const hiddenTimelineItemCount = Math.max(
+    0,
+    selectedTimelineItemList.length - visibleTimelineItemList.length
+  );
+  const timelineRenderBlockList = useMemo(
+    () => buildTimelineRenderBlockList(visibleTimelineItemList),
+    [visibleTimelineItemList]
+  );
+  const canLoadOlderTaskLogs =
+    selectedTask !== null &&
+    selectedTaskLogList.length > 0 &&
+    selectedTaskLogList.length < selectedTask.log_count;
+  const selectedTaskDocumentMarkdown = useMemo(
+    () =>
+      selectedTask
+        ? buildTaskDocumentMarkdown(
+            selectedTask,
+            selectedTaskDevLogs,
+            currentRunAccount
+          )
+        : "",
+    [currentRunAccount, selectedTask, selectedTaskDevLogs]
+  );
   const currentUserLabel =
     currentRunAccount?.account_display_name || GUEST_USER_LABEL;
   const canCreateRequirements = workspaceView === "active";
-  const selectedTaskHasSettledSelfReview = selectedTask
-    ? hasLatestSelfReviewCyclePassed(selectedTaskDevLogs)
-    : false;
-  const selectedTaskStageLabel = selectedTask
-    ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
-    : null;
+  const selectedTaskHasSettledSelfReview = useMemo(
+    () =>
+      selectedTask
+        ? hasLatestSelfReviewCyclePassed(selectedTaskDevLogs)
+        : false,
+    [selectedTask, selectedTaskDevLogs]
+  );
+  const selectedTaskStageLabel = useMemo(
+    () =>
+      selectedTask
+        ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
+        : null,
+    [selectedTask, selectedTaskDevLogs]
+  );
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
@@ -324,8 +457,8 @@ function App() {
       return;
     }
     const pollingIntervalId = window.setInterval(() => {
-      void loadDashboardData(true);
-    }, 1000);
+      void loadDashboardData(true, { includeGlobalLogs: false });
+    }, ACTIVE_DASHBOARD_POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(pollingIntervalId);
     };
@@ -375,108 +508,124 @@ function App() {
     setSuccessMessage(null);
     setErrorMessage(null);
     setPrdFileContent(null);
-    setExpandedTurnIdSet(new Set());
     setSelectedTaskLogList([]);
-  }, [workspaceView, selectedTaskId]);
+    setIsLoadingOlderTaskLogs(false);
+    setExpandedCompactTimelineGroupIdSet(new Set());
+  }, [workspaceView, detailTaskId]);
 
-  // 自动展开最新 AI 消息卡片
   useEffect(() => {
-    if (!lastAiTurnId) return;
-    setExpandedTurnIdSet((prev) => {
-      if (prev.has(lastAiTurnId)) return prev;
-      const next = new Set(prev);
-      next.add(lastAiTurnId);
-      return next;
-    });
-  }, [lastAiTurnId]);
-
-  useLayoutEffect(() => {
-    const previousExpandedTurnIdSet = previousExpandedTurnIdSetRef.current;
-
-    expandedTurnIdSet.forEach((expandedTurnId) => {
-      if (previousExpandedTurnIdSet.has(expandedTurnId)) {
-        return;
-      }
-
-      const expandedAiTurnBodyElement =
-        aiTurnBodyElementByTurnIdRef.current[expandedTurnId];
-      if (!expandedAiTurnBodyElement) {
-        return;
-      }
-
-      expandedAiTurnBodyElement.scrollTop = expandedAiTurnBodyElement.scrollHeight;
-    });
-
-    previousExpandedTurnIdSetRef.current = new Set(expandedTurnIdSet);
-  }, [expandedTurnIdSet]);
-
-  useLayoutEffect(() => {
-    if (!lastAiTurnId || !latestAiTurnLastItemId || !expandedTurnIdSet.has(lastAiTurnId)) {
-      return;
-    }
-
-    const latestAiTurnBodyElement = aiTurnBodyElementByTurnIdRef.current[lastAiTurnId];
-    if (!latestAiTurnBodyElement) {
-      return;
-    }
-
-    latestAiTurnBodyElement.scrollTop = latestAiTurnBodyElement.scrollHeight;
-  }, [expandedTurnIdSet, lastAiTurnId, latestAiTurnLastItemId]);
-
-  // 当选中任务有 worktree 且处于 PRD 相关阶段时，轮询 PRD 文件内容
-  const prdRelevantStageSet = new Set<WorkflowStage>([
-    // PRD_GENERATING 不在这里：生成中阶段强制显示 banner，不读旧文件
-    WorkflowStage.PRD_WAITING_CONFIRMATION,
-    WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
-    WorkflowStage.SELF_REVIEW_IN_PROGRESS,
-    WorkflowStage.TEST_IN_PROGRESS,
-    WorkflowStage.PR_PREPARING,
-    WorkflowStage.ACCEPTANCE_IN_PROGRESS,
-    WorkflowStage.CHANGES_REQUESTED,
-  ]);
+    setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
+    setIsLoadingOlderTaskLogs(false);
+    setExpandedCompactTimelineGroupIdSet(new Set());
+  }, [detailTaskId]);
 
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
     setPrdFileContent(null);
-  }, [selectedTaskId]);
+  }, [detailTaskId]);
 
   // 按任务拉取完整日志列表，避免全局 100 条限制导致时间线空白
   useEffect(() => {
-    if (!selectedTaskId) {
+    if (!detailTaskId) {
       setSelectedTaskLogList([]);
       return;
     }
+
     let cancelled = false;
-    const fetch = () => {
-      logApi.list(selectedTaskId, 2000).then((logs) => {
-        if (!cancelled) setSelectedTaskLogList(sortDevLogListByCreatedAt(logs));
-      }).catch(() => {});
+    let latestSelectedTaskLogCreatedAtText: string | null = null;
+    let hasLoadedInitialLogBatch = false;
+
+    const fetchInitialTaskLogBatch = async () => {
+      try {
+        const initialTaskLogList = await logApi.list(
+          detailTaskId,
+          SELECTED_TASK_LOG_INITIAL_LIMIT
+        );
+        if (cancelled) {
+          return;
+        }
+        const sortedInitialTaskLogList = sortDevLogListByCreatedAt(initialTaskLogList);
+        latestSelectedTaskLogCreatedAtText =
+          sortedInitialTaskLogList[sortedInitialTaskLogList.length - 1]?.created_at ?? null;
+        hasLoadedInitialLogBatch = true;
+        setSelectedTaskLogList(sortedInitialTaskLogList);
+      } catch {
+        hasLoadedInitialLogBatch = true;
+      }
     };
-    fetch();
-    const pollId = window.setInterval(fetch, 2000);
+
+    const fetchIncrementalTaskLogBatch = async () => {
+      if (!hasLoadedInitialLogBatch) {
+        return;
+      }
+
+      try {
+        const incrementalTaskLogList = await logApi.list(
+          detailTaskId,
+          latestSelectedTaskLogCreatedAtText
+            ? SELECTED_TASK_LOG_INCREMENTAL_LIMIT
+            : 1,
+          latestSelectedTaskLogCreatedAtText
+            ? { createdAfter: latestSelectedTaskLogCreatedAtText }
+            : undefined
+        );
+        if (cancelled || incrementalTaskLogList.length === 0) {
+          return;
+        }
+
+        const sortedIncrementalTaskLogList = sortDevLogListByCreatedAt(
+          incrementalTaskLogList
+        );
+        latestSelectedTaskLogCreatedAtText =
+          sortedIncrementalTaskLogList[sortedIncrementalTaskLogList.length - 1]?.created_at
+          ?? latestSelectedTaskLogCreatedAtText;
+        setSelectedTaskLogList((previousTaskLogList) =>
+          latestSelectedTaskLogCreatedAtText === null
+            ? sortedIncrementalTaskLogList
+            : appendIncrementalDevLogList(
+                previousTaskLogList,
+                sortedIncrementalTaskLogList
+              )
+        );
+      } catch {
+        // Ignore transient polling failures and let the next interval retry.
+      }
+    };
+
+    void fetchInitialTaskLogBatch();
+    const pollId = window.setInterval(() => {
+      void fetchIncrementalTaskLogBatch();
+    }, SELECTED_TASK_LOG_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
     };
-  }, [selectedTaskId]);
+  }, [detailTaskId]);
 
   // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
-  const _prdPollTask = taskList.find((t) => t.id === selectedTaskId);
+  const _prdPollTask = useMemo(
+    () => taskList.find((taskItem) => taskItem.id === detailTaskId) ?? null,
+    [detailTaskId, taskList]
+  );
   const _prdWorktreePath = _prdPollTask?.worktree_path ?? null;
-  const _prdPollStage = _prdPollTask
-    ? deriveRequirementStage(_prdPollTask, devLogsByTaskId[_prdPollTask.id] ?? [])
-    : null;
+  const _prdPollStage = useMemo(
+    () =>
+      _prdPollTask
+        ? deriveRequirementStage(_prdPollTask, devLogsByTaskId[_prdPollTask.id] ?? [])
+        : null,
+    [_prdPollTask, devLogsByTaskId]
+  );
   const _prdPollActive =
     _prdWorktreePath !== null &&
     _prdPollStage !== null &&
-    prdRelevantStageSet.has(_prdPollStage);
+    PRD_RELEVANT_STAGE_SET.has(_prdPollStage);
 
   useEffect(() => {
-    if (!selectedTaskId || !_prdPollActive) return;
+    if (!detailTaskId || !_prdPollActive) return;
 
     const loadPrd = () => {
       taskApi
-        .getPrdFile(selectedTaskId)
+        .getPrdFile(detailTaskId)
         .then((result) => {
           const nextContent = result.content ?? null;
           setPrdFileContent((prev) => (prev === nextContent ? prev : nextContent));
@@ -488,23 +637,75 @@ function App() {
     const prdPollId = window.setInterval(loadPrd, 2000);
     return () => window.clearInterval(prdPollId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTaskId, _prdPollActive, _prdWorktreePath]);
+  }, [detailTaskId, _prdPollActive, _prdWorktreePath]);
 
-  async function loadDashboardData(silent = false): Promise<void> {
+  async function handleRevealOrLoadOlderConversationHistory(): Promise<void> {
+    if (hiddenTimelineItemCount > 0) {
+      startTransition(() => {
+        setVisibleConversationTurnCount((previousCount) =>
+          Math.min(
+            selectedTimelineItemList.length,
+            previousCount + VISIBLE_CONVERSATION_TURN_INCREMENT
+          )
+        );
+      });
+      return;
+    }
+
+    if (!selectedTask || !canLoadOlderTaskLogs || isLoadingOlderTaskLogs) {
+      return;
+    }
+
+    setIsLoadingOlderTaskLogs(true);
+    setErrorMessage(null);
+
+    try {
+      const olderTaskLogList = await logApi.list(
+        selectedTask.id,
+        SELECTED_TASK_LOG_OLDER_BATCH_LIMIT,
+        { offset: selectedTaskLogList.length }
+      );
+      const sortedOlderTaskLogList = sortDevLogListByCreatedAt(olderTaskLogList);
+      setSelectedTaskLogList((previousTaskLogList) =>
+        prependOlderDevLogList(previousTaskLogList, sortedOlderTaskLogList)
+      );
+      startTransition(() => {
+        setVisibleConversationTurnCount((previousCount) =>
+          previousCount + VISIBLE_CONVERSATION_TURN_INCREMENT
+        );
+      });
+    } catch (olderTaskLogError) {
+      console.error(olderTaskLogError);
+      setErrorMessage("Failed to load older timeline entries.");
+    } finally {
+      setIsLoadingOlderTaskLogs(false);
+    }
+  }
+
+  async function loadDashboardData(
+    silent = false,
+    options?: {
+      includeGlobalLogs?: boolean;
+    }
+  ): Promise<void> {
+    const shouldIncludeGlobalLogs = options?.includeGlobalLogs ?? true;
     if (!silent) {
       setIsDashboardLoading(true);
     }
 
+    const runAccountPromise = runAccountApi.getCurrent();
+    const taskListPromise = taskApi.list();
+    const devLogListPromise = shouldIncludeGlobalLogs
+      ? logApi.list()
+      : Promise.resolve<DevLog[] | null>(null);
     const [
       runAccountResult,
       taskListResult,
       devLogListResult,
-      projectListResult,
     ] = await Promise.allSettled([
-      runAccountApi.getCurrent(),
-      taskApi.list(),
-      logApi.list(),
-      projectApi.list(),
+      runAccountPromise,
+      taskListPromise,
+      devLogListPromise,
     ]);
 
     // On fetch failure, preserve previous state rather than wiping to empty.
@@ -525,10 +726,9 @@ function App() {
       });
     }
     if (devLogListResult.status === "fulfilled") {
-      setAllDevLogList(sortDevLogListByCreatedAt(devLogListResult.value));
-    }
-    if (projectListResult.status === "fulfilled") {
-      setProjectList(projectListResult.value);
+      if (devLogListResult.value !== null) {
+        setAllDevLogList(sortDevLogListByCreatedAt(devLogListResult.value));
+      }
     }
 
     const dashboardErrors: string[] = [];
@@ -540,7 +740,7 @@ function App() {
       dashboardErrors.push("Failed to load requirements.");
       console.error(taskListResult.reason);
     }
-    if (devLogListResult.status === "rejected") {
+    if (shouldIncludeGlobalLogs && devLogListResult.status === "rejected") {
       dashboardErrors.push("Failed to load timeline entries.");
       console.error(devLogListResult.reason);
     }
@@ -551,7 +751,19 @@ function App() {
 
   async function initializeDashboard(): Promise<void> {
     await loadAppConfig();
-    await loadDashboardData();
+    await Promise.all([loadDashboardData(), loadProjectList()]);
+  }
+
+  async function loadProjectList(): Promise<void> {
+    try {
+      const nextProjectList = await projectApi.list();
+      setProjectList(nextProjectList);
+    } catch (projectListError) {
+      console.error("Failed to load projects:", projectListError);
+      setErrorMessage((previousErrorMessage) =>
+        previousErrorMessage ?? "Failed to load projects."
+      );
+    }
   }
 
   async function loadAppConfig(): Promise<void> {
@@ -1138,7 +1350,7 @@ function App() {
       setNewProjectPath("");
       setNewProjectDescription("");
       setSuccessMessage(`项目「${trimmedName}」已创建。`);
-      await loadDashboardData(true);
+      await loadProjectList();
       if (isCreatePanelOpen) {
         setNewRequirementProjectId(createdProject.id);
       }
@@ -1196,7 +1408,7 @@ function App() {
         repo_path: trimmedPath,
         description: editingProjectDescription.trim() || null,
       });
-      await loadDashboardData(true);
+      await loadProjectList();
       resetProjectEditDraft();
       setSuccessMessage(
         updatedProject.is_repo_head_consistent === false
@@ -1220,7 +1432,7 @@ function App() {
       if (editingProjectId === projectItem.id) {
         resetProjectEditDraft();
       }
-      await loadDashboardData(true);
+      await loadProjectList();
     } catch (err) {
       console.error(err);
       setErrorMessage(err instanceof Error ? err.message : "删除项目失败。");
@@ -1268,7 +1480,11 @@ function App() {
                     workspaceView === viewName &&
                       "devflow-view-switch__button--selected"
                   )}
-                  onClick={() => setWorkspaceView(viewName)}
+                  onClick={() => {
+                    startTransition(() => {
+                      setWorkspaceView(viewName);
+                    });
+                  }}
                 >
                   {viewLabel}
                 </button>
@@ -1628,45 +1844,27 @@ function App() {
               ) : null}
 
               {requirementViewModelList.map((requirementViewModel) => (
-                <button
+                <RequirementCardButton
                   key={requirementViewModel.task.id}
-                  className={joinClassNames(
-                    "devflow-requirement-card-button",
-                    selectedTask?.id === requirementViewModel.task.id &&
-                      "devflow-requirement-card-button--selected"
-                  )}
-                  onClick={() => setSelectedTaskId(requirementViewModel.task.id)}
-                >
-                  <CardSurface
-                    className={joinClassNames(
-                      "devflow-requirement-card",
-                      selectedTask?.id === requirementViewModel.task.id &&
-                        "devflow-requirement-card--selected"
-                    )}
-                  >
-                    <div className="devflow-requirement-card__meta">
-                      <StatusBadge
-                        status={requirementViewModel.stage}
-                        label={requirementViewModel.stageLabel}
-                      />
-                      <span className="devflow-requirement-card__date">
-                        {requirementViewModel.createdLabel}
-                      </span>
-                    </div>
-                    <h3 className="devflow-requirement-card__title">
-                      {requirementViewModel.task.task_title}
-                    </h3>
-                    <p className="devflow-requirement-card__description">
-                      {requirementViewModel.description}
-                    </p>
-                  </CardSurface>
-                </button>
+                  isSelected={selectedTaskId === requirementViewModel.task.id}
+                  onSelectTaskId={setSelectedTaskId}
+                  requirementViewModel={requirementViewModel}
+                />
               ))}
             </div>
           </section>
 
           <section className="devflow-column devflow-column--detail">
-            {selectedTask ? (
+            {isTaskSelectionPending ? (
+              <div className="devflow-empty-detail">
+                <div className="devflow-empty-detail__icon">
+                  <ChevronRightIcon className="devflow-icon devflow-icon--large" />
+                </div>
+                <p className="devflow-empty-detail__text">
+                  正在切换需求详情...
+                </p>
+              </div>
+            ) : selectedTask ? (
               <div className="devflow-detail">
                 <div className="devflow-detail__body">
                   <div className="devflow-detail__header">
@@ -1926,6 +2124,11 @@ function App() {
                       </h3>
 
                       <div className="devflow-conversation">
+                        <p className="devflow-conversation__legend">
+                          用户消息保留正文。Agent / System 日志只显示摘要、状态和涉及文件，
+                          避免大段输出把时间线撑满。
+                        </p>
+
                         {isSelectedTaskInActiveExecution ? (
                           <div className="devflow-execution-banner">
                             <span className="devflow-footer__pulse" />
@@ -1960,7 +2163,7 @@ function App() {
                           </div>
                         ) : null}
 
-                        {conversationTurnList.length === 0 ? (
+                        {selectedTimelineItemList.length === 0 ? (
                           <div className="devflow-empty-card devflow-empty-card--detail">
                             <p className="devflow-empty-card__text">
                               Timeline will appear here after task activity begins.
@@ -1968,124 +2171,99 @@ function App() {
                           </div>
                         ) : null}
 
-                        {conversationTurnList.map((turn) => {
-                          if (turn.kind === "human") {
+                        {hiddenTimelineItemCount > 0 || canLoadOlderTaskLogs ? (
+                          <div className="devflow-conversation__history-gate">
+                            <span className="devflow-conversation__history-copy">
+                              {hiddenTimelineItemCount > 0
+                                ? `已折叠较早的 ${hiddenTimelineItemCount} 条时间线记录，先显示最近内容以提升切换速度。`
+                                : `当前仅加载了最近 ${selectedTaskLogList.length} 条日志，较早历史按需继续加载。`}
+                            </span>
+                            <button
+                              type="button"
+                              className="devflow-conversation__history-btn"
+                              disabled={isLoadingOlderTaskLogs}
+                              onClick={() => {
+                                void handleRevealOrLoadOlderConversationHistory();
+                              }}
+                            >
+                              {hiddenTimelineItemCount > 0
+                                ? "显示更早记录"
+                                : isLoadingOlderTaskLogs
+                                  ? "加载中..."
+                                  : "加载更早日志"}
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {timelineRenderBlockList.map((timelineRenderBlock) => {
+                          if (timelineRenderBlock.kind === "human") {
+                            const timelineItem = timelineRenderBlock.item;
+                            const imgUrl =
+                              mapMediaPathToPublicUrl(
+                                timelineItem.log.media_original_image_path
+                              ) ||
+                              mapMediaPathToPublicUrl(
+                                timelineItem.log.media_thumbnail_path
+                              );
                             return (
-                              <div key={turn.turnId} className="devflow-turn-card devflow-turn-card--human">
+                              <div
+                                key={timelineItem.log.id}
+                                className="devflow-turn-card devflow-turn-card--human"
+                              >
                                 <div className="devflow-turn-card__human-header">
                                   <UserIcon className="devflow-icon devflow-icon--tiny devflow-icon--human" />
-                                  <span className="devflow-turn-card__author">{turn.authorName}</span>
-                                  <span className="devflow-turn-card__time">{turn.timeLabel}</span>
+                                  <span className="devflow-turn-card__author">
+                                    {timelineItem.authorName}
+                                  </span>
+                                  <span className="devflow-turn-card__time">
+                                    {timelineItem.timeLabel}
+                                  </span>
                                 </div>
-                                {turn.items.map((item) => {
-                                  const imgUrl =
-                                    mapMediaPathToPublicUrl(item.log.media_original_image_path) ||
-                                    mapMediaPathToPublicUrl(item.log.media_thumbnail_path);
-                                  return (
-                                    <div key={item.log.id} className="devflow-turn-card__human-body">
-                                      <div className="devflow-markdown">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {item.log.text_content || ""}
-                                        </ReactMarkdown>
-                                      </div>
-                                      {imgUrl ? (
-                                        <a
-                                          className="devflow-timeline-item__image-link"
-                                          href={imgUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          <img
-                                            className="devflow-timeline-item__image"
-                                            src={imgUrl}
-                                            alt="Attachment"
-                                          />
-                                        </a>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })}
+                                <div className="devflow-turn-card__human-body">
+                                  <MarkdownBlock
+                                    className="devflow-markdown"
+                                    markdownText={timelineItem.log.text_content || ""}
+                                  />
+                                  {imgUrl ? (
+                                    <a
+                                      className="devflow-timeline-item__image-link"
+                                      href={imgUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <img
+                                        className="devflow-timeline-item__image"
+                                        src={imgUrl}
+                                        alt="Attachment"
+                                      />
+                                    </a>
+                                  ) : null}
+                                </div>
                               </div>
                             );
                           }
 
-                          // AI turn card
-                          const isExpanded = expandedTurnIdSet.has(turn.turnId);
                           return (
-                            <div
-                              key={turn.turnId}
-                              className={joinClassNames(
-                                "devflow-turn-card devflow-turn-card--ai",
-                                isExpanded && "devflow-turn-card--expanded"
+                            <CompactTimelineGroupCard
+                              key={timelineRenderBlock.group.groupId}
+                              group={timelineRenderBlock.group}
+                              isExpanded={expandedCompactTimelineGroupIdSet.has(
+                                timelineRenderBlock.group.groupId
                               )}
-                            >
-                              <button
-                                type="button"
-                                className="devflow-turn-card__ai-header"
-                                onClick={() => {
-                                  setExpandedTurnIdSet((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(turn.turnId)) {
-                                      next.delete(turn.turnId);
+                              onToggle={() => {
+                                startTransition(() => {
+                                  setExpandedCompactTimelineGroupIdSet((previousGroupIdSet) => {
+                                    const nextGroupIdSet = new Set(previousGroupIdSet);
+                                    if (nextGroupIdSet.has(timelineRenderBlock.group.groupId)) {
+                                      nextGroupIdSet.delete(timelineRenderBlock.group.groupId);
                                     } else {
-                                      next.add(turn.turnId);
+                                      nextGroupIdSet.add(timelineRenderBlock.group.groupId);
                                     }
-                                    return next;
+                                    return nextGroupIdSet;
                                   });
-                                }}
-                              >
-                                <RobotIcon className="devflow-icon devflow-icon--tiny devflow-icon--ai" />
-                                <span className="devflow-turn-card__author">{turn.authorName}</span>
-                                <span className="devflow-turn-card__time">{turn.timeLabel}</span>
-                                <span className="devflow-turn-card__count">{turn.items.length} 条输出</span>
-                                <ChevronRightIcon
-                                  className={joinClassNames(
-                                    "devflow-icon devflow-icon--tiny devflow-turn-card__chevron",
-                                    isExpanded && "devflow-turn-card__chevron--open"
-                                  )}
-                                />
-                              </button>
-
-                              {isExpanded ? (
-                                <div
-                                  className="devflow-turn-card__ai-body"
-                                  ref={(aiTurnBodyElement) => {
-                                    aiTurnBodyElementByTurnIdRef.current[turn.turnId] =
-                                      aiTurnBodyElement;
-                                  }}
-                                >
-                                  {turn.items.map((item) => {
-                                    const imgUrl =
-                                      mapMediaPathToPublicUrl(item.log.media_original_image_path) ||
-                                      mapMediaPathToPublicUrl(item.log.media_thumbnail_path);
-                                    return (
-                                      <div key={item.log.id} className="devflow-turn-card__ai-entry">
-                                        <span className="devflow-turn-card__entry-time">{item.timeLabel}</span>
-                                        <div className="devflow-markdown devflow-turn-card__entry-content">
-                                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {item.log.text_content || ""}
-                                          </ReactMarkdown>
-                                        </div>
-                                        {imgUrl ? (
-                                          <a
-                                            className="devflow-timeline-item__image-link"
-                                            href={imgUrl}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                          >
-                                            <img
-                                              className="devflow-timeline-item__image"
-                                              src={imgUrl}
-                                              alt="Attachment"
-                                            />
-                                          </a>
-                                        ) : null}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : null}
-                            </div>
+                                });
+                              }}
+                            />
                           );
                         })}
                       </div>
@@ -2102,22 +2280,20 @@ function App() {
                         selectedTaskStage !== WorkflowStage.BACKLOG &&
                         selectedTaskStage !== WorkflowStage.DONE &&
                         selectedTaskStage !== WorkflowStage.PRD_GENERATING ? (
-                          <div className="devflow-markdown devflow-markdown--document">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {prdFileContent}
-                            </ReactMarkdown>
-                          </div>
+                          <MarkdownBlock
+                            className="devflow-markdown devflow-markdown--document"
+                            markdownText={prdFileContent}
+                          />
                         ) : selectedTaskStage === WorkflowStage.PRD_GENERATING ? (
                           <div className="devflow-execution-banner">
                             <span className="devflow-footer__pulse" />
                             <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
                           </div>
                         ) : (
-                          <div className="devflow-markdown devflow-markdown--document">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {selectedTaskDocumentMarkdown}
-                            </ReactMarkdown>
-                          </div>
+                          <MarkdownBlock
+                            className="devflow-markdown devflow-markdown--document"
+                            markdownText={selectedTaskDocumentMarkdown}
+                          />
                         )}
                       </CardSurface>
                     </div>
@@ -2256,6 +2432,184 @@ interface CardSurfaceProps {
   className?: string;
 }
 
+interface MarkdownBlockProps {
+  markdownText: string;
+  className?: string;
+}
+
+const MarkdownBlock = memo(function MarkdownBlock({
+  markdownText,
+  className,
+}: MarkdownBlockProps) {
+  return (
+    <div className={className}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGIN_LIST}>
+        {markdownText}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
+interface CompactTimelineGroupCardProps {
+  group: CompactTimelineGroup;
+  isExpanded: boolean;
+  onToggle: () => void;
+}
+
+function CompactTimelineGroupCard({
+  group,
+  isExpanded,
+  onToggle,
+}: CompactTimelineGroupCardProps) {
+  const visibleTimelineItemList =
+    isExpanded || group.items.length <= COMPACT_TIMELINE_GROUP_VISIBLE_COUNT
+      ? group.items
+      : group.items.slice(-COMPACT_TIMELINE_GROUP_VISIBLE_COUNT);
+  const hiddenTimelineItemCount =
+    group.items.length - visibleTimelineItemList.length;
+  const groupTimeLabel =
+    group.items.length > 1
+      ? `${group.items[0].timeLabel} - ${group.items[group.items.length - 1].timeLabel}`
+      : group.items[0]?.timeLabel ?? "";
+  const groupLabel = group.label;
+  const groupSummaryText = buildCompactTimelineGroupSummaryText(group);
+  const groupStatusLabel =
+    group.tone === "error"
+      ? "需处理"
+      : group.tone === "success"
+        ? "已完成"
+        : null;
+
+  return (
+    <div
+      className={joinClassNames(
+        "devflow-timeline-group",
+        `devflow-timeline-group--${group.tone}`
+      )}
+    >
+      <div className="devflow-timeline-group__header">
+        <div className="devflow-timeline-group__heading">
+          <span className="devflow-timeline-group__label">{groupLabel}</span>
+          <span className="devflow-timeline-group__summary">{groupSummaryText}</span>
+        </div>
+
+        <div className="devflow-timeline-group__meta-row">
+          <span className="devflow-timeline-group__meta-pill">{group.items.length} 条</span>
+          <span className="devflow-timeline-group__meta-pill">{groupTimeLabel}</span>
+          {groupStatusLabel ? (
+            <span
+              className={joinClassNames(
+                "devflow-timeline-group__meta-pill",
+                `devflow-timeline-group__meta-pill--${group.tone}`
+              )}
+            >
+              {groupStatusLabel}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="devflow-timeline-group__rows">
+        {visibleTimelineItemList.map((timelineItem) => (
+          <LightweightTimelineItem
+            key={timelineItem.log.id}
+            timelineItem={timelineItem}
+            previewText={buildCompactTimelinePreviewText(timelineItem)}
+            tone={deriveCompactTimelineItemTone(timelineItem)}
+          />
+        ))}
+      </div>
+
+      {group.items.length > COMPACT_TIMELINE_GROUP_VISIBLE_COUNT ? (
+        <button
+          type="button"
+          className="devflow-timeline-group__toggle"
+          onClick={onToggle}
+        >
+          {isExpanded
+            ? "收起这组日志"
+            : `展开更早的 ${hiddenTimelineItemCount} 条日志`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+interface LightweightTimelineItemProps {
+  timelineItem: TimelineViewModel;
+  previewText: string;
+  tone: "default" | "error" | "success";
+}
+
+const LightweightTimelineItem = memo(function LightweightTimelineItem({
+  timelineItem,
+  previewText,
+  tone,
+}: LightweightTimelineItemProps) {
+  const isAiTimelineItem = timelineItem.kind === "ai_log";
+  const sourceLabel = isAiTimelineItem ? "Agent" : "System";
+  const metadataTagList = buildCompactTimelineMetadataTagList(timelineItem);
+  const statusLabel =
+    tone === "error" ? "错误" : tone === "success" ? "完成" : null;
+
+  return (
+    <div
+      className={joinClassNames(
+        "devflow-turn-card__compact-row",
+        `devflow-turn-card__compact-row--${tone}`
+      )}
+    >
+      <div className="devflow-turn-card__compact-rail">
+        <span className="devflow-turn-card__compact-time">{timelineItem.timeLabel}</span>
+        <span
+          className={joinClassNames(
+            "devflow-turn-card__compact-source",
+            isAiTimelineItem
+              ? "devflow-turn-card__compact-source--ai"
+              : "devflow-turn-card__compact-source--system"
+          )}
+        >
+          {isAiTimelineItem ? (
+            <RobotIcon className="devflow-icon devflow-icon--tiny devflow-icon--ai" />
+          ) : (
+            <CodeIcon className="devflow-icon devflow-icon--tiny" />
+          )}
+          <span>{sourceLabel}</span>
+        </span>
+      </div>
+
+      <div className="devflow-turn-card__compact-main">
+        <div className="devflow-turn-card__compact-copy">
+          <p className="devflow-turn-card__lite-preview">{previewText}</p>
+          {statusLabel ? (
+            <span
+              className={joinClassNames(
+                "devflow-turn-card__compact-status",
+                `devflow-turn-card__compact-status--${tone}`
+              )}
+            >
+              {statusLabel}
+            </span>
+          ) : null}
+        </div>
+
+        {metadataTagList.length > 0 ? (
+          <div className="devflow-turn-card__compact-tags">
+            {metadataTagList.map((metadataTag) => (
+              <span
+                key={`${timelineItem.log.id}:${metadataTag}`}
+                className="devflow-turn-card__compact-tag"
+              >
+                {metadataTag}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+});
+
 function CardSurface({ children, className }: CardSurfaceProps) {
   return (
     <div className={joinClassNames("devflow-card", className)}>{children}</div>
@@ -2314,6 +2668,55 @@ function StatusBadge({ status, label }: StatusBadgeProps) {
   );
 }
 
+interface RequirementCardButtonProps {
+  requirementViewModel: RequirementViewModel;
+  isSelected: boolean;
+  onSelectTaskId: Dispatch<SetStateAction<string | null>>;
+}
+
+const RequirementCardButton = memo(function RequirementCardButton({
+  requirementViewModel,
+  isSelected,
+  onSelectTaskId,
+}: RequirementCardButtonProps) {
+  return (
+    <button
+      className={joinClassNames(
+        "devflow-requirement-card-button",
+        isSelected && "devflow-requirement-card-button--selected"
+      )}
+      onClick={() => {
+        startTransition(() => {
+          onSelectTaskId(requirementViewModel.task.id);
+        });
+      }}
+    >
+      <CardSurface
+        className={joinClassNames(
+          "devflow-requirement-card",
+          isSelected && "devflow-requirement-card--selected"
+        )}
+      >
+        <div className="devflow-requirement-card__meta">
+          <StatusBadge
+            status={requirementViewModel.stage}
+            label={requirementViewModel.stageLabel}
+          />
+          <span className="devflow-requirement-card__date">
+            {requirementViewModel.createdLabel}
+          </span>
+        </div>
+        <h3 className="devflow-requirement-card__title">
+          {requirementViewModel.task.task_title}
+        </h3>
+        <p className="devflow-requirement-card__description">
+          {requirementViewModel.description}
+        </p>
+      </CardSurface>
+    </button>
+  );
+});
+
 function buildRequirementViewModel(
   taskItem: Task,
   taskDevLogList: DevLog[]
@@ -2340,35 +2743,385 @@ function buildTimelineViewModel(
   };
 }
 
-function groupTimelineIntoConversationTurns(
-  timelineItems: TimelineViewModel[]
-): ConversationTurn[] {
-  const turns: ConversationTurn[] = [];
+function buildTimelineRenderBlockList(
+  timelineItemList: TimelineViewModel[]
+): TimelineRenderBlock[] {
+  const timelineRenderBlockList: TimelineRenderBlock[] = [];
+  let compactTimelineItemList: TimelineViewModel[] = [];
 
-  for (const item of timelineItems) {
-    // 只有 state_tag === NONE 的 human_review 才是真正的用户输入
-    // 系统自动写入的状态消息（state_tag = FIXED/OPTIMIZATION/BUG 等）归入 AI 侧
-    const turnKind: ConversationTurnKind =
-      item.kind === "human_review" && item.log.state_tag === DevLogStateTag.NONE
-        ? "human"
-        : "ai";
-    const lastTurn = turns[turns.length - 1];
+  const flushCompactTimelineGroup = () => {
+    if (compactTimelineItemList.length === 0) {
+      return;
+    }
 
-    // Consecutive AI logs are merged into a single AI turn
-    if (lastTurn && lastTurn.kind === "ai" && turnKind === "ai") {
-      lastTurn.items.push(item);
-    } else {
-      turns.push({
-        turnId: item.log.id,
-        kind: turnKind,
-        authorName: item.authorName,
-        timeLabel: item.timeLabel,
-        items: [item],
+    timelineRenderBlockList.push({
+      kind: "compact_group",
+      group: buildCompactTimelineGroup(compactTimelineItemList),
+    });
+    compactTimelineItemList = [];
+  };
+
+  for (const timelineItem of timelineItemList) {
+    if (isHumanTimelineItem(timelineItem)) {
+      flushCompactTimelineGroup();
+      timelineRenderBlockList.push({
+        kind: "human",
+        item: timelineItem,
       });
+      continue;
+    }
+
+    if (
+      compactTimelineItemList.length > 0 &&
+      shouldStartNewCompactTimelineGroup(compactTimelineItemList, timelineItem)
+    ) {
+      flushCompactTimelineGroup();
+    }
+
+    compactTimelineItemList.push(timelineItem);
+  }
+
+  flushCompactTimelineGroup();
+  return timelineRenderBlockList;
+}
+
+function buildCompactTimelineGroup(
+  timelineItemList: TimelineViewModel[]
+): CompactTimelineGroup {
+  const firstTimelineItem = timelineItemList[0];
+  const lastTimelineItem = timelineItemList[timelineItemList.length - 1];
+  const groupCategory = deriveCompactTimelineGroupCategory(timelineItemList);
+
+  return {
+    groupId: `${firstTimelineItem?.log.id ?? "group"}:${lastTimelineItem?.log.id ?? "group"}`,
+    items: timelineItemList,
+    category: groupCategory,
+    label: deriveCompactTimelineGroupLabel(timelineItemList),
+    tone: deriveCompactTimelineGroupTone(timelineItemList),
+  };
+}
+
+function shouldStartNewCompactTimelineGroup(
+  compactTimelineItemList: TimelineViewModel[],
+  nextTimelineItem: TimelineViewModel
+): boolean {
+  if (compactTimelineItemList.length === 0) {
+    return false;
+  }
+
+  const lastTimelineItem = compactTimelineItemList[compactTimelineItemList.length - 1];
+  const lastTimelineCategory = deriveCompactTimelineItemCategory(lastTimelineItem);
+  const nextTimelineCategory = deriveCompactTimelineItemCategory(nextTimelineItem);
+
+  return (
+    compactTimelineItemList.length >= COMPACT_TIMELINE_GROUP_MAX_SIZE ||
+    lastTimelineItem.kind !== nextTimelineItem.kind ||
+    lastTimelineCategory !== nextTimelineCategory
+  );
+}
+
+function deriveCompactTimelineGroupCategory(
+  timelineItemList: TimelineViewModel[]
+): CompactTimelineCategory {
+  const compactTimelineCategoryCountMap = new Map<CompactTimelineCategory, number>();
+
+  for (const timelineItem of timelineItemList) {
+    const nextCategory = deriveCompactTimelineItemCategory(timelineItem);
+    compactTimelineCategoryCountMap.set(
+      nextCategory,
+      (compactTimelineCategoryCountMap.get(nextCategory) ?? 0) + 1
+    );
+  }
+
+  let dominantCategory: CompactTimelineCategory = "general";
+  let dominantCount = -1;
+  for (const [category, count] of compactTimelineCategoryCountMap.entries()) {
+    if (count > dominantCount) {
+      dominantCategory = category;
+      dominantCount = count;
     }
   }
 
-  return turns;
+  return dominantCategory;
+}
+
+function deriveCompactTimelineGroupLabel(
+  timelineItemList: TimelineViewModel[]
+): string {
+  const firstTimelineItem = timelineItemList[0];
+  const groupCategory = deriveCompactTimelineGroupCategory(timelineItemList);
+  const groupCategoryLabel = getCompactTimelineCategoryLabel(groupCategory);
+
+  if (!firstTimelineItem) {
+    return "运行日志";
+  }
+
+  if (firstTimelineItem.kind === "ai_log") {
+    return groupCategory === "general"
+      ? "Agent 日志"
+      : `Agent ${groupCategoryLabel}`;
+  }
+
+  return groupCategory === "general" ? "System 日志" : `System ${groupCategoryLabel}`;
+}
+
+function deriveCompactTimelineGroupTone(
+  timelineItemList: TimelineViewModel[]
+): "default" | "error" | "success" {
+  if (timelineItemList.some((timelineItem) => deriveCompactTimelineItemTone(timelineItem) === "error")) {
+    return "error";
+  }
+
+  if (
+    timelineItemList.every(
+      (timelineItem) => deriveCompactTimelineItemTone(timelineItem) === "success"
+    )
+  ) {
+    return "success";
+  }
+
+  return "default";
+}
+
+function deriveCompactTimelineItemTone(
+  timelineItem: TimelineViewModel
+): "default" | "error" | "success" {
+  const normalizedTimelineText = timelineItem.log.text_content.toLowerCase();
+  if (
+    timelineItem.log.state_tag === DevLogStateTag.BUG ||
+    normalizedTimelineText.includes("error") ||
+    normalizedTimelineText.includes("failed") ||
+    normalizedTimelineText.includes("failure") ||
+    normalizedTimelineText.includes("exception") ||
+    normalizedTimelineText.includes("429") ||
+    normalizedTimelineText.includes("exit 1") ||
+    normalizedTimelineText.includes("失败")
+  ) {
+    return "error";
+  }
+
+  if (
+    timelineItem.log.state_tag === DevLogStateTag.FIXED ||
+    normalizedTimelineText.includes("success") ||
+    normalizedTimelineText.includes("completed") ||
+    normalizedTimelineText.includes("完成") ||
+    normalizedTimelineText.includes("已完成")
+  ) {
+    return "success";
+  }
+
+  return "default";
+}
+
+function deriveCompactTimelineItemCategory(
+  timelineItem: TimelineViewModel
+): CompactTimelineCategory {
+  const normalizedTimelineText = timelineItem.log.text_content.toLowerCase();
+
+  if (
+    deriveCompactTimelineItemTone(timelineItem) === "error" ||
+    normalizedTimelineText.includes("changes requested") ||
+    normalizedTimelineText.includes("rollback") ||
+    normalizedTimelineText.includes("回退") ||
+    normalizedTimelineText.includes("待修改")
+  ) {
+    return "changes";
+  }
+
+  if (normalizedTimelineText.includes("prd")) {
+    return "prd";
+  }
+
+  if (
+    normalizedTimelineText.includes("review") ||
+    normalizedTimelineText.includes("self review") ||
+    normalizedTimelineText.includes("自检") ||
+    normalizedTimelineText.includes("评审")
+  ) {
+    return "review";
+  }
+
+  if (
+    normalizedTimelineText.includes("test") ||
+    normalizedTimelineText.includes("pytest") ||
+    normalizedTimelineText.includes("playwright") ||
+    normalizedTimelineText.includes("pre-commit") ||
+    normalizedTimelineText.includes("lint") ||
+    normalizedTimelineText.includes("测试")
+  ) {
+    return "test";
+  }
+
+  if (
+    normalizedTimelineText.includes("pull request") ||
+    normalizedTimelineText.includes("pr ") ||
+    normalizedTimelineText.includes("pr:") ||
+    normalizedTimelineText.includes("acceptance") ||
+    normalizedTimelineText.includes("验收") ||
+    normalizedTimelineText.includes("complete") ||
+    normalizedTimelineText.includes("merge")
+  ) {
+    return "delivery";
+  }
+
+  if (timelineItem.kind === "system_event") {
+    return "system";
+  }
+
+  if (
+    normalizedTimelineText.includes("codex") ||
+    normalizedTimelineText.includes("worktree") ||
+    normalizedTimelineText.includes("implement") ||
+    normalizedTimelineText.includes("coding") ||
+    normalizedTimelineText.includes("修改文件") ||
+    normalizedTimelineText.includes("涉及文件")
+  ) {
+    return "coding";
+  }
+
+  return "general";
+}
+
+function isHumanTimelineItem(timelineItem: TimelineViewModel): boolean {
+  return (
+    timelineItem.kind === "human_review" &&
+    timelineItem.log.state_tag === DevLogStateTag.NONE
+  );
+}
+
+function buildCompactTimelinePreviewText(timelineItem: TimelineViewModel): string {
+  const rawTimelineText = timelineItem.log.text_content || "";
+  const cleanedTimelinePreviewText = cleanMarkdownPreview(rawTimelineText);
+  const filePathMatchList = extractCompactTimelineFilePathList(cleanedTimelinePreviewText);
+
+  if (
+    rawTimelineText.toLowerCase().includes("codex exec") &&
+    (rawTimelineText.includes("失败") || rawTimelineText.toLowerCase().includes("failed"))
+  ) {
+    return "Codex 执行失败，任务已回退到待修改。";
+  }
+
+  if (
+    rawTimelineText.includes("429 Too Many Requests") ||
+    rawTimelineText.toLowerCase().includes("retry limit")
+  ) {
+    return "请求被限流：429 Too Many Requests。";
+  }
+
+  if (
+    rawTimelineText.toLowerCase().includes("changes requested") ||
+    rawTimelineText.includes("待修改")
+  ) {
+    return "任务进入待修改阶段，等待人工或下一轮处理。";
+  }
+
+  if (rawTimelineText.toLowerCase().includes("openai codex")) {
+    return "启动 Codex 执行环境。";
+  }
+
+  if (
+    filePathMatchList.length > 0 &&
+    /\bM\s+[\w./-]+\.[a-zA-Z0-9]+\b/.test(rawTimelineText)
+  ) {
+    return `修改文件：${filePathMatchList.join("、")}`;
+  }
+
+  if (
+    filePathMatchList.length > 0 &&
+    !rawTimelineText.toLowerCase().includes("error") &&
+    !rawTimelineText.includes("失败")
+  ) {
+    return `涉及文件：${filePathMatchList.join("、")}`;
+  }
+
+  if (cleanedTimelinePreviewText.length > 0) {
+    return truncateText(cleanedTimelinePreviewText, 140);
+  }
+
+  const hasTimelineAttachment =
+    Boolean(timelineItem.log.media_original_image_path) ||
+    Boolean(timelineItem.log.media_thumbnail_path);
+  if (hasTimelineAttachment) {
+    return timelineItem.kind === "ai_log"
+      ? "AI 输出包含附件，正文未渲染。"
+      : "系统日志包含附件，正文未渲染。";
+  }
+
+  return timelineItem.kind === "ai_log"
+    ? "AI 输出正文未渲染。"
+    : "系统日志正文未渲染。";
+}
+
+function buildCompactTimelineGroupSummaryText(group: CompactTimelineGroup): string {
+  const aiTimelineItemCount = group.items.filter(
+    (timelineItem) => timelineItem.kind === "ai_log"
+  ).length;
+  const systemTimelineItemCount = group.items.length - aiTimelineItemCount;
+  const summaryPartList: string[] = [];
+
+  if (aiTimelineItemCount > 0) {
+    summaryPartList.push(`Agent ${aiTimelineItemCount} 条`);
+  }
+
+  if (systemTimelineItemCount > 0) {
+    summaryPartList.push(`System ${systemTimelineItemCount} 条`);
+  }
+
+  return summaryPartList.join(" · ");
+}
+
+function buildCompactTimelineMetadataTagList(
+  timelineItem: TimelineViewModel
+): string[] {
+  const metadataTagList: string[] = [];
+
+  if (timelineItem.log.state_tag === DevLogStateTag.BUG) {
+    metadataTagList.push("BUG");
+  } else if (timelineItem.log.state_tag === DevLogStateTag.FIXED) {
+    metadataTagList.push("FIXED");
+  } else if (timelineItem.log.state_tag === DevLogStateTag.OPTIMIZATION) {
+    metadataTagList.push("OPT");
+  } else if (timelineItem.log.state_tag === DevLogStateTag.TRANSFERRED) {
+    metadataTagList.push("SYNC");
+  }
+
+  metadataTagList.push(
+    ...extractCompactTimelineFilePathList(
+      cleanMarkdownPreview(timelineItem.log.text_content || "")
+    ).slice(0, 2)
+  );
+
+  if (
+    timelineItem.log.media_original_image_path ||
+    timelineItem.log.media_thumbnail_path
+  ) {
+    metadataTagList.push("附件");
+  }
+
+  return Array.from(new Set(metadataTagList)).slice(0, 3);
+}
+
+function extractCompactTimelineFilePathList(rawTimelineText: string): string[] {
+  return Array.from(
+    new Set(rawTimelineText.match(/\b[\w./-]+\.[a-zA-Z0-9]+\b/g) ?? [])
+  ).slice(0, 3);
+}
+
+function getCompactTimelineCategoryLabel(
+  category: CompactTimelineCategory
+): string {
+  const compactTimelineCategoryLabelMap: Record<CompactTimelineCategory, string> = {
+    general: "日志",
+    prd: "PRD",
+    coding: "编码",
+    review: "评审",
+    test: "测试",
+    delivery: "交付",
+    system: "事件",
+    changes: "异常",
+  };
+
+  return compactTimelineCategoryLabelMap[category];
 }
 
 function buildDevLogsByTaskId(devLogList: DevLog[]): Record<string, DevLog[]> {
@@ -2773,6 +3526,51 @@ function sortDevLogListByCreatedAt(devLogList: DevLog[]): DevLog[] {
     (leftDevLog, rightDevLog) =>
       toTimestampValue(leftDevLog.created_at) - toTimestampValue(rightDevLog.created_at)
   );
+}
+
+function appendIncrementalDevLogList(
+  previousDevLogList: DevLog[],
+  incrementalDevLogList: DevLog[]
+): DevLog[] {
+  if (incrementalDevLogList.length === 0) {
+    return previousDevLogList;
+  }
+
+  const existingDevLogIdSet = new Set(
+    previousDevLogList.map((devLogItem) => devLogItem.id)
+  );
+  const appendedDevLogList = [...previousDevLogList];
+
+  for (const incrementalDevLogItem of incrementalDevLogList) {
+    if (existingDevLogIdSet.has(incrementalDevLogItem.id)) {
+      continue;
+    }
+    appendedDevLogList.push(incrementalDevLogItem);
+  }
+
+  return appendedDevLogList;
+}
+
+function prependOlderDevLogList(
+  previousDevLogList: DevLog[],
+  olderDevLogList: DevLog[]
+): DevLog[] {
+  if (olderDevLogList.length === 0) {
+    return previousDevLogList;
+  }
+
+  const existingDevLogIdSet = new Set(
+    olderDevLogList.map((devLogItem) => devLogItem.id)
+  );
+  const prependedDevLogList = [...olderDevLogList];
+
+  for (const previousDevLogItem of previousDevLogList) {
+    if (!existingDevLogIdSet.has(previousDevLogItem.id)) {
+      prependedDevLogList.push(previousDevLogItem);
+    }
+  }
+
+  return prependedDevLogList;
 }
 
 function mapMediaPathToPublicUrl(rawMediaPath: string | null): string | null {

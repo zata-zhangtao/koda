@@ -21,7 +21,7 @@ Koda 现在有三类关键配置：
 | `.env.example` | 本机 DSL / agent 样例 | 开发安全默认值，保留可选 public 参数 |
 | `deploy/public-forward/.env.example` | 服务器样例 | 域名、Basic Auth、gateway 参数 |
 | `deploy/public-forward/agent.env.example` | 本机公网模式样例 | 便于单独复制到开发机 |
-| `frontend/vite.config.ts` | 前端开发服务器配置 | 端口 `5173`、`/api` 与 `/media` 代理 |
+| `frontend/vite.config.ts` | 前端开发服务器配置 | 默认端口 `5173`、`/api` 与 `/media` 代理 |
 | `mkdocs.yml` | 文档站点配置 | 导航、插件、Mermaid 支持 |
 
 ## DSL 运行配置
@@ -99,10 +99,16 @@ Koda 现在有三类关键配置：
 
 `frontend/vite.config.ts` 依然约定：
 
-- 开发端口固定为 `5173`
-- `/api` 代理到 `http://localhost:8000`
-- `/media` 代理到 `http://localhost:8000`
+- 默认开发端口为 `5173`
+- 默认把 `/api` 代理到 `http://localhost:8000`
+- 默认把 `/media` 代理到 `http://localhost:8000`
 - 构建产物输出到 `frontend/dist`
+
+当你使用 `just dsl-dev backend_port=... frontend_port=...` 时：
+
+- `justfile` 会把 `frontend_port` 传给 Vite
+- `/api` 与 `/media` 的代理目标会自动跟随后端端口
+- 后端 CORS 白名单也会同步放行当前前端端口
 
 这和公网模式并不冲突：
 
@@ -113,7 +119,7 @@ Koda 现在有三类关键配置：
 
 | 命令 | 作用 |
 | --- | --- |
-| `just dsl-dev` | 启动本地开发环境（后端 + Vite） |
+| `just dsl-dev [backend_port=...] [frontend_port=...]` | 启动本地开发环境（后端 + Vite） |
 | `just build-frontend` | 构建前端 |
 | `just public-build` | 构建公网模式前端 |
 | `just public-run` | 启动 `SERVE_FRONTEND_DIST=true` 的 DSL |
@@ -136,5 +142,6 @@ Koda 现在有三类关键配置：
 
 1. `frontend/vite.config.ts`
 2. `dsl/app.py` 的 CORS 白名单
-3. `deploy/public-forward/docker-compose.yml`
-4. 本页和[部署说明](./deployment.md)
+3. `justfile`
+4. `deploy/public-forward/docker-compose.yml`
+5. 本页和[部署说明](./deployment.md)
