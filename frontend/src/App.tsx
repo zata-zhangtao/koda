@@ -13,15 +13,18 @@ import type {
   SVGProps,
 } from "react";
 import {
+  Children as ReactChildren,
+  isValidElement,
   memo,
   startTransition,
   useDeferredValue,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   appConfigApi,
@@ -175,6 +178,7 @@ const COMPACT_TIMELINE_GROUP_VISIBLE_COUNT = 3;
 const COMPACT_TIMELINE_GROUP_MAX_SIZE = 6;
 const COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT = 5;
 const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
+const MARKDOWN_MERMAID_LANGUAGE_PATTERN = /\blanguage-mermaid\b/;
 const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PRD_WAITING_CONFIRMATION,
   WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
@@ -184,6 +188,8 @@ const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.ACCEPTANCE_IN_PROGRESS,
   WorkflowStage.CHANGES_REQUESTED,
 ]);
+
+let hasInitializedMermaidRenderer = false;
 
 function _isContinueCommand(text: string): boolean {
   const trimmed = text.trim();
@@ -2524,6 +2530,7 @@ function App() {
                           <MarkdownBlock
                             className="devflow-markdown devflow-markdown--document"
                             markdownText={selectedTaskPrdMarkdown}
+                            enableMermaid
                           />
                         )}
                       </CardSurface>
@@ -2675,20 +2682,138 @@ interface CardSurfaceProps {
 interface MarkdownBlockProps {
   markdownText: string;
   className?: string;
+  enableMermaid?: boolean;
 }
+
+interface MermaidDiagramBlockProps {
+  chartDefinition: string;
+}
+
+const MARKDOWN_COMPONENT_MAP_WITH_MERMAID: Components = {
+  pre({ children, node, ...restProps }) {
+    const childNodeList = ReactChildren.toArray(children);
+    const firstChildNode = childNodeList[0];
+
+    if (
+      childNodeList.length === 1 &&
+      isValidElement(firstChildNode) &&
+      firstChildNode.type === MermaidDiagramBlock
+    ) {
+      return <>{firstChildNode}</>;
+    }
+
+    return <pre {...restProps}>{children}</pre>;
+  },
+  code({ children, className, node, ...restProps }) {
+    const codeText = String(children).replace(/\n$/, "");
+
+    if (MARKDOWN_MERMAID_LANGUAGE_PATTERN.test(className ?? "")) {
+      return <MermaidDiagramBlock chartDefinition={codeText} />;
+    }
+
+    return (
+      <code {...restProps} className={className}>
+        {children}
+      </code>
+    );
+  },
+};
 
 const MarkdownBlock = memo(function MarkdownBlock({
   markdownText,
   className,
+  enableMermaid = false,
 }: MarkdownBlockProps) {
   return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGIN_LIST}>
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGIN_LIST}
+        components={enableMermaid ? MARKDOWN_COMPONENT_MAP_WITH_MERMAID : undefined}
+      >
         {markdownText}
       </ReactMarkdown>
     </div>
   );
 });
+
+function MermaidDiagramBlock({ chartDefinition }: MermaidDiagramBlockProps) {
+  const mermaidDiagramId = useId().replace(/:/g, "-");
+  const [renderedSvgMarkup, setRenderedSvgMarkup] = useState<string | null>(null);
+  const [renderErrorText, setRenderErrorText] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    setRenderedSvgMarkup(null);
+    setRenderErrorText(null);
+
+    async function renderMermaidDiagram(): Promise<void> {
+      try {
+        const mermaidModule = await import("mermaid");
+        const mermaidApi = mermaidModule.default;
+
+        if (!hasInitializedMermaidRenderer) {
+          mermaidApi.initialize({
+            startOnLoad: false,
+            theme: "neutral",
+            fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+          });
+          hasInitializedMermaidRenderer = true;
+        }
+
+        const { svg } = await mermaidApi.render(
+          `devflow-mermaid-${mermaidDiagramId}`,
+          chartDefinition
+        );
+        if (isCancelled) {
+          return;
+        }
+
+        setRenderedSvgMarkup(svg);
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setRenderErrorText(
+          error instanceof Error ? error.message : "Unknown Mermaid render error."
+        );
+      }
+    }
+
+    void renderMermaidDiagram();
+    return () => {
+      isCancelled = true;
+    };
+  }, [chartDefinition, mermaidDiagramId]);
+
+  if (renderErrorText) {
+    return (
+      <div className="devflow-mermaid devflow-mermaid--error">
+        <div className="devflow-mermaid__status">
+          Mermaid 渲染失败，已回退为源码预览。
+        </div>
+        <pre className="devflow-mermaid__fallback">{chartDefinition}</pre>
+        <p className="devflow-mermaid__error">{renderErrorText}</p>
+      </div>
+    );
+  }
+
+  if (!renderedSvgMarkup) {
+    return (
+      <div className="devflow-mermaid devflow-mermaid--loading">
+        <div className="devflow-mermaid__status">Rendering Mermaid diagram...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="devflow-mermaid"
+      dangerouslySetInnerHTML={{ __html: renderedSvgMarkup }}
+    />
+  );
+}
 
 interface PrdFullscreenModalProps {
   taskTitle: string;
@@ -2746,6 +2871,7 @@ function PrdFullscreenModal({
             <MarkdownBlock
               className="devflow-markdown devflow-markdown--document"
               markdownText={markdownText}
+              enableMermaid
             />
           )}
         </div>

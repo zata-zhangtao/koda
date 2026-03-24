@@ -1666,6 +1666,54 @@ img {
   color: inherit;
 }
 
+.devflow-mermaid {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 250, 252, 0.94) 100%),
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.05), transparent 28%);
+  box-shadow: var(--devflow-shadow-soft);
+  overflow: auto;
+}
+
+.devflow-mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.devflow-mermaid--loading,
+.devflow-mermaid--error {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.devflow-mermaid__status {
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.devflow-mermaid__fallback {
+  margin: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #18181b;
+  color: #fafaf9;
+}
+
+.devflow-mermaid__error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
 .devflow-markdown blockquote {
   margin: 14px 0;
   padding-left: 14px;
@@ -1675,6 +1723,47 @@ img {
 
 .devflow-markdown a {
   color: #0f766e;
+}
+
+.devflow-markdown table {
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 18px 0;
+  border: 1px solid rgba(17, 17, 17, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--devflow-shadow-soft);
+}
+
+.devflow-markdown thead {
+  background: rgba(248, 248, 244, 0.96);
+}
+
+.devflow-markdown tbody tr:nth-child(even) {
+  background: rgba(248, 250, 252, 0.75);
+}
+
+.devflow-markdown th,
+.devflow-markdown td {
+  min-width: 120px;
+  padding: 12px 14px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  text-align: left;
+  vertical-align: top;
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
+.devflow-markdown th {
+  color: #111111;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.devflow-markdown td {
+  color: #44403c;
 }
 
 .devflow-feedback {
