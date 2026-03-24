@@ -594,12 +594,45 @@ img {
 
 .devflow-detail-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
 }
 
 .devflow-detail-section {
   min-width: 0;
+}
+
+.devflow-detail-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.devflow-detail-section__action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(17, 17, 17, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #1c1917;
+  font-size: 0.74rem;
+  font-weight: 800;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.devflow-detail-section__action:hover {
+  transform: translateY(-1px);
+  background: rgba(248, 248, 244, 0.96);
+  border-color: rgba(17, 17, 17, 0.18);
 }
 
 /* ── Conversation turn cards ── */
@@ -1473,6 +1506,96 @@ img {
   box-shadow: var(--devflow-shadow);
 }
 
+.devflow-prd-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(17, 17, 17, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.devflow-prd-modal__panel {
+  width: min(1440px, 100%);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+
+.devflow-prd-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(17, 17, 17, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 248, 244, 0.92) 100%),
+    radial-gradient(circle at top left, rgba(16, 185, 129, 0.08), transparent 32%);
+}
+
+.devflow-prd-modal__copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devflow-prd-modal__eyebrow {
+  color: #78716c;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.devflow-prd-modal__title {
+  margin: 0;
+  color: #111111;
+  font-size: 1.22rem;
+  line-height: 1.3;
+}
+
+.devflow-prd-modal__hint {
+  margin: 0;
+  color: #6b7280;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.devflow-prd-modal__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(17, 17, 17, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1c1917;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.devflow-prd-modal__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 32px;
+  background:
+    linear-gradient(180deg, rgba(248, 248, 244, 0.88) 0%, rgba(255, 255, 255, 0.98) 18%),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.05), transparent 28%);
+}
+
 .devflow-markdown {
   color: #44403c;
   line-height: 1.8;
@@ -2044,6 +2167,11 @@ img {
     flex-direction: column;
   }
 
+  .devflow-detail-section__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .devflow-document-card {
     min-height: 420px;
     max-height: none;
@@ -2060,6 +2188,27 @@ img {
     bottom: 96px;
     width: auto;
     max-height: 52vh;
+  }
+
+  .devflow-prd-modal {
+    padding: 10px;
+  }
+
+  .devflow-prd-modal__panel {
+    border-radius: 22px;
+  }
+
+  .devflow-prd-modal__header {
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .devflow-prd-modal__close {
+    align-self: flex-end;
+  }
+
+  .devflow-prd-modal__body {
+    padding: 18px 16px 24px;
   }
 
   .devflow-timeline-detail-drawer__footer {

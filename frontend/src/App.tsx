@@ -215,6 +215,7 @@ function App() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
+  const [isPrdFullscreenOpen, setIsPrdFullscreenOpen] = useState(false);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
   const [visibleConversationTurnCount, setVisibleConversationTurnCount] = useState(
     INITIAL_VISIBLE_CONVERSATION_TURN_COUNT
@@ -500,6 +501,16 @@ function App() {
         : "",
     [currentRunAccount, selectedTask, selectedTaskDevLogs]
   );
+  const isSelectedTaskPrdGenerating =
+    selectedTaskStage === WorkflowStage.PRD_GENERATING;
+  const shouldRenderPersistedPrdFile =
+    Boolean(prdFileContent) &&
+    selectedTaskStage !== WorkflowStage.BACKLOG &&
+    selectedTaskStage !== WorkflowStage.DONE &&
+    !isSelectedTaskPrdGenerating;
+  const selectedTaskPrdMarkdown = shouldRenderPersistedPrdFile
+    ? prdFileContent ?? ""
+    : selectedTaskDocumentMarkdown;
   const currentUserLabel =
     currentRunAccount?.account_display_name || GUEST_USER_LABEL;
   const canCreateRequirements = workspaceView === "active";
@@ -601,6 +612,7 @@ function App() {
     setSelectedTaskLogList([]);
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
+    setIsPrdFullscreenOpen(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
   }, [workspaceView, detailTaskId]);
@@ -628,6 +640,28 @@ function App() {
 
     setExpandedCompactTimelineItemId(null);
   }, [expandedCompactTimelineItemId, selectedTimelineItemList]);
+
+  useEffect(() => {
+    if (!isPrdFullscreenOpen) {
+      return;
+    }
+
+    function handlePrdFullscreenKeydown(
+      keyboardEvent: globalThis.KeyboardEvent
+    ): void {
+      if (keyboardEvent.key !== "Escape") {
+        return;
+      }
+
+      keyboardEvent.preventDefault();
+      setIsPrdFullscreenOpen(false);
+    }
+
+    window.addEventListener("keydown", handlePrdFullscreenKeydown);
+    return () => {
+      window.removeEventListener("keydown", handlePrdFullscreenKeydown);
+    };
+  }, [isPrdFullscreenOpen]);
 
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
@@ -2465,21 +2499,23 @@ function App() {
                     </div>
 
                     <div className="devflow-detail-section">
-                      <h3 className="devflow-detail-section__title">
-                        <FileTextIcon className="devflow-icon devflow-icon--small" />
-                        <span>PRD Document</span>
-                      </h3>
+                      <div className="devflow-detail-section__header">
+                        <h3 className="devflow-detail-section__title">
+                          <FileTextIcon className="devflow-icon devflow-icon--small" />
+                          <span>PRD Document</span>
+                        </h3>
+                        <button
+                          type="button"
+                          className="devflow-detail-section__action"
+                          onClick={() => setIsPrdFullscreenOpen(true)}
+                        >
+                          <ExpandIcon className="devflow-icon devflow-icon--tiny" />
+                          <span>全屏查看</span>
+                        </button>
+                      </div>
 
                       <CardSurface className="devflow-document-card">
-                        {prdFileContent &&
-                        selectedTaskStage !== WorkflowStage.BACKLOG &&
-                        selectedTaskStage !== WorkflowStage.DONE &&
-                        selectedTaskStage !== WorkflowStage.PRD_GENERATING ? (
-                          <MarkdownBlock
-                            className="devflow-markdown devflow-markdown--document"
-                            markdownText={prdFileContent}
-                          />
-                        ) : selectedTaskStage === WorkflowStage.PRD_GENERATING ? (
+                        {isSelectedTaskPrdGenerating ? (
                           <div className="devflow-execution-banner">
                             <span className="devflow-footer__pulse" />
                             <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
@@ -2487,10 +2523,19 @@ function App() {
                         ) : (
                           <MarkdownBlock
                             className="devflow-markdown devflow-markdown--document"
-                            markdownText={selectedTaskDocumentMarkdown}
+                            markdownText={selectedTaskPrdMarkdown}
                           />
                         )}
                       </CardSurface>
+
+                      {isPrdFullscreenOpen ? (
+                        <PrdFullscreenModal
+                          taskTitle={selectedTask.task_title}
+                          markdownText={selectedTaskPrdMarkdown}
+                          isGenerating={isSelectedTaskPrdGenerating}
+                          onClose={() => setIsPrdFullscreenOpen(false)}
+                        />
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -2644,6 +2689,70 @@ const MarkdownBlock = memo(function MarkdownBlock({
     </div>
   );
 });
+
+interface PrdFullscreenModalProps {
+  taskTitle: string;
+  markdownText: string;
+  isGenerating: boolean;
+  onClose: () => void;
+}
+
+function PrdFullscreenModal({
+  taskTitle,
+  markdownText,
+  isGenerating,
+  onClose,
+}: PrdFullscreenModalProps) {
+  return (
+    <div
+      className="devflow-prd-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${taskTitle} PRD document`}
+      onClick={onClose}
+    >
+      <div
+        className="devflow-prd-modal__panel"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+        }}
+      >
+        <div className="devflow-prd-modal__header">
+          <div className="devflow-prd-modal__copy">
+            <span className="devflow-prd-modal__eyebrow">PRD Fullscreen</span>
+            <h4 className="devflow-prd-modal__title">{taskTitle}</h4>
+            <p className="devflow-prd-modal__hint">
+              按 Esc 或点击右上角关闭，滚动查看完整 PRD。
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="devflow-prd-modal__close"
+            onClick={onClose}
+          >
+            <XIcon className="devflow-icon devflow-icon--small" />
+            <span>关闭</span>
+          </button>
+        </div>
+
+        <div className="devflow-prd-modal__body">
+          {isGenerating ? (
+            <div className="devflow-execution-banner">
+              <span className="devflow-footer__pulse" />
+              <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
+            </div>
+          ) : (
+            <MarkdownBlock
+              className="devflow-markdown devflow-markdown--document"
+              markdownText={markdownText}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface CompactTimelineGroupCardProps {
   group: CompactTimelineGroup;
@@ -4433,6 +4542,27 @@ function PlusIcon({ className }: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
       <path
         d="M12 5v14M5 12h14"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ExpandIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 9L3 3M15 9l6-6M9 15l-6 6M15 15l6 6"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
