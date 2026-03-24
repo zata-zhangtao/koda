@@ -788,62 +788,129 @@ img {
 }
 
 .devflow-timeline-group__meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: 96px 72px minmax(124px, auto);
+  align-items: stretch;
+  justify-content: start;
   align-self: flex-start;
-  gap: 8px;
-  max-width: min(100%, 360px);
-  padding: 4px;
+  gap: 0;
+  width: fit-content;
+  max-width: min(100%, 392px);
+  justify-self: end;
+  overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.58);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.74),
+    0 6px 16px rgba(148, 163, 184, 0.08);
 }
 
-.devflow-timeline-group__meta-pill {
+.devflow-timeline-group__meta-segment {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 10px 9px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(248, 250, 252, 0.86) 100%);
+}
+
+.devflow-timeline-group__meta-segment + .devflow-timeline-group__meta-segment {
+  border-left: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.devflow-timeline-group__meta-segment--status-slot {
+  min-width: 0;
+}
+
+.devflow-timeline-group__meta-segment--count {
+  min-width: 0;
+}
+
+.devflow-timeline-group__meta-segment--time {
+  min-width: 0;
+}
+
+.devflow-timeline-group__meta-segment--status {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.9) 100%);
+}
+
+.devflow-timeline-group__meta-segment--placeholder {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(248, 250, 252, 0.86) 100%);
+}
+
+.devflow-timeline-group__meta-segment--placeholder .devflow-timeline-group__meta-label,
+.devflow-timeline-group__meta-segment--placeholder .devflow-timeline-group__meta-value {
+  opacity: 0;
+}
+
+.devflow-timeline-group__meta-segment--error {
+  background: linear-gradient(180deg, rgba(255, 245, 245, 0.96) 0%, rgba(254, 242, 242, 0.92) 100%);
+}
+
+.devflow-timeline-group__meta-segment--success {
+  background: linear-gradient(180deg, rgba(245, 255, 251, 0.98) 0%, rgba(236, 253, 245, 0.94) 100%);
+}
+
+.devflow-timeline-group__meta-label {
+  color: #a8a29e;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.devflow-timeline-group__meta-value {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 11px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #44403c;
-  font-size: 0.68rem;
+  gap: 5px;
+  min-height: 18px;
+  color: #292524;
+  font-size: 0.8rem;
   font-weight: 800;
-  line-height: 1;
-  letter-spacing: 0.01em;
+  line-height: 1.1;
   white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
-.devflow-timeline-group__meta-pill--count {
-  font-family: inherit;
+.devflow-timeline-group__meta-value--count {
+  letter-spacing: -0.02em;
 }
 
-.devflow-timeline-group__meta-pill--time {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
+.devflow-timeline-group__meta-value--time {
   color: #57534e;
+  font-size: 0.74rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-.devflow-timeline-group__meta-pill--status {
-  font-family: inherit;
+.devflow-timeline-group__meta-unit {
+  color: #78716c;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
-.devflow-timeline-group__meta-pill--error {
-  border-color: rgba(239, 68, 68, 0.24);
-  background: rgba(254, 242, 242, 0.95);
+.devflow-timeline-group__meta-value--status {
+  font-size: 0.73rem;
+  letter-spacing: -0.01em;
+}
+
+.devflow-timeline-group__meta-value--error {
   color: #b91c1c;
 }
 
-.devflow-timeline-group__meta-pill--success {
-  border-color: rgba(16, 185, 129, 0.24);
-  background: rgba(236, 253, 245, 0.96);
+.devflow-timeline-group__meta-value--success {
   color: #047857;
+}
+
+.devflow-timeline-group__meta-status-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .devflow-timeline-group__rows {
@@ -1118,11 +1185,19 @@ img {
 }
 
 .devflow-timeline-detail-drawer__link {
-  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.95);
   color: #1d4ed8;
   font-size: 0.76rem;
   font-weight: 700;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .devflow-timeline-detail-drawer__link:hover {
@@ -1131,16 +1206,26 @@ img {
 
 .devflow-timeline-detail-drawer__footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.devflow-timeline-detail-drawer__nav,
+.devflow-timeline-detail-drawer__toolbar,
 .devflow-timeline-detail-drawer__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.devflow-timeline-detail-drawer__nav {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.95);
+  overflow: hidden;
 }
 
 .devflow-timeline-detail-drawer__actions {
@@ -1149,20 +1234,37 @@ img {
 
 .devflow-timeline-detail-drawer__nav-btn,
 .devflow-timeline-detail-drawer__copy-btn {
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 36px;
+  padding: 0 14px;
   border-radius: 999px;
   font-size: 0.76rem;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .devflow-timeline-detail-drawer__nav-btn {
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(248, 250, 252, 0.95);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-right: 1px solid rgba(148, 163, 184, 0.18);
+  background: transparent;
   color: #334155;
 }
 
+.devflow-timeline-detail-drawer__nav-btn:last-child {
+  border-right: none;
+}
+
+.devflow-timeline-detail-drawer__nav-arrow {
+  font-size: 0.82rem;
+}
+
 .devflow-timeline-detail-drawer__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 102px;
   border: 1px solid rgba(59, 130, 246, 0.22);
   background: rgba(239, 246, 255, 0.95);
   color: #1d4ed8;
@@ -1174,11 +1276,40 @@ img {
 }
 
 .devflow-timeline-detail-drawer__hint {
-  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.72);
   color: #78716c;
   font-size: 0.72rem;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  text-align: right;
+}
+
+.devflow-timeline-detail-drawer__hint-label {
+  color: #475569;
+  font-weight: 800;
+}
+
+.devflow-timeline-detail-drawer__hint-copy {
+  color: #78716c;
+}
+
+.devflow-timeline-detail-drawer__kbd {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .devflow-timeline-group__toggle {
@@ -1895,6 +2026,10 @@ img {
   }
 
   .devflow-timeline-detail-drawer__footer {
+    align-items: stretch;
+  }
+
+  .devflow-timeline-detail-drawer__toolbar {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1903,8 +2038,13 @@ img {
     justify-content: flex-start;
   }
 
+  .devflow-timeline-detail-drawer__nav,
+  .devflow-timeline-detail-drawer__actions {
+    width: 100%;
+  }
+
   .devflow-timeline-detail-drawer__hint {
-    text-align: left;
+    justify-content: flex-start;
   }
 }
 
@@ -1980,8 +2120,9 @@ img {
   }
 
   .devflow-timeline-group__meta-row {
-    justify-content: flex-start;
+    width: 100%;
     max-width: 100%;
+    grid-template-columns: 92px 68px minmax(0, 1fr);
   }
 
   .devflow-turn-card__compact-row {
@@ -2024,6 +2165,15 @@ img {
   .devflow-timeline-detail-drawer__nav-btn,
   .devflow-timeline-detail-drawer__copy-btn,
   .devflow-timeline-detail-drawer__link {
+    justify-content: center;
+  }
+
+  .devflow-timeline-detail-drawer__nav {
+    width: 100%;
+  }
+
+  .devflow-timeline-detail-drawer__nav-btn {
+    flex: 1;
     justify-content: center;
   }
 }

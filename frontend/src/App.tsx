@@ -2586,10 +2586,12 @@ function CompactTimelineGroupCard({
   const visibleTimelineItemList = getVisibleCompactTimelineItemList(group, isExpanded);
   const hiddenTimelineItemCount =
     group.items.length - visibleTimelineItemList.length;
+  const groupStartTimeLabel = group.items[0]?.timeLabel ?? "";
+  const groupEndTimeLabel = group.items[group.items.length - 1]?.timeLabel ?? "";
   const groupTimeLabel =
-    group.items.length > 1
-      ? `${group.items[0].timeLabel} - ${group.items[group.items.length - 1].timeLabel}`
-      : group.items[0]?.timeLabel ?? "";
+    group.items.length > 1 && groupStartTimeLabel !== groupEndTimeLabel
+      ? `${groupStartTimeLabel} - ${groupEndTimeLabel}`
+      : groupStartTimeLabel;
   const groupLabel = group.label;
   const groupSourceLabel = buildCompactTimelineGroupSourceLabel(group);
   const groupSummaryText = buildCompactTimelineGroupSummaryText(group);
@@ -2642,23 +2644,47 @@ function CompactTimelineGroupCard({
         </div>
 
         <div className="devflow-timeline-group__meta-row">
-          <span className="devflow-timeline-group__meta-pill devflow-timeline-group__meta-pill--count">
-            {group.items.length} 条
-          </span>
-          <span className="devflow-timeline-group__meta-pill devflow-timeline-group__meta-pill--time">
-            {groupTimeLabel}
-          </span>
-          {groupStatusLabel ? (
+          <div
+            className={joinClassNames(
+              "devflow-timeline-group__meta-segment",
+              "devflow-timeline-group__meta-segment--status-slot",
+              groupStatusLabel
+                ? "devflow-timeline-group__meta-segment--status"
+                : "devflow-timeline-group__meta-segment--placeholder",
+              groupStatusLabel && `devflow-timeline-group__meta-segment--${group.tone}`
+            )}
+            aria-hidden={!groupStatusLabel}
+          >
+            <span className="devflow-timeline-group__meta-label">状态</span>
             <span
               className={joinClassNames(
-                "devflow-timeline-group__meta-pill",
-                "devflow-timeline-group__meta-pill--status",
-                `devflow-timeline-group__meta-pill--${group.tone}`
+                "devflow-timeline-group__meta-value",
+                "devflow-timeline-group__meta-value--status",
+                !groupStatusLabel && "devflow-timeline-group__meta-value--placeholder",
+                groupStatusLabel && `devflow-timeline-group__meta-value--${group.tone}`
               )}
             >
-              {groupStatusLabel}
+              {groupStatusLabel ? (
+                <span className="devflow-timeline-group__meta-status-dot" />
+              ) : null}
+              {groupStatusLabel ?? "\u00a0"}
             </span>
-          ) : null}
+          </div>
+
+          <div className="devflow-timeline-group__meta-segment devflow-timeline-group__meta-segment--count">
+            <span className="devflow-timeline-group__meta-label">日志</span>
+            <span className="devflow-timeline-group__meta-value devflow-timeline-group__meta-value--count">
+              {group.items.length}
+              <span className="devflow-timeline-group__meta-unit">条</span>
+            </span>
+          </div>
+
+          <div className="devflow-timeline-group__meta-segment devflow-timeline-group__meta-segment--time">
+            <span className="devflow-timeline-group__meta-label">时间</span>
+            <span className="devflow-timeline-group__meta-value devflow-timeline-group__meta-value--time">
+              {groupTimeLabel}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -2939,61 +2965,71 @@ function CompactTimelineDetailDrawer({
       </pre>
 
       <div className="devflow-timeline-detail-drawer__footer">
-        <div className="devflow-timeline-detail-drawer__nav">
-          <button
-            type="button"
-            className="devflow-timeline-detail-drawer__nav-btn"
-            title="ArrowLeft / ArrowUp"
-            disabled={!previousTimelineItem}
-            onClick={() => {
-              if (previousTimelineItem) {
-                onSelectTimelineItem(previousTimelineItem.log.id);
-              }
-            }}
-          >
-            上一条
-          </button>
-          <button
-            type="button"
-            className="devflow-timeline-detail-drawer__nav-btn"
-            title="ArrowRight / ArrowDown"
-            disabled={!nextTimelineItem}
-            onClick={() => {
-              if (nextTimelineItem) {
-                onSelectTimelineItem(nextTimelineItem.log.id);
-              }
-            }}
-          >
-            下一条
-          </button>
-        </div>
-
-        <div className="devflow-timeline-detail-drawer__actions">
-          <button
-            type="button"
-            className="devflow-timeline-detail-drawer__copy-btn"
-            onClick={() => {
-              void handleCopyRawText();
-            }}
-          >
-            {copyButtonLabel}
-          </button>
-
-          {detailAttachmentUrl ? (
-            <a
-              className="devflow-timeline-detail-drawer__link"
-              href={detailAttachmentUrl}
-              target="_blank"
-              rel="noreferrer"
+        <div className="devflow-timeline-detail-drawer__toolbar">
+          <div className="devflow-timeline-detail-drawer__nav">
+            <button
+              type="button"
+              className="devflow-timeline-detail-drawer__nav-btn"
+              title="ArrowLeft / ArrowUp"
+              disabled={!previousTimelineItem}
+              onClick={() => {
+                if (previousTimelineItem) {
+                  onSelectTimelineItem(previousTimelineItem.log.id);
+                }
+              }}
             >
-              查看附件
-            </a>
-          ) : null}
+              <span className="devflow-timeline-detail-drawer__nav-arrow">←</span>
+              <span>上一条</span>
+            </button>
+            <button
+              type="button"
+              className="devflow-timeline-detail-drawer__nav-btn"
+              title="ArrowRight / ArrowDown"
+              disabled={!nextTimelineItem}
+              onClick={() => {
+                if (nextTimelineItem) {
+                  onSelectTimelineItem(nextTimelineItem.log.id);
+                }
+              }}
+            >
+              <span>下一条</span>
+              <span className="devflow-timeline-detail-drawer__nav-arrow">→</span>
+            </button>
+          </div>
+
+          <div className="devflow-timeline-detail-drawer__actions">
+            <button
+              type="button"
+              className="devflow-timeline-detail-drawer__copy-btn"
+              onClick={() => {
+                void handleCopyRawText();
+              }}
+            >
+              {copyButtonLabel}
+            </button>
+
+            {detailAttachmentUrl ? (
+              <a
+                className="devflow-timeline-detail-drawer__link"
+                href={detailAttachmentUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看附件
+              </a>
+            ) : null}
+          </div>
         </div>
 
-        <p className="devflow-timeline-detail-drawer__hint">
-          Esc 关闭 · ←/↑ 上一条 · →/↓ 下一条
-        </p>
+        <div className="devflow-timeline-detail-drawer__hint">
+          <span className="devflow-timeline-detail-drawer__hint-label">快捷键</span>
+          <span className="devflow-timeline-detail-drawer__kbd">Esc</span>
+          <span className="devflow-timeline-detail-drawer__hint-copy">关闭</span>
+          <span className="devflow-timeline-detail-drawer__kbd">← / ↑</span>
+          <span className="devflow-timeline-detail-drawer__hint-copy">上一条</span>
+          <span className="devflow-timeline-detail-drawer__kbd">→ / ↓</span>
+          <span className="devflow-timeline-detail-drawer__hint-copy">下一条</span>
+        </div>
       </div>
     </aside>
   );
