@@ -421,6 +421,20 @@ function App() {
         )?.group.groupId ?? null,
     [timelineRenderBlockList]
   );
+  const renderedCompactTimelineItemList = useMemo(
+    () =>
+      timelineRenderBlockList.flatMap((timelineRenderBlock) => {
+        if (timelineRenderBlock.kind !== "compact_group") {
+          return [];
+        }
+
+        return getVisibleCompactTimelineItemList(
+          timelineRenderBlock.group,
+          expandedCompactTimelineGroupIdSet.has(timelineRenderBlock.group.groupId)
+        );
+      }),
+    [expandedCompactTimelineGroupIdSet, timelineRenderBlockList]
+  );
   const selectedCompactTimelineItem = useMemo(
     () =>
       expandedCompactTimelineItemId
@@ -430,6 +444,24 @@ function App() {
         : null,
     [expandedCompactTimelineItemId, selectedTimelineItemList]
   );
+  const selectedCompactTimelineItemIndex = useMemo(
+    () =>
+      selectedCompactTimelineItem
+        ? renderedCompactTimelineItemList.findIndex(
+            (timelineItem) => timelineItem.log.id === selectedCompactTimelineItem.log.id
+          )
+        : -1,
+    [renderedCompactTimelineItemList, selectedCompactTimelineItem]
+  );
+  const previousCompactTimelineItem =
+    selectedCompactTimelineItemIndex > 0
+      ? renderedCompactTimelineItemList[selectedCompactTimelineItemIndex - 1]
+      : null;
+  const nextCompactTimelineItem =
+    selectedCompactTimelineItemIndex >= 0 &&
+    selectedCompactTimelineItemIndex < renderedCompactTimelineItemList.length - 1
+      ? renderedCompactTimelineItemList[selectedCompactTimelineItemIndex + 1]
+      : null;
   const canLoadOlderTaskLogs =
     selectedTask !== null &&
     selectedTaskLogList.length > 0 &&
@@ -2335,6 +2367,13 @@ function App() {
                       {selectedCompactTimelineItem ? (
                         <CompactTimelineDetailDrawer
                           timelineItem={selectedCompactTimelineItem}
+                          previousTimelineItem={previousCompactTimelineItem}
+                          nextTimelineItem={nextCompactTimelineItem}
+                          onSelectTimelineItem={(timelineItemId) => {
+                            startTransition(() => {
+                              setExpandedCompactTimelineItemId(timelineItemId);
+                            });
+                          }}
                           onClose={() => {
                             startTransition(() => {
                               setExpandedCompactTimelineItemId(null);
@@ -2544,11 +2583,7 @@ function CompactTimelineGroupCard({
   onToggleItemDetail,
   onToggle,
 }: CompactTimelineGroupCardProps) {
-  const collapsedVisibleCount = getCompactTimelineGroupCollapsedVisibleCount(group);
-  const visibleTimelineItemList =
-    isExpanded || group.items.length <= collapsedVisibleCount
-      ? group.items
-      : group.items.slice(-collapsedVisibleCount);
+  const visibleTimelineItemList = getVisibleCompactTimelineItemList(group, isExpanded);
   const hiddenTimelineItemCount =
     group.items.length - visibleTimelineItemList.length;
   const groupTimeLabel =
@@ -2742,13 +2777,21 @@ const LightweightTimelineItem = memo(function LightweightTimelineItem({
 
 interface CompactTimelineDetailDrawerProps {
   timelineItem: TimelineViewModel;
+  previousTimelineItem: TimelineViewModel | null;
+  nextTimelineItem: TimelineViewModel | null;
+  onSelectTimelineItem: (timelineItemId: string) => void;
   onClose: () => void;
 }
 
 function CompactTimelineDetailDrawer({
   timelineItem,
+  previousTimelineItem,
+  nextTimelineItem,
+  onSelectTimelineItem,
   onClose,
 }: CompactTimelineDetailDrawerProps) {
+  const copyResetTimerRef = useRef<number | null>(null);
+  const [copyButtonLabel, setCopyButtonLabel] = useState("复制原文");
   const metadataTagList = buildCompactTimelineMetadataTagList(timelineItem);
   const detailTone = deriveCompactTimelineItemTone(timelineItem);
   const detailAttachmentUrl =
@@ -2756,6 +2799,51 @@ function CompactTimelineDetailDrawer({
     mapMediaPathToPublicUrl(timelineItem.log.media_thumbnail_path);
   const detailSourceLabel =
     timelineItem.kind === "ai_log" ? "Agent" : "System";
+
+  useEffect(() => {
+    if (copyResetTimerRef.current) {
+      window.clearTimeout(copyResetTimerRef.current);
+      copyResetTimerRef.current = null;
+    }
+    setCopyButtonLabel("复制原文");
+  }, [timelineItem.log.id]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  function scheduleCopyButtonReset(): void {
+    if (copyResetTimerRef.current) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+    copyResetTimerRef.current = window.setTimeout(() => {
+      setCopyButtonLabel("复制原文");
+      copyResetTimerRef.current = null;
+    }, 1600);
+  }
+
+  async function handleCopyRawText(): Promise<void> {
+    const rawTimelineText = timelineItem.log.text_content || "";
+
+    if (!navigator.clipboard?.writeText) {
+      setCopyButtonLabel("无法复制");
+      scheduleCopyButtonReset();
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(rawTimelineText);
+      setCopyButtonLabel("已复制");
+    } catch {
+      setCopyButtonLabel("复制失败");
+    }
+
+    scheduleCopyButtonReset();
+  }
 
   return (
     <aside
@@ -2803,16 +2891,57 @@ function CompactTimelineDetailDrawer({
         {timelineItem.log.text_content || "无正文内容。"}
       </pre>
 
-      {detailAttachmentUrl ? (
-        <a
-          className="devflow-timeline-detail-drawer__link"
-          href={detailAttachmentUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          查看附件
-        </a>
-      ) : null}
+      <div className="devflow-timeline-detail-drawer__footer">
+        <div className="devflow-timeline-detail-drawer__nav">
+          <button
+            type="button"
+            className="devflow-timeline-detail-drawer__nav-btn"
+            disabled={!previousTimelineItem}
+            onClick={() => {
+              if (previousTimelineItem) {
+                onSelectTimelineItem(previousTimelineItem.log.id);
+              }
+            }}
+          >
+            上一条
+          </button>
+          <button
+            type="button"
+            className="devflow-timeline-detail-drawer__nav-btn"
+            disabled={!nextTimelineItem}
+            onClick={() => {
+              if (nextTimelineItem) {
+                onSelectTimelineItem(nextTimelineItem.log.id);
+              }
+            }}
+          >
+            下一条
+          </button>
+        </div>
+
+        <div className="devflow-timeline-detail-drawer__actions">
+          <button
+            type="button"
+            className="devflow-timeline-detail-drawer__copy-btn"
+            onClick={() => {
+              void handleCopyRawText();
+            }}
+          >
+            {copyButtonLabel}
+          </button>
+
+          {detailAttachmentUrl ? (
+            <a
+              className="devflow-timeline-detail-drawer__link"
+              href={detailAttachmentUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              查看附件
+            </a>
+          ) : null}
+        </div>
+      </div>
     </aside>
   );
 }
@@ -3349,6 +3478,19 @@ function getCompactTimelineGroupCollapsedVisibleCount(
   }
 
   return COMPACT_TIMELINE_GROUP_VISIBLE_COUNT;
+}
+
+function getVisibleCompactTimelineItemList(
+  group: CompactTimelineGroup,
+  isExpanded: boolean
+): TimelineViewModel[] {
+  const collapsedVisibleCount = getCompactTimelineGroupCollapsedVisibleCount(group);
+
+  if (isExpanded || group.items.length <= collapsedVisibleCount) {
+    return group.items;
+  }
+
+  return group.items.slice(-collapsedVisibleCount);
 }
 
 function renderCompactTimelineGroupIcon(group: CompactTimelineGroup): ReactNode {

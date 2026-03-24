@@ -1102,6 +1102,46 @@ img {
   text-decoration: underline;
 }
 
+.devflow-timeline-detail-drawer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.devflow-timeline-detail-drawer__nav,
+.devflow-timeline-detail-drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.devflow-timeline-detail-drawer__nav-btn,
+.devflow-timeline-detail-drawer__copy-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.devflow-timeline-detail-drawer__nav-btn {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(248, 250, 252, 0.95);
+  color: #334155;
+}
+
+.devflow-timeline-detail-drawer__copy-btn {
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  background: rgba(239, 246, 255, 0.95);
+  color: #1d4ed8;
+}
+
+.devflow-timeline-detail-drawer__nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .devflow-timeline-group__toggle {
   margin-top: 10px;
   padding: 0;
@@ -1814,6 +1854,11 @@ img {
     width: auto;
     max-height: 52vh;
   }
+
+  .devflow-timeline-detail-drawer__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1922,6 +1967,17 @@ img {
     bottom: 108px;
     max-height: 58vh;
     padding: 16px;
+  }
+
+  .devflow-timeline-detail-drawer__nav,
+  .devflow-timeline-detail-drawer__actions {
+    width: 100%;
+  }
+
+  .devflow-timeline-detail-drawer__nav-btn,
+  .devflow-timeline-detail-drawer__copy-btn,
+  .devflow-timeline-detail-drawer__link {
+    justify-content: center;
   }
 }
 
