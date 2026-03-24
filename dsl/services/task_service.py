@@ -48,9 +48,7 @@ class TaskService:
         from dsl.services.project_service import ProjectService
 
         project_obj = (
-            db_session.query(Project)
-            .filter(Project.id == task_obj.project_id)
-            .first()
+            db_session.query(Project).filter(Project.id == task_obj.project_id).first()
         )
         if project_obj is None:
             return
@@ -394,7 +392,9 @@ class TaskService:
         db_session.commit()
         db_session.refresh(task_obj)
 
-        logger.info(f"Task {task_id[:8]}... PRD regeneration requested → prd_generating")
+        logger.info(
+            f"Task {task_id[:8]}... PRD regeneration requested → prd_generating"
+        )
         return task_obj
 
     @staticmethod
@@ -448,6 +448,66 @@ class TaskService:
         logger.info(
             f"Task {task_id[:8]}... execution started → implementation_in_progress"
             + (f", worktree={task_obj.worktree_path}" if task_obj.worktree_path else "")
+        )
+        return task_obj
+
+    @staticmethod
+    def prepare_task_resume(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """Validate that a task can resume interrupted background automation.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 当前任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当任务阶段或生命周期不允许恢复时
+        """
+
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot resume from lifecycle "
+                f"'{task_obj.lifecycle_status.value}'."
+            )
+
+        resumable_stage_set = {
+            WorkflowStage.PRD_GENERATING,
+            WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+            WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+            WorkflowStage.TEST_IN_PROGRESS,
+            WorkflowStage.PR_PREPARING,
+        }
+        if task_obj.workflow_stage not in resumable_stage_set:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot resume from stage "
+                f"'{task_obj.workflow_stage.value}'. "
+                f"Allowed: {[stage.value for stage in resumable_stage_set]}"
+            )
+
+        if (
+            task_obj.workflow_stage == WorkflowStage.PR_PREPARING
+            and not task_obj.worktree_path
+        ):
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot resume completion without worktree_path."
+            )
+
+        logger.info(
+            "Task %s... resume prepared from stage %s",
+            task_id[:8],
+            task_obj.workflow_stage.value,
         )
         return task_obj
 

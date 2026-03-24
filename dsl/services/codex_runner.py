@@ -2679,6 +2679,104 @@ async def run_post_review_lint(
     )
 
 
+async def run_codex_review_resume(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str | None = None,
+) -> None:
+    """Resume automation from a persisted self-review stage.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+        run_account_id_str: 运行账户 UUID 字符串
+        task_title_str: 任务标题
+        dev_log_text_list: 当前任务上下文日志
+        work_dir_path: codex 工作目录
+        worktree_path_str: 预期的 git worktree 路径（可选）
+    """
+    register_task_background_activity(task_id_str)
+    try:
+        resume_log_text = "🔁 检测到自动化中断，正在从 AI 自检阶段继续执行。"
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            resume_log_text,
+            "OPTIMIZATION",
+        )
+        resumed_context_log_text_list = list(dev_log_text_list)
+        resumed_context_log_text_list.append(resume_log_text)
+
+        self_review_result = await run_codex_review(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            dev_log_text_list=resumed_context_log_text_list,
+            work_dir_path=work_dir_path,
+            worktree_path_str=worktree_path_str,
+        )
+        if not self_review_result.passed:
+            return
+
+        await asyncio.to_thread(_advance_stage_in_db, task_id_str, "test_in_progress")
+        await run_post_review_lint(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            dev_log_text_list=self_review_result.context_log_text_list,
+            work_dir_path=work_dir_path,
+            worktree_path_str=worktree_path_str,
+        )
+    finally:
+        clear_task_background_activity(task_id_str)
+
+
+async def run_post_review_lint_resume(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str | None = None,
+) -> None:
+    """Resume automation from a persisted post-review lint stage.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+        run_account_id_str: 运行账户 UUID 字符串
+        task_title_str: 任务标题
+        dev_log_text_list: 当前任务上下文日志
+        work_dir_path: 任务 worktree 或仓库路径
+        worktree_path_str: 预期的 git worktree 路径（可选）
+    """
+    register_task_background_activity(task_id_str)
+    try:
+        resume_log_text = "🔁 检测到自动化中断，正在从 post-review lint 阶段继续执行。"
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            resume_log_text,
+            "OPTIMIZATION",
+        )
+        resumed_context_log_text_list = list(dev_log_text_list)
+        resumed_context_log_text_list.append(resume_log_text)
+
+        await run_post_review_lint(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            dev_log_text_list=resumed_context_log_text_list,
+            work_dir_path=work_dir_path,
+            worktree_path_str=worktree_path_str,
+        )
+    finally:
+        clear_task_background_activity(task_id_str)
+
+
 async def run_codex_task(
     task_id_str: str,
     run_account_id_str: str,

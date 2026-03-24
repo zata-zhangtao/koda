@@ -237,7 +237,9 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
     legacy_prd_file_path.write_text("legacy", encoding="utf-8")
     semantic_prd_file_path.write_text("semantic", encoding="utf-8")
 
-    async def fake_run_codex_phase(**_: object) -> codex_runner.CodexPhaseExecutionResult:
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
         return codex_runner.CodexPhaseExecutionResult(
             success=True,
             output_lines=["PRD generated"],
@@ -615,6 +617,164 @@ def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pa
     assert "=== Koda codex-exec" in task_log_text
     assert "=== Koda codex-review" in task_log_text
     assert "=== Koda post-review-lint" in task_log_text
+
+
+def test_run_codex_review_resume_continues_into_post_review_lint_on_pass(
+    tmp_path: Path,
+) -> None:
+    """Resuming self-review should advance to lint and clear runtime state on success."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_lint_call_argument_list: list[tuple[str, str, str, Path, str | None]] = []
+
+    async def fake_run_codex_review(
+        **kwargs: object,
+    ) -> codex_runner.SelfReviewExecutionResult:
+        return codex_runner.SelfReviewExecutionResult(
+            passed=True,
+            context_log_text_list=["review passed after resume"],
+            self_review_summary_str="resume path ok",
+        )
+
+    async def fake_run_post_review_lint(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        dev_log_text_list: list[str],
+        work_dir_path: Path,
+        worktree_path_str: str | None = None,
+    ) -> codex_runner.PostReviewLintExecutionResult:
+        recorded_lint_call_argument_list.append(
+            (
+                task_id_str,
+                run_account_id_str,
+                task_title_str,
+                work_dir_path,
+                worktree_path_str,
+            )
+        )
+        return codex_runner.PostReviewLintExecutionResult(
+            passed=True,
+            context_log_text_list=dev_log_text_list,
+            latest_lint_output_line_list=["pre-commit passed"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    original_run_codex_review = codex_runner.run_codex_review
+    original_run_post_review_lint = codex_runner.run_post_review_lint
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+
+    try:
+        codex_runner.run_codex_review = fake_run_codex_review
+        codex_runner.run_post_review_lint = fake_run_post_review_lint
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+
+        asyncio.run(
+            codex_runner.run_codex_review_resume(
+                task_id_str="review-resume-01",
+                run_account_id_str="run-account-1",
+                task_title_str="Resume self review",
+                dev_log_text_list=["task context before review resume"],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-review-resume"),
+            )
+        )
+    finally:
+        codex_runner.run_codex_review = original_run_codex_review
+        codex_runner.run_post_review_lint = original_run_post_review_lint
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner._running_background_task_ids.clear()
+
+    assert recorded_stage_value_list == ["test_in_progress"]
+    assert len(recorded_lint_call_argument_list) == 1
+    assert any(
+        "正在从 AI 自检阶段继续执行" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert "review-resume-01" not in codex_runner._running_background_task_ids
+
+
+def test_run_post_review_lint_resume_reuses_lint_pipeline_and_clears_runtime_state(
+    tmp_path: Path,
+) -> None:
+    """Resuming lint should call the existing lint loop and clear runtime state afterward."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_lint_call_argument_list: list[tuple[str, str, str, Path, str | None]] = []
+
+    async def fake_run_post_review_lint(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        dev_log_text_list: list[str],
+        work_dir_path: Path,
+        worktree_path_str: str | None = None,
+    ) -> codex_runner.PostReviewLintExecutionResult:
+        recorded_lint_call_argument_list.append(
+            (
+                task_id_str,
+                run_account_id_str,
+                task_title_str,
+                work_dir_path,
+                worktree_path_str,
+            )
+        )
+        return codex_runner.PostReviewLintExecutionResult(
+            passed=True,
+            context_log_text_list=dev_log_text_list,
+            latest_lint_output_line_list=["pre-commit passed"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    original_run_post_review_lint = codex_runner.run_post_review_lint
+    original_write_log_to_db = codex_runner._write_log_to_db
+
+    try:
+        codex_runner.run_post_review_lint = fake_run_post_review_lint
+        codex_runner._write_log_to_db = fake_write_log_to_db
+
+        asyncio.run(
+            codex_runner.run_post_review_lint_resume(
+                task_id_str="lint-resume-01",
+                run_account_id_str="run-account-2",
+                task_title_str="Resume lint",
+                dev_log_text_list=["task context before lint resume"],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-lint-resume"),
+            )
+        )
+    finally:
+        codex_runner.run_post_review_lint = original_run_post_review_lint
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._running_background_task_ids.clear()
+
+    assert len(recorded_lint_call_argument_list) == 1
+    assert any(
+        "正在从 post-review lint 阶段继续执行" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert "lint-resume-01" not in codex_runner._running_background_task_ids
 
 
 def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(

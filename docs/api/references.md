@@ -67,6 +67,7 @@
         - start_task
         - regenerate_task_prd
         - execute_task
+        - resume_task
         - cancel_task
         - get_task_prd_file
         - open_task_in_trae

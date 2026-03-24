@@ -8,6 +8,7 @@
 
 - `dsl/api/tasks.py` 的 `start_task` 会在后台触发 `run_codex_prd`
 - `dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
+- `dsl/api/tasks.py` 的 `resume_task` 会在后台从持久化工作流阶段恢复中断的自动化
 
 对应的核心实现位于 `dsl/services/codex_runner.py`。
 
@@ -51,6 +52,15 @@
 7. 日志继续写入 `DevLog`
 8. 若收尾成功，任务自动推进到 `done`
 9. 若在合并到 `main` 前失败，任务回退到 `changes_requested`
+
+### 中断恢复链路
+
+如果后端进程或后台任务在执行途中异常中断，数据库里的 `workflow_stage` 会保留在最近一次已落库的阶段，但内存态的 `is_codex_task_running` 会在重启后变成 `False`。这时可以调用 `POST /api/tasks/{task_id}/resume`：
+
+1. 后端校验该任务当前没有活跃自动化
+2. 后端只允许从以下阶段恢复：`prd_generating`、`implementation_in_progress`、`self_review_in_progress`、`test_in_progress`、`pr_preparing`
+3. 若 `self_review_in_progress` 已经出现最近一轮“通过”标记，或 `test_in_progress` 已经出现最近一轮 lint 通过标记，则不会恢复，而是要求用户直接点击 `Complete`
+4. 若阶段仍处于真正的中断态，后端会从该阶段重新挂起对应后台任务，继续 PRD、实现、自检、lint 或 Git 收尾链路
 
 ## Prompt 来源
 
@@ -208,6 +218,14 @@ tasks/prd-{task_id[:8]}-<english-requirement-slug>.md
 ### `changes_requested` 的真实语义
 
 当前实现里，`changes_requested` 应理解为“自动化流程已经无法自行完成闭环，需要人工介入”。它不是第一次 self-review 失败的同义词。
+
+### 意外中断后的继续执行
+
+当前前端把 `go on`、`continue`、`resume`、`retry` 等输入视为“继续执行”指令：
+
+- 若任务已经落到 `changes_requested`，仍走正常的 `execute` 重试入口
+- 若任务卡在可恢复的运行阶段且当前没有活跃后台进程，则会调用 `POST /api/tasks/{task_id}/resume`
+- 若任务其实已经停在 self-review 或 lint 的“等待用户点击 Complete”状态，则不会重跑自动化，而是提示用户直接完成收尾
 
 ### PRD 重新生成
 

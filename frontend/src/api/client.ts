@@ -151,6 +151,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 从当前持久化工作流阶段恢复被中断的后台自动化 */
+  resume: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/resume`, {
+      method: "POST",
+    }),
+
   /** 触发任务进入完成收尾阶段（summary commit + rebase + Codex conflict fix + merge + cleanup） */
   complete: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/complete`, {

@@ -149,6 +149,21 @@ const SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
   "开始第 1 轮代码评审",
   "开始执行代码评审",
 ];
+const POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST = [
+  "post-review lint 闭环完成：pre-commit 已通过",
+];
+const POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST = [
+  "已进入自动化验证阶段，开始执行 post-review lint：",
+  "post-review lint 未通过，开始第 ",
+  "轮 AI lint 定向修复完成，开始重新执行 pre-commit lint。",
+];
+const RESUMABLE_AUTOMATION_STAGE_SET = new Set<WorkflowStage>([
+  WorkflowStage.PRD_GENERATING,
+  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+  WorkflowStage.TEST_IN_PROGRESS,
+  WorkflowStage.PR_PREPARING,
+]);
 const ACTIVE_DASHBOARD_POLL_INTERVAL_MS = 3000;
 const SELECTED_TASK_LOG_POLL_INTERVAL_MS = 2000;
 const SELECTED_TASK_LOG_INITIAL_LIMIT = 300;
@@ -492,6 +507,13 @@ function App() {
     () =>
       selectedTask
         ? hasLatestSelfReviewCyclePassed(selectedTaskDevLogs)
+        : false,
+    [selectedTask, selectedTaskDevLogs]
+  );
+  const selectedTaskHasSettledPostReviewLint = useMemo(
+    () =>
+      selectedTask
+        ? hasLatestPostReviewLintCyclePassed(selectedTaskDevLogs)
         : false,
     [selectedTask, selectedTaskDevLogs]
   );
@@ -1331,24 +1353,46 @@ function App() {
           setTaskList((prev) =>
             prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
           );
-        } else if (stage === WorkflowStage.IMPLEMENTATION_IN_PROGRESS) {
-          // 进程已死但阶段未更新：先取消（强制回到 changes_requested），再重新执行
-          const cancelledTask = await taskApi.cancel(selectedTask.id);
-          setTaskList((prev) =>
-            prev.map((t) => (t.id === cancelledTask.id ? cancelledTask : t))
-          );
-          const resumedTask = await taskApi.execute(selectedTask.id);
-          setTaskList((prev) =>
-            prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
-          );
+        } else if (
+          RESUMABLE_AUTOMATION_STAGE_SET.has(stage) &&
+          !selectedTask.is_codex_task_running
+        ) {
+          if (
+            stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
+            selectedTaskHasSettledSelfReview
+          ) {
+            setSuccessMessage("AI 自检已通过，点击 Complete 进入 Git 收尾。");
+          } else if (
+            stage === WorkflowStage.TEST_IN_PROGRESS &&
+            selectedTaskHasSettledPostReviewLint
+          ) {
+            setSuccessMessage("自动化验证已通过，点击 Complete 进入 Git 收尾。");
+          } else {
+            const resumedTask = await taskApi.resume(selectedTask.id);
+            setTaskList((prev) =>
+              prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
+            );
+          }
         } else if (stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
           if (selectedTask.is_codex_task_running) {
             setSuccessMessage("AI 自检仍在执行中，请等待当前评审结束，或先手动中断。");
           } else if (selectedTaskHasSettledSelfReview) {
             setSuccessMessage("AI 自检已通过，点击 Complete 进入 Git 收尾。");
           } else {
-            setSuccessMessage("AI 自检已停止但尚未形成通过结论，可直接点击 Complete 进行人工接管。");
+            setSuccessMessage("AI 自检已停止但尚未形成通过结论，可继续恢复或直接点击 Complete 进行人工接管。");
           }
+        } else if (stage === WorkflowStage.TEST_IN_PROGRESS) {
+          if (selectedTask.is_codex_task_running) {
+            setSuccessMessage("自动化验证仍在执行中，请等待当前阶段结束，或先手动中断。");
+          } else if (selectedTaskHasSettledPostReviewLint) {
+            setSuccessMessage("自动化验证已通过，点击 Complete 进入 Git 收尾。");
+          } else {
+            setSuccessMessage("自动化验证已停止但尚未通过，可继续恢复当前 lint 闭环。");
+          }
+        } else if (stage === WorkflowStage.PRD_WAITING_CONFIRMATION) {
+          setSuccessMessage("PRD 已生成，先确认 PRD，再开始执行。");
+        } else {
+          setSuccessMessage("当前阶段不支持继续恢复。");
         }
       }
 
@@ -3935,6 +3979,28 @@ function hasLatestSelfReviewCyclePassed(taskDevLogList: DevLog[]): boolean {
     }
     if (
       SELF_REVIEW_STARTED_LOG_MARKER_LIST.some((markerText) =>
+        logText.includes(markerText)
+      )
+    ) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function hasLatestPostReviewLintCyclePassed(taskDevLogList: DevLog[]): boolean {
+  for (let index = taskDevLogList.length - 1; index >= 0; index -= 1) {
+    const logText = taskDevLogList[index].text_content;
+    if (
+      POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST.some((markerText) =>
+        logText.includes(markerText)
+      )
+    ) {
+      return true;
+    }
+    if (
+      POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST.some((markerText) =>
         logText.includes(markerText)
       )
     ) {

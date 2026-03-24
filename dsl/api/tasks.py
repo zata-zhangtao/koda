@@ -29,7 +29,9 @@ from dsl.services.codex_runner import (
     register_task_background_activity,
     run_codex_completion,
     run_codex_prd,
+    run_codex_review_resume,
     run_codex_task,
+    run_post_review_lint_resume,
 )
 from dsl.services.log_service import LogService
 from dsl.services.prd_file_service import find_task_prd_file_path
@@ -49,9 +51,15 @@ _SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
     "开始第 1 轮代码评审",
     "开始执行代码评审",
 ]
-_ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(
-    r"\(/api/media/(?P<filename>[^)\s?#]+)"
-)
+_POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST = [
+    "post-review lint 闭环完成：pre-commit 已通过",
+]
+_POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST = [
+    "已进入自动化验证阶段，开始执行 post-review lint：",
+    "post-review lint 未通过，开始第 ",
+    "轮 AI lint 定向修复完成，开始重新执行 pre-commit lint。",
+]
+_ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -117,9 +125,7 @@ def _resolve_task_effective_work_dir_path(
         from dsl.models.project import Project
 
         project_obj = (
-            db_session.query(Project)
-            .filter(Project.id == task_obj.project_id)
-            .first()
+            db_session.query(Project).filter(Project.id == task_obj.project_id).first()
         )
         if project_obj:
             project_repo_path = Path(project_obj.repo_path)
@@ -284,6 +290,31 @@ def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> boo
         if any(
             marker_text in log_text
             for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
+        ):
+            return False
+
+    return False
+
+
+def _has_latest_post_review_lint_cycle_passed(task_dev_log_list: list[DevLog]) -> bool:
+    """判断最近一轮 post-review lint 是否已经出现通过标记.
+
+    Args:
+        task_dev_log_list: 已按时间正序排列的任务日志列表
+
+    Returns:
+        bool: 若最近一轮 lint 已出现通过标记则返回 True，否则返回 False
+    """
+    for dev_log_item in reversed(task_dev_log_list):
+        log_text = dev_log_item.text_content
+        if any(
+            marker_text in log_text
+            for marker_text in _POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST
+        ):
+            return True
+        if any(
+            marker_text in log_text
+            for marker_text in _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST
         ):
             return False
 
@@ -660,6 +691,153 @@ def execute_task(
     )
 
     return _hydrate_task_response(executed_task, is_task_running_override=True)
+
+
+@router.post("/{task_id}/resume", response_model=TaskResponseSchema)
+def resume_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """Resume interrupted automation from the task's persisted workflow stage.
+
+    支持从以下阶段恢复：
+    - `prd_generating`
+    - `implementation_in_progress`
+    - `self_review_in_progress`
+    - `test_in_progress`
+    - `pr_preparing`
+
+    其中 `self_review_in_progress` 与 `test_in_progress` 只有在最近一轮
+    self-review / lint 尚未停在“等待用户点击 Complete”时才允许恢复。
+
+    Args:
+        task_id: 任务 ID
+        background_tasks: FastAPI 后台任务注入
+        db_session: 数据库会话
+
+    Returns:
+        Task: 标记为后台恢复执行中的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；仍在运行时返回 409；阶段不允许恢复时返回 422
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    try:
+        resumable_task = TaskService.prepare_task_resume(db_session, task_id)
+    except ValueError as resume_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(resume_error),
+        ) from resume_error
+
+    if not resumable_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    ordered_task_dev_log_list = _get_ordered_task_dev_logs(resumable_task)
+    if (
+        resumable_task.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS
+        and _has_latest_self_review_cycle_passed(ordered_task_dev_log_list)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Self-review already passed. Use Complete instead of Resume.",
+        )
+    if (
+        resumable_task.workflow_stage == WorkflowStage.TEST_IN_PROGRESS
+        and _has_latest_post_review_lint_cycle_passed(ordered_task_dev_log_list)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Post-review lint already passed. Use Complete instead of Resume.",
+        )
+
+    dev_log_text_snapshot_list = _build_task_context_snapshot_list(
+        ordered_task_dev_log_list
+    )
+    effective_work_dir_path = _resolve_task_effective_work_dir_path(
+        db_session,
+        resumable_task,
+    )
+
+    if resumable_task.workflow_stage == WorkflowStage.PRD_GENERATING:
+        register_task_background_activity(task_id)
+        background_tasks.add_task(
+            run_codex_prd,
+            task_id_str=task_id,
+            run_account_id_str=resumable_task.run_account_id,
+            task_title_str=resumable_task.task_title,
+            dev_log_text_list=dev_log_text_snapshot_list,
+            work_dir_path=effective_work_dir_path,
+            worktree_path_str=resumable_task.worktree_path,
+        )
+    elif resumable_task.workflow_stage == WorkflowStage.IMPLEMENTATION_IN_PROGRESS:
+        register_task_background_activity(task_id)
+        background_tasks.add_task(
+            run_codex_task,
+            task_id_str=task_id,
+            run_account_id_str=resumable_task.run_account_id,
+            task_title_str=resumable_task.task_title,
+            dev_log_text_list=dev_log_text_snapshot_list,
+            work_dir_path=effective_work_dir_path,
+            worktree_path_str=resumable_task.worktree_path,
+        )
+    elif resumable_task.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS:
+        register_task_background_activity(task_id)
+        background_tasks.add_task(
+            run_codex_review_resume,
+            task_id_str=task_id,
+            run_account_id_str=resumable_task.run_account_id,
+            task_title_str=resumable_task.task_title,
+            dev_log_text_list=dev_log_text_snapshot_list,
+            work_dir_path=effective_work_dir_path,
+            worktree_path_str=resumable_task.worktree_path,
+        )
+    elif resumable_task.workflow_stage == WorkflowStage.TEST_IN_PROGRESS:
+        register_task_background_activity(task_id)
+        background_tasks.add_task(
+            run_post_review_lint_resume,
+            task_id_str=task_id,
+            run_account_id_str=resumable_task.run_account_id,
+            task_title_str=resumable_task.task_title,
+            dev_log_text_list=dev_log_text_snapshot_list,
+            work_dir_path=effective_work_dir_path,
+            worktree_path_str=resumable_task.worktree_path,
+        )
+    else:
+        if not resumable_task.worktree_path:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Task has no worktree_path. Completion resume requires a worktree.",
+            )
+        worktree_dir_path = Path(resumable_task.worktree_path)
+        if not worktree_dir_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
+            )
+
+        register_task_background_activity(task_id)
+        background_tasks.add_task(
+            run_codex_completion,
+            task_id_str=task_id,
+            run_account_id_str=resumable_task.run_account_id,
+            task_title_str=resumable_task.task_title,
+            task_summary_str=resumable_task.requirement_brief,
+            dev_log_text_list=dev_log_text_snapshot_list,
+            work_dir_path=worktree_dir_path,
+            worktree_path_str=resumable_task.worktree_path,
+        )
+
+    return _hydrate_task_response(resumable_task, is_task_running_override=True)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)

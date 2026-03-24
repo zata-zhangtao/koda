@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +17,7 @@ from dsl.api.tasks import (
     get_task_prd_file,
     list_tasks,
     regenerate_task_prd,
+    resume_task,
 )
 from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
@@ -132,7 +133,9 @@ def test_regenerate_task_prd_schedules_background_job_with_media_context(
     db_session.commit()
 
     monkeypatch.setattr(tasks_api.config, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(tasks_api.config, "MEDIA_STORAGE_PATH", tmp_path / "data" / "media")
+    monkeypatch.setattr(
+        tasks_api.config, "MEDIA_STORAGE_PATH", tmp_path / "data" / "media"
+    )
 
     db_session.add_all(
         [
@@ -157,24 +160,30 @@ def test_regenerate_task_prd_schedules_background_job_with_media_context(
     background_tasks = BackgroundTasks()
     updated_task = regenerate_task_prd(task_obj.id, background_tasks, db_session)
 
-    serialized_context_block_str = "\n\n".join(background_tasks.tasks[0].kwargs["dev_log_text_list"])
+    serialized_context_block_str = "\n\n".join(
+        background_tasks.tasks[0].kwargs["dev_log_text_list"]
+    )
 
     assert updated_task.workflow_stage == WorkflowStage.PRD_GENERATING
     assert updated_task.is_codex_task_running is True
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func is tasks_api.run_codex_prd
-    assert str(
-        (tmp_path / "data" / "media" / "original" / "reference-shot.png").resolve()
-    ) in serialized_context_block_str
-    assert str(
-        (
-            tmp_path
-            / "data"
-            / "media"
-            / "original"
-            / "7399c41a6c63014b1d048062232027ee.mp4"
-        ).resolve()
-    ) in serialized_context_block_str
+    assert (
+        str((tmp_path / "data" / "media" / "original" / "reference-shot.png").resolve())
+        in serialized_context_block_str
+    )
+    assert (
+        str(
+            (
+                tmp_path
+                / "data"
+                / "media"
+                / "original"
+                / "7399c41a6c63014b1d048062232027ee.mp4"
+            ).resolve()
+        )
+        in serialized_context_block_str
+    )
     assert "Attached local files:" in serialized_context_block_str
 
 
@@ -338,6 +347,212 @@ def test_get_task_exposes_runtime_flag(
     returned_task = get_task(task_obj.id, db_session)
 
     assert returned_task.is_codex_task_running is True
+
+
+def test_resume_task_schedules_interrupted_self_review(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume should restart the self-review chain when the task is stranded mid-review."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Resume interrupted self review",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path="/tmp/repo-wt-self-review",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content="🔍 已进入 AI 自检阶段，开始第 1 轮代码评审（1/3）。",
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    resumed_task = resume_task(task_obj.id, background_tasks, db_session)
+
+    assert resumed_task.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS
+    assert resumed_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is tasks_api.run_codex_review_resume
+
+
+def test_resume_task_rejects_parked_self_review_after_pass(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume should not restart a self-review that already passed and is waiting for Complete."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Parked self review",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path="/tmp/repo-wt-parked-self-review",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="🔍 已进入 AI 自检阶段，开始第 1 轮代码评审（1/3）。",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content=(
+                    "✅ AI 自检闭环完成：第 1 轮评审通过，未发现阻塞性问题。\n"
+                    "当前阶段保持在：AI 自检中（self_review_in_progress）。"
+                ),
+                state_tag=DevLogStateTag.FIXED,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    with pytest.raises(HTTPException) as raised_error:
+        resume_task(task_obj.id, background_tasks, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "Self-review already passed" in str(raised_error.value.detail)
+    assert len(background_tasks.tasks) == 0
+
+
+def test_resume_task_schedules_interrupted_post_review_lint(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume should restart the lint chain when the task is stranded in test_in_progress."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Resume interrupted lint",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path="/tmp/repo-wt-test-stage",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content="🧪 已进入自动化验证阶段，开始执行 post-review lint：`uv run pre-commit run --all-files`。",
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    resumed_task = resume_task(task_obj.id, background_tasks, db_session)
+
+    assert resumed_task.workflow_stage == WorkflowStage.TEST_IN_PROGRESS
+    assert resumed_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is tasks_api.run_post_review_lint_resume
+
+
+def test_resume_task_rejects_parked_test_stage_after_lint_pass(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume should not restart a parked test stage once lint already passed."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Parked lint stage",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path="/tmp/repo-wt-parked-lint",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="🧪 已进入自动化验证阶段，开始执行 post-review lint：`uv run pre-commit run --all-files`。",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content=(
+                    "✅ post-review lint 闭环完成：pre-commit 已通过。\n"
+                    "当前阶段保持在：自动化验证中（test_in_progress），等待用户点击 `Complete`。"
+                ),
+                state_tag=DevLogStateTag.FIXED,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    with pytest.raises(HTTPException) as raised_error:
+        resume_task(task_obj.id, background_tasks, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "Post-review lint already passed" in str(raised_error.value.detail)
+    assert len(background_tasks.tasks) == 0
 
 
 def test_list_tasks_uses_precomputed_log_counts(
