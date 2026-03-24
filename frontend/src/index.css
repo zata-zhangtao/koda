@@ -693,8 +693,9 @@ img {
 }
 
 .devflow-timeline-group__header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
   gap: 12px;
   margin-bottom: 10px;
 }
@@ -789,22 +790,48 @@ img {
 .devflow-timeline-group__meta-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
+  align-self: flex-start;
   gap: 8px;
+  max-width: min(100%, 360px);
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .devflow-timeline-group__meta-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  padding: 0 9px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #57534e;
+  background: rgba(255, 255, 255, 0.94);
+  color: #44403c;
   font-size: 0.68rem;
-  font-weight: 700;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.devflow-timeline-group__meta-pill--count {
+  font-family: inherit;
+}
+
+.devflow-timeline-group__meta-pill--time {
   font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: #57534e;
+}
+
+.devflow-timeline-group__meta-pill--status {
+  font-family: inherit;
 }
 
 .devflow-timeline-group__meta-pill--error {
@@ -1116,6 +1143,10 @@ img {
   gap: 8px;
 }
 
+.devflow-timeline-detail-drawer__actions {
+  justify-content: flex-end;
+}
+
 .devflow-timeline-detail-drawer__nav-btn,
 .devflow-timeline-detail-drawer__copy-btn {
   min-height: 34px;
@@ -1140,6 +1171,14 @@ img {
 .devflow-timeline-detail-drawer__nav-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.devflow-timeline-detail-drawer__hint {
+  margin: 0;
+  color: #78716c;
+  font-size: 0.72rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  text-align: right;
 }
 
 .devflow-timeline-group__toggle {
@@ -1859,6 +1898,14 @@ img {
     flex-direction: column;
     align-items: stretch;
   }
+
+  .devflow-timeline-detail-drawer__actions {
+    justify-content: flex-start;
+  }
+
+  .devflow-timeline-detail-drawer__hint {
+    text-align: left;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1925,8 +1972,7 @@ img {
   }
 
   .devflow-timeline-group__header {
-    flex-direction: column;
-    align-items: flex-start;
+    grid-template-columns: 1fr;
   }
 
   .devflow-timeline-group__heading {
@@ -1935,6 +1981,7 @@ img {
 
   .devflow-timeline-group__meta-row {
     justify-content: flex-start;
+    max-width: 100%;
   }
 
   .devflow-turn-card__compact-row {

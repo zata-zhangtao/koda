@@ -2642,12 +2642,17 @@ function CompactTimelineGroupCard({
         </div>
 
         <div className="devflow-timeline-group__meta-row">
-          <span className="devflow-timeline-group__meta-pill">{group.items.length} 条</span>
-          <span className="devflow-timeline-group__meta-pill">{groupTimeLabel}</span>
+          <span className="devflow-timeline-group__meta-pill devflow-timeline-group__meta-pill--count">
+            {group.items.length} 条
+          </span>
+          <span className="devflow-timeline-group__meta-pill devflow-timeline-group__meta-pill--time">
+            {groupTimeLabel}
+          </span>
           {groupStatusLabel ? (
             <span
               className={joinClassNames(
                 "devflow-timeline-group__meta-pill",
+                "devflow-timeline-group__meta-pill--status",
                 `devflow-timeline-group__meta-pill--${group.tone}`
               )}
             >
@@ -2816,6 +2821,48 @@ function CompactTimelineDetailDrawer({
     };
   }, []);
 
+  useEffect(() => {
+    function handleDrawerKeydown(keyboardEvent: globalThis.KeyboardEvent): void {
+      if (
+        keyboardEvent.metaKey ||
+        keyboardEvent.ctrlKey ||
+        keyboardEvent.altKey ||
+        keyboardEvent.shiftKey ||
+        isEditableKeyboardEventTarget(keyboardEvent.target)
+      ) {
+        return;
+      }
+
+      if (keyboardEvent.key === "Escape") {
+        keyboardEvent.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (
+        (keyboardEvent.key === "ArrowLeft" || keyboardEvent.key === "ArrowUp") &&
+        previousTimelineItem
+      ) {
+        keyboardEvent.preventDefault();
+        onSelectTimelineItem(previousTimelineItem.log.id);
+        return;
+      }
+
+      if (
+        (keyboardEvent.key === "ArrowRight" || keyboardEvent.key === "ArrowDown") &&
+        nextTimelineItem
+      ) {
+        keyboardEvent.preventDefault();
+        onSelectTimelineItem(nextTimelineItem.log.id);
+      }
+    }
+
+    window.addEventListener("keydown", handleDrawerKeydown);
+    return () => {
+      window.removeEventListener("keydown", handleDrawerKeydown);
+    };
+  }, [nextTimelineItem, onClose, onSelectTimelineItem, previousTimelineItem]);
+
   function scheduleCopyButtonReset(): void {
     if (copyResetTimerRef.current) {
       window.clearTimeout(copyResetTimerRef.current);
@@ -2896,6 +2943,7 @@ function CompactTimelineDetailDrawer({
           <button
             type="button"
             className="devflow-timeline-detail-drawer__nav-btn"
+            title="ArrowLeft / ArrowUp"
             disabled={!previousTimelineItem}
             onClick={() => {
               if (previousTimelineItem) {
@@ -2908,6 +2956,7 @@ function CompactTimelineDetailDrawer({
           <button
             type="button"
             className="devflow-timeline-detail-drawer__nav-btn"
+            title="ArrowRight / ArrowDown"
             disabled={!nextTimelineItem}
             onClick={() => {
               if (nextTimelineItem) {
@@ -2941,6 +2990,10 @@ function CompactTimelineDetailDrawer({
             </a>
           ) : null}
         </div>
+
+        <p className="devflow-timeline-detail-drawer__hint">
+          Esc 关闭 · ←/↑ 上一条 · →/↓ 下一条
+        </p>
       </div>
     </aside>
   );
@@ -4108,6 +4161,20 @@ function getWorkspaceDetailEmptyState(workspaceView: WorkspaceView): string {
 
 function escapeRegExp(rawText: string): string {
   return rawText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isEditableKeyboardEventTarget(eventTarget: EventTarget | null): boolean {
+  if (!(eventTarget instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = eventTarget.tagName;
+  return (
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT" ||
+    eventTarget.isContentEditable
+  );
 }
 
 function joinClassNames(
