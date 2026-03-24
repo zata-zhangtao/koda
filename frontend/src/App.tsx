@@ -208,6 +208,8 @@ function App() {
     useState<Set<string>>(new Set());
   const [expandedCompactTimelineItemId, setExpandedCompactTimelineItemId] =
     useState<string | null>(null);
+  const [isRequirementSummaryExpanded, setIsRequirementSummaryExpanded] =
+    useState(false);
   const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -358,6 +360,12 @@ function App() {
         ? deriveRequirementSnapshot(selectedTask, selectedTaskDevLogs)
         : null,
     [selectedTask, selectedTaskDevLogs]
+  );
+  const selectedTaskSummaryText =
+    selectedTaskSnapshot?.summary || "No requirement brief captured yet.";
+  const isSelectedTaskSummaryExpandable = useMemo(
+    () => shouldAllowRequirementSummaryExpansion(selectedTaskSummaryText),
+    [selectedTaskSummaryText]
   );
   const hasProjectConsistencyIssues = useMemo(
     () =>
@@ -570,6 +578,7 @@ function App() {
     setPrdFileContent(null);
     setSelectedTaskLogList([]);
     setIsLoadingOlderTaskLogs(false);
+    setIsRequirementSummaryExpanded(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
   }, [workspaceView, detailTaskId]);
@@ -577,6 +586,7 @@ function App() {
   useEffect(() => {
     setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
     setIsLoadingOlderTaskLogs(false);
+    setIsRequirementSummaryExpanded(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
   }, [detailTaskId]);
@@ -1958,10 +1968,37 @@ function App() {
                           />
                         ) : null}
                       </div>
-                      <p className="devflow-detail__description">
-                        {selectedTaskSnapshot?.summary ||
-                          "No requirement brief captured yet."}
-                      </p>
+                      <div className="devflow-detail__description-block">
+                        <div
+                          className={
+                            isSelectedTaskSummaryExpandable &&
+                            !isRequirementSummaryExpanded
+                              ? "devflow-detail__description-shell devflow-detail__description-shell--collapsed"
+                              : "devflow-detail__description-shell"
+                          }
+                        >
+                          <p className="devflow-detail__description">
+                            {selectedTaskSummaryText}
+                          </p>
+                        </div>
+                        {isSelectedTaskSummaryExpandable ? (
+                          <button
+                            type="button"
+                            className="devflow-detail__description-toggle"
+                            aria-expanded={isRequirementSummaryExpanded}
+                            onClick={() =>
+                              setIsRequirementSummaryExpanded(
+                                (previousExpandedState) =>
+                                  !previousExpandedState
+                              )
+                            }
+                          >
+                            {isRequirementSummaryExpanded
+                              ? "收起完整需求"
+                              : "展开完整需求"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div className="devflow-detail__actions">
@@ -4053,6 +4090,18 @@ function truncateText(rawText: string, maxLength: number): string {
   }
 
   return `${rawText.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function shouldAllowRequirementSummaryExpansion(
+  requirementSummaryText: string
+): boolean {
+  const normalizedRequirementSummaryText = requirementSummaryText.trim();
+  const summaryLineCount = normalizedRequirementSummaryText.split(/\r?\n/).length;
+
+  return (
+    normalizedRequirementSummaryText.length > 280 ||
+    summaryLineCount > 4
+  );
 }
 
 function formatStageLabel(stage: RequirementStage): string {

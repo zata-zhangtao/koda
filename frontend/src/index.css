@@ -523,10 +523,47 @@ img {
 }
 
 .devflow-detail__description {
-  max-width: 760px;
   margin: 0;
   color: var(--devflow-text-muted);
   line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.devflow-detail__description-block {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.devflow-detail__description-shell {
+  width: 100%;
+}
+
+.devflow-detail__description-shell--collapsed {
+  max-height: calc(1.7em * 6);
+  overflow: hidden;
+}
+
+.devflow-detail__description-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #0f766e;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.devflow-detail__description-toggle:hover {
+  color: #115e59;
+  text-decoration: underline;
 }
 
 .devflow-detail__actions {
