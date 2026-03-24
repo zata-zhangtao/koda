@@ -158,6 +158,7 @@ const INITIAL_VISIBLE_CONVERSATION_TURN_COUNT = 12;
 const VISIBLE_CONVERSATION_TURN_INCREMENT = 20;
 const COMPACT_TIMELINE_GROUP_VISIBLE_COUNT = 3;
 const COMPACT_TIMELINE_GROUP_MAX_SIZE = 6;
+const COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT = 5;
 const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
 const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PRD_WAITING_CONFIRMATION,
@@ -205,6 +206,8 @@ function App() {
   );
   const [expandedCompactTimelineGroupIdSet, setExpandedCompactTimelineGroupIdSet] =
     useState<Set<string>>(new Set());
+  const [expandedCompactTimelineItemId, setExpandedCompactTimelineItemId] =
+    useState<string | null>(null);
   const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -402,6 +405,31 @@ function App() {
     () => buildTimelineRenderBlockList(visibleTimelineItemList),
     [visibleTimelineItemList]
   );
+  const activeCompactTimelineCategory = useMemo(
+    () => mapWorkflowStageToCompactTimelineCategory(selectedTaskStage),
+    [selectedTaskStage]
+  );
+  const latestCompactTimelineGroupId = useMemo(
+    () =>
+      [...timelineRenderBlockList]
+        .reverse()
+        .find(
+          (timelineRenderBlock): timelineRenderBlock is Extract<
+            TimelineRenderBlock,
+            { kind: "compact_group" }
+          > => timelineRenderBlock.kind === "compact_group"
+        )?.group.groupId ?? null,
+    [timelineRenderBlockList]
+  );
+  const selectedCompactTimelineItem = useMemo(
+    () =>
+      expandedCompactTimelineItemId
+        ? selectedTimelineItemList.find(
+            (timelineItem) => timelineItem.log.id === expandedCompactTimelineItemId
+          ) ?? null
+        : null,
+    [expandedCompactTimelineItemId, selectedTimelineItemList]
+  );
   const canLoadOlderTaskLogs =
     selectedTask !== null &&
     selectedTaskLogList.length > 0 &&
@@ -511,13 +539,31 @@ function App() {
     setSelectedTaskLogList([]);
     setIsLoadingOlderTaskLogs(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
+    setExpandedCompactTimelineItemId(null);
   }, [workspaceView, detailTaskId]);
 
   useEffect(() => {
     setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
     setIsLoadingOlderTaskLogs(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
+    setExpandedCompactTimelineItemId(null);
   }, [detailTaskId]);
+
+  useEffect(() => {
+    if (!expandedCompactTimelineItemId) {
+      return;
+    }
+
+    if (
+      selectedTimelineItemList.some(
+        (timelineItem) => timelineItem.log.id === expandedCompactTimelineItemId
+      )
+    ) {
+      return;
+    }
+
+    setExpandedCompactTimelineItemId(null);
+  }, [expandedCompactTimelineItemId, selectedTimelineItemList]);
 
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
@@ -2250,6 +2296,24 @@ function App() {
                               isExpanded={expandedCompactTimelineGroupIdSet.has(
                                 timelineRenderBlock.group.groupId
                               )}
+                              isLatest={
+                                timelineRenderBlock.group.groupId === latestCompactTimelineGroupId
+                              }
+                              isStageMatched={
+                                activeCompactTimelineCategory !== null &&
+                                timelineRenderBlock.group.category ===
+                                  activeCompactTimelineCategory
+                              }
+                              expandedCompactTimelineItemId={
+                                expandedCompactTimelineItemId
+                              }
+                              onToggleItemDetail={(timelineItemId) => {
+                                startTransition(() => {
+                                  setExpandedCompactTimelineItemId((previousItemId) =>
+                                    previousItemId === timelineItemId ? null : timelineItemId
+                                  );
+                                });
+                              }}
                               onToggle={() => {
                                 startTransition(() => {
                                   setExpandedCompactTimelineGroupIdSet((previousGroupIdSet) => {
@@ -2267,6 +2331,17 @@ function App() {
                           );
                         })}
                       </div>
+
+                      {selectedCompactTimelineItem ? (
+                        <CompactTimelineDetailDrawer
+                          timelineItem={selectedCompactTimelineItem}
+                          onClose={() => {
+                            startTransition(() => {
+                              setExpandedCompactTimelineItemId(null);
+                            });
+                          }}
+                        />
+                      ) : null}
                     </div>
 
                     <div className="devflow-detail-section">
@@ -2453,18 +2528,27 @@ const MarkdownBlock = memo(function MarkdownBlock({
 interface CompactTimelineGroupCardProps {
   group: CompactTimelineGroup;
   isExpanded: boolean;
+  isLatest: boolean;
+  isStageMatched: boolean;
+  expandedCompactTimelineItemId: string | null;
+  onToggleItemDetail: (timelineItemId: string) => void;
   onToggle: () => void;
 }
 
 function CompactTimelineGroupCard({
   group,
   isExpanded,
+  isLatest,
+  isStageMatched,
+  expandedCompactTimelineItemId,
+  onToggleItemDetail,
   onToggle,
 }: CompactTimelineGroupCardProps) {
+  const collapsedVisibleCount = getCompactTimelineGroupCollapsedVisibleCount(group);
   const visibleTimelineItemList =
-    isExpanded || group.items.length <= COMPACT_TIMELINE_GROUP_VISIBLE_COUNT
+    isExpanded || group.items.length <= collapsedVisibleCount
       ? group.items
-      : group.items.slice(-COMPACT_TIMELINE_GROUP_VISIBLE_COUNT);
+      : group.items.slice(-collapsedVisibleCount);
   const hiddenTimelineItemCount =
     group.items.length - visibleTimelineItemList.length;
   const groupTimeLabel =
@@ -2472,6 +2556,7 @@ function CompactTimelineGroupCard({
       ? `${group.items[0].timeLabel} - ${group.items[group.items.length - 1].timeLabel}`
       : group.items[0]?.timeLabel ?? "";
   const groupLabel = group.label;
+  const groupSourceLabel = buildCompactTimelineGroupSourceLabel(group);
   const groupSummaryText = buildCompactTimelineGroupSummaryText(group);
   const groupStatusLabel =
     group.tone === "error"
@@ -2484,13 +2569,41 @@ function CompactTimelineGroupCard({
     <div
       className={joinClassNames(
         "devflow-timeline-group",
-        `devflow-timeline-group--${group.tone}`
+        `devflow-timeline-group--${group.tone}`,
+        isLatest && "devflow-timeline-group--latest",
+        isStageMatched && "devflow-timeline-group--current"
       )}
     >
       <div className="devflow-timeline-group__header">
         <div className="devflow-timeline-group__heading">
-          <span className="devflow-timeline-group__label">{groupLabel}</span>
-          <span className="devflow-timeline-group__summary">{groupSummaryText}</span>
+          <span
+            className={joinClassNames(
+              "devflow-timeline-group__icon-wrap",
+              `devflow-timeline-group__icon-wrap--${group.tone}`
+            )}
+          >
+            {renderCompactTimelineGroupIcon(group)}
+          </span>
+
+          <div className="devflow-timeline-group__heading-copy">
+            <span className="devflow-timeline-group__eyebrow">{groupSourceLabel}</span>
+            <span className="devflow-timeline-group__label">{groupLabel}</span>
+            <span className="devflow-timeline-group__summary">{groupSummaryText}</span>
+            {isLatest || isStageMatched ? (
+              <div className="devflow-timeline-group__signals">
+                {isStageMatched ? (
+                  <span className="devflow-timeline-group__signal devflow-timeline-group__signal--current">
+                    当前阶段
+                  </span>
+                ) : null}
+                {isLatest ? (
+                  <span className="devflow-timeline-group__signal devflow-timeline-group__signal--latest">
+                    最近更新
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="devflow-timeline-group__meta-row">
@@ -2516,6 +2629,8 @@ function CompactTimelineGroupCard({
             timelineItem={timelineItem}
             previewText={buildCompactTimelinePreviewText(timelineItem)}
             tone={deriveCompactTimelineItemTone(timelineItem)}
+            isDetailOpen={expandedCompactTimelineItemId === timelineItem.log.id}
+            onToggleDetail={() => onToggleItemDetail(timelineItem.log.id)}
           />
         ))}
       </div>
@@ -2539,12 +2654,16 @@ interface LightweightTimelineItemProps {
   timelineItem: TimelineViewModel;
   previewText: string;
   tone: "default" | "error" | "success";
+  isDetailOpen: boolean;
+  onToggleDetail: () => void;
 }
 
 const LightweightTimelineItem = memo(function LightweightTimelineItem({
   timelineItem,
   previewText,
   tone,
+  isDetailOpen,
+  onToggleDetail,
 }: LightweightTimelineItemProps) {
   const isAiTimelineItem = timelineItem.kind === "ai_log";
   const sourceLabel = isAiTimelineItem ? "Agent" : "System";
@@ -2556,7 +2675,8 @@ const LightweightTimelineItem = memo(function LightweightTimelineItem({
     <div
       className={joinClassNames(
         "devflow-turn-card__compact-row",
-        `devflow-turn-card__compact-row--${tone}`
+        `devflow-turn-card__compact-row--${tone}`,
+        isDetailOpen && "devflow-turn-card__compact-row--selected"
       )}
     >
       <div className="devflow-turn-card__compact-rail">
@@ -2593,22 +2713,109 @@ const LightweightTimelineItem = memo(function LightweightTimelineItem({
           ) : null}
         </div>
 
-        {metadataTagList.length > 0 ? (
-          <div className="devflow-turn-card__compact-tags">
-            {metadataTagList.map((metadataTag) => (
-              <span
-                key={`${timelineItem.log.id}:${metadataTag}`}
-                className="devflow-turn-card__compact-tag"
-              >
-                {metadataTag}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <div className="devflow-turn-card__compact-meta">
+          {metadataTagList.length > 0 ? (
+            <div className="devflow-turn-card__compact-tags">
+              {metadataTagList.map((metadataTag) => (
+                <span
+                  key={`${timelineItem.log.id}:${metadataTag}`}
+                  className="devflow-turn-card__compact-tag"
+                >
+                  {metadataTag}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className="devflow-turn-card__compact-detail-toggle"
+            onClick={onToggleDetail}
+          >
+            {isDetailOpen ? "关闭详情" : "查看详情"}
+          </button>
+        </div>
       </div>
     </div>
   );
 });
+
+interface CompactTimelineDetailDrawerProps {
+  timelineItem: TimelineViewModel;
+  onClose: () => void;
+}
+
+function CompactTimelineDetailDrawer({
+  timelineItem,
+  onClose,
+}: CompactTimelineDetailDrawerProps) {
+  const metadataTagList = buildCompactTimelineMetadataTagList(timelineItem);
+  const detailTone = deriveCompactTimelineItemTone(timelineItem);
+  const detailAttachmentUrl =
+    mapMediaPathToPublicUrl(timelineItem.log.media_original_image_path) ||
+    mapMediaPathToPublicUrl(timelineItem.log.media_thumbnail_path);
+  const detailSourceLabel =
+    timelineItem.kind === "ai_log" ? "Agent" : "System";
+
+  return (
+    <aside
+      className={joinClassNames(
+        "devflow-timeline-detail-drawer",
+        `devflow-timeline-detail-drawer--${detailTone}`
+      )}
+    >
+      <div className="devflow-timeline-detail-drawer__header">
+        <div className="devflow-timeline-detail-drawer__copy">
+          <span className="devflow-timeline-detail-drawer__eyebrow">
+            {detailSourceLabel} Detail
+          </span>
+          <h4 className="devflow-timeline-detail-drawer__title">
+            {buildCompactTimelinePreviewText(timelineItem)}
+          </h4>
+          <p className="devflow-timeline-detail-drawer__meta">
+            {formatDateTime(timelineItem.log.created_at)}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="devflow-timeline-detail-drawer__close"
+          onClick={onClose}
+        >
+          <XIcon className="devflow-icon devflow-icon--small" />
+        </button>
+      </div>
+
+      {metadataTagList.length > 0 ? (
+        <div className="devflow-timeline-detail-drawer__tags">
+          {metadataTagList.map((metadataTag) => (
+            <span
+              key={`${timelineItem.log.id}:${metadataTag}`}
+              className="devflow-timeline-detail-drawer__tag"
+            >
+              {metadataTag}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <pre className="devflow-timeline-detail-drawer__body">
+        {timelineItem.log.text_content || "无正文内容。"}
+      </pre>
+
+      {detailAttachmentUrl ? (
+        <a
+          className="devflow-timeline-detail-drawer__link"
+          href={detailAttachmentUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          查看附件
+        </a>
+      ) : null}
+    </aside>
+  );
+}
 
 function CardSurface({ children, className }: CardSurfaceProps) {
   return (
@@ -2850,19 +3057,16 @@ function deriveCompactTimelineGroupLabel(
 ): string {
   const firstTimelineItem = timelineItemList[0];
   const groupCategory = deriveCompactTimelineGroupCategory(timelineItemList);
-  const groupCategoryLabel = getCompactTimelineCategoryLabel(groupCategory);
 
   if (!firstTimelineItem) {
     return "运行日志";
   }
 
-  if (firstTimelineItem.kind === "ai_log") {
-    return groupCategory === "general"
-      ? "Agent 日志"
-      : `Agent ${groupCategoryLabel}`;
+  if (groupCategory === "general") {
+    return firstTimelineItem.kind === "system_event" ? "系统事件" : "Agent 运行";
   }
 
-  return groupCategory === "general" ? "System 日志" : `System ${groupCategoryLabel}`;
+  return getCompactTimelineCategoryLabel(groupCategory);
 }
 
 function deriveCompactTimelineGroupTone(
@@ -3019,6 +3223,17 @@ function buildCompactTimelinePreviewText(timelineItem: TimelineViewModel): strin
     return "启动 Codex 执行环境。";
   }
 
+  if (deriveCompactTimelineItemTone(timelineItem) === "error") {
+    const errorPreviewText = buildCompactTimelineErrorPreviewText(
+      timelineItem,
+      cleanedTimelinePreviewText,
+      filePathMatchList
+    );
+    if (errorPreviewText) {
+      return errorPreviewText;
+    }
+  }
+
   if (
     filePathMatchList.length > 0 &&
     /\bM\s+[\w./-]+\.[a-zA-Z0-9]+\b/.test(rawTimelineText)
@@ -3052,6 +3267,45 @@ function buildCompactTimelinePreviewText(timelineItem: TimelineViewModel): strin
     : "系统日志正文未渲染。";
 }
 
+function buildCompactTimelineErrorPreviewText(
+  timelineItem: TimelineViewModel,
+  cleanedTimelinePreviewText: string,
+  filePathMatchList: string[]
+): string | null {
+  const rawTimelineLineList = timelineItem.log.text_content
+    .split("\n")
+    .map((rawTimelineLine) => cleanMarkdownPreview(rawTimelineLine))
+    .filter((rawTimelineLine) => rawTimelineLine.length > 0);
+  const errorLinePattern =
+    /(失败|failed|failure|exception|error|traceback|exit\s*1|429|denied|timeout|timed out|invalid)/i;
+  const matchedErrorLine = rawTimelineLineList.find((rawTimelineLine) =>
+    errorLinePattern.test(rawTimelineLine)
+  );
+
+  if (matchedErrorLine) {
+    return `异常原因：${truncateText(matchedErrorLine, 116)}`;
+  }
+
+  const exceptionNameMatch = cleanedTimelinePreviewText.match(
+    /\b([A-Za-z_][\w.]*(?:Exception|Error))\b/
+  );
+  if (exceptionNameMatch) {
+    return `异常原因：${exceptionNameMatch[1]}`;
+  }
+
+  if (timelineItem.log.state_tag === DevLogStateTag.BUG) {
+    if (filePathMatchList.length > 0) {
+      return `处理异常，涉及文件：${filePathMatchList.join("、")}`;
+    }
+    if (cleanedTimelinePreviewText.length > 0) {
+      return `处理异常：${truncateText(cleanedTimelinePreviewText, 118)}`;
+    }
+    return "处理异常，详细正文未渲染。";
+  }
+
+  return null;
+}
+
 function buildCompactTimelineGroupSummaryText(group: CompactTimelineGroup): string {
   const aiTimelineItemCount = group.items.filter(
     (timelineItem) => timelineItem.kind === "ai_log"
@@ -3068,6 +3322,62 @@ function buildCompactTimelineGroupSummaryText(group: CompactTimelineGroup): stri
   }
 
   return summaryPartList.join(" · ");
+}
+
+function buildCompactTimelineGroupSourceLabel(group: CompactTimelineGroup): string {
+  const aiTimelineItemCount = group.items.filter(
+    (timelineItem) => timelineItem.kind === "ai_log"
+  ).length;
+  const systemTimelineItemCount = group.items.length - aiTimelineItemCount;
+
+  if (aiTimelineItemCount > 0 && systemTimelineItemCount > 0) {
+    return "Agent + System";
+  }
+
+  if (aiTimelineItemCount > 0) {
+    return "Agent";
+  }
+
+  return "System";
+}
+
+function getCompactTimelineGroupCollapsedVisibleCount(
+  group: CompactTimelineGroup
+): number {
+  if (group.tone === "error" || group.category === "changes") {
+    return COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT;
+  }
+
+  return COMPACT_TIMELINE_GROUP_VISIBLE_COUNT;
+}
+
+function renderCompactTimelineGroupIcon(group: CompactTimelineGroup): ReactNode {
+  const iconClassName = "devflow-icon devflow-icon--small";
+
+  if (group.tone === "error" || group.category === "changes") {
+    return <AlertTriangleIcon className={iconClassName} />;
+  }
+
+  switch (group.category) {
+    case "prd":
+      return <FileTextIcon className={iconClassName} />;
+    case "coding":
+      return <CodeIcon className={iconClassName} />;
+    case "review":
+      return <CheckCircleIcon className={iconClassName} />;
+    case "test":
+      return <TerminalIcon className={iconClassName} />;
+    case "delivery":
+      return <RocketIcon className={iconClassName} />;
+    case "system":
+      return <HistoryIcon className={iconClassName} />;
+    case "general":
+      return group.items[0]?.kind === "system_event"
+        ? <HistoryIcon className={iconClassName} />
+        : <RobotIcon className={iconClassName} />;
+    default:
+      return <HistoryIcon className={iconClassName} />;
+  }
 }
 
 function buildCompactTimelineMetadataTagList(
@@ -3111,17 +3421,45 @@ function getCompactTimelineCategoryLabel(
   category: CompactTimelineCategory
 ): string {
   const compactTimelineCategoryLabelMap: Record<CompactTimelineCategory, string> = {
-    general: "日志",
-    prd: "PRD",
-    coding: "编码",
-    review: "评审",
-    test: "测试",
-    delivery: "交付",
-    system: "事件",
-    changes: "异常",
+    general: "运行日志",
+    prd: "PRD 生成",
+    coding: "编码执行",
+    review: "自检评审",
+    test: "测试验证",
+    delivery: "交付收尾",
+    system: "系统事件",
+    changes: "异常处理",
   };
 
   return compactTimelineCategoryLabelMap[category];
+}
+
+function mapWorkflowStageToCompactTimelineCategory(
+  workflowStage: WorkflowStage | null
+): CompactTimelineCategory | null {
+  if (!workflowStage) {
+    return null;
+  }
+
+  switch (workflowStage) {
+    case WorkflowStage.PRD_GENERATING:
+    case WorkflowStage.PRD_WAITING_CONFIRMATION:
+      return "prd";
+    case WorkflowStage.IMPLEMENTATION_IN_PROGRESS:
+      return "coding";
+    case WorkflowStage.SELF_REVIEW_IN_PROGRESS:
+      return "review";
+    case WorkflowStage.TEST_IN_PROGRESS:
+      return "test";
+    case WorkflowStage.PR_PREPARING:
+    case WorkflowStage.ACCEPTANCE_IN_PROGRESS:
+    case WorkflowStage.DONE:
+      return "delivery";
+    case WorkflowStage.CHANGES_REQUESTED:
+      return "changes";
+    default:
+      return null;
+  }
 }
 
 function buildDevLogsByTaskId(devLogList: DevLog[]): Record<string, DevLog[]> {
@@ -3929,6 +4267,34 @@ function XIcon({ className }: SVGProps<SVGSVGElement>) {
         d="M18 6L6 18M6 6l12 12"
         stroke="currentColor"
         strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function AlertTriangleIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M12 3l9 16H3l9-16z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 9v4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 16h.01"
+        stroke="currentColor"
+        strokeWidth="2.2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
