@@ -25,9 +25,14 @@ class MediaService:
     # 允许的图片格式
     ALLOWED_IMAGE_FORMATS: set[str] = {
         "image/jpeg",
+        "image/jpg",
         "image/png",
+        "image/x-png",
         "image/gif",
         "image/webp",
+        "image/bmp",
+        "image/x-bmp",
+        "image/x-ms-bmp",
     }
     # 最大文件大小 (10MB)
     MAX_FILE_SIZE: int = 10 * 1024 * 1024

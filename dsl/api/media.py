@@ -7,7 +7,7 @@ import mimetypes
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -46,9 +46,9 @@ def _get_current_run_account_id(db_session: Session) -> str:
 
 @router.post("/upload", response_model=DevLogResponseSchema)
 async def upload_image(
-    uploaded_image_file: UploadFile,
-    text_content: str = "",
-    task_id: str | None = None,
+    uploaded_image_file: Annotated[UploadFile, File(...)],
+    text_content: Annotated[str, Form()] = "",
+    task_id: Annotated[str | None, Form()] = None,
     db_session: Annotated[Session, Depends(get_db)] = None,
 ) -> DevLog:
     """上传图片并创建日志.
@@ -113,9 +113,9 @@ async def upload_image(
 
 @router.post("/upload-attachment", response_model=DevLogResponseSchema)
 async def upload_attachment(
-    uploaded_file: UploadFile,
-    text_content: str = "",
-    task_id: str | None = None,
+    uploaded_file: Annotated[UploadFile, File(...)],
+    text_content: Annotated[str, Form()] = "",
+    task_id: Annotated[str | None, Form()] = None,
     db_session: Annotated[Session, Depends(get_db)] = None,
 ) -> DevLog:
     """上传附件并创建日志.

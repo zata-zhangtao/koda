@@ -332,13 +332,50 @@ img {
   font-weight: 800;
 }
 
+.devflow-create-panel__composer {
+  position: relative;
+  margin-top: 14px;
+}
+
+.devflow-create-panel__attach {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 12px;
+  background: rgba(17, 17, 17, 0.06);
+  color: var(--devflow-text);
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.devflow-create-panel__attach:hover:not(:disabled) {
+  transform: scale(1.04);
+  background: rgba(17, 17, 17, 0.1);
+}
+
+.devflow-create-panel__attach:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
 .devflow-input--textarea {
   min-height: 112px;
-  margin-top: 14px;
   padding: 0 0 12px;
   resize: vertical;
   font-size: 0.92rem;
   line-height: 1.7;
+}
+
+.devflow-input--textarea-with-attachment {
+  padding-left: 46px;
 }
 
 .devflow-input--select {
@@ -374,6 +411,13 @@ img {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+.devflow-create-panel__hint {
+  margin: 10px 0 0;
+  padding-left: 2px;
+  font-size: 0.68rem;
+  color: #a8a29e;
 }
 
 .devflow-requirement-list {
@@ -1799,9 +1843,11 @@ img {
   border-radius: 14px;
   background: #f1f0ea;
   flex: none;
+  overflow: hidden;
 }
 
 .devflow-feedback__attachment-preview {
+  display: block;
   object-fit: cover;
   border: 1px solid var(--devflow-line);
 }

@@ -66,7 +66,7 @@ type CompactTimelineCategory =
   | "system"
   | "changes";
 type WorkspaceView = "active" | "completed" | "changes";
-type AttachmentKind = "image" | "file";
+type AttachmentKind = "image" | "video" | "file";
 
 interface RequirementViewModel {
   task: Task;
@@ -179,6 +179,8 @@ const COMPACT_TIMELINE_GROUP_MAX_SIZE = 6;
 const COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT = 5;
 const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
 const MARKDOWN_MERMAID_LANGUAGE_PATTERN = /\blanguage-mermaid\b/;
+const IMAGE_FILE_NAME_PATTERN = /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/i;
+const VIDEO_FILE_NAME_PATTERN = /\.(avi|m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
 const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PRD_WAITING_CONFIRMATION,
   WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
@@ -196,8 +198,203 @@ function _isContinueCommand(text: string): boolean {
   return CONTINUE_COMMAND_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+function isLikelyImageFile(nextFile: File): boolean {
+  const normalizedFileType = nextFile.type.trim().toLowerCase();
+  const normalizedFileName = nextFile.name.trim().toLowerCase();
+  return (
+    normalizedFileType.startsWith("image/") ||
+    IMAGE_FILE_NAME_PATTERN.test(normalizedFileName)
+  );
+}
+
+function isLikelyVideoFile(nextFile: File): boolean {
+  const normalizedFileType = nextFile.type.trim().toLowerCase();
+  const normalizedFileName = nextFile.name.trim().toLowerCase();
+  return (
+    normalizedFileType.startsWith("video/") ||
+    VIDEO_FILE_NAME_PATTERN.test(normalizedFileName)
+  );
+}
+
+function guessMimeTypeFromFileName(fileName: string): string {
+  const normalizedFileName = fileName.trim().toLowerCase();
+  if (normalizedFileName.endsWith(".png")) {
+    return "image/png";
+  }
+  if (normalizedFileName.endsWith(".jpg") || normalizedFileName.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (normalizedFileName.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (normalizedFileName.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (normalizedFileName.endsWith(".bmp")) {
+    return "image/bmp";
+  }
+  if (normalizedFileName.endsWith(".mp4") || normalizedFileName.endsWith(".m4v")) {
+    return "video/mp4";
+  }
+  if (normalizedFileName.endsWith(".webm")) {
+    return "video/webm";
+  }
+  if (normalizedFileName.endsWith(".mov")) {
+    return "video/quicktime";
+  }
+  if (normalizedFileName.endsWith(".avi")) {
+    return "video/x-msvideo";
+  }
+  if (normalizedFileName.endsWith(".mkv")) {
+    return "video/x-matroska";
+  }
+  if (
+    normalizedFileName.endsWith(".ogv") ||
+    normalizedFileName.endsWith(".ogg")
+  ) {
+    return "video/ogg";
+  }
+  return "";
+}
+
+function normalizeClipboardFile(rawClipboardFile: File, fallbackType: string): File {
+  const normalizedFileType =
+    rawClipboardFile.type ||
+    fallbackType ||
+    guessMimeTypeFromFileName(rawClipboardFile.name) ||
+    "application/octet-stream";
+  const normalizedFileExtension = normalizedFileType.startsWith("image/")
+    ? normalizedFileType.slice("image/".length).replace(/^x-/, "") || "png"
+    : "bin";
+  const normalizedFileName =
+    rawClipboardFile.name ||
+    (normalizedFileType.startsWith("image/")
+      ? `clipboard-image.${normalizedFileExtension}`
+      : `clipboard-file.${normalizedFileExtension}`);
+
+  if (
+    rawClipboardFile.type === normalizedFileType &&
+    rawClipboardFile.name === normalizedFileName
+  ) {
+    return rawClipboardFile;
+  }
+
+  return new File([rawClipboardFile], normalizedFileName, {
+    type: normalizedFileType,
+    lastModified: rawClipboardFile.lastModified,
+  });
+}
+
+function buildAttachmentDraftFromFile(nextFile: File): AttachmentDraft {
+  const isImageFile = isLikelyImageFile(nextFile);
+  const isVideoFile = !isImageFile && isLikelyVideoFile(nextFile);
+  return {
+    file: nextFile,
+    kind: isImageFile ? "image" : isVideoFile ? "video" : "file",
+    previewUrl: isImageFile || isVideoFile ? URL.createObjectURL(nextFile) : null,
+  };
+}
+
+function getClipboardFile(
+  clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+): File | null {
+  const clipboardItemList = Array.from(clipboardEvent.clipboardData.items);
+  for (const clipboardItem of clipboardItemList) {
+    if (clipboardItem.kind !== "file") {
+      continue;
+    }
+
+    const rawClipboardFile = clipboardItem.getAsFile();
+    if (!rawClipboardFile) {
+      continue;
+    }
+
+    return normalizeClipboardFile(rawClipboardFile, clipboardItem.type);
+  }
+
+  const fallbackClipboardFile = clipboardEvent.clipboardData.files.item(0);
+  if (!fallbackClipboardFile) {
+    return null;
+  }
+
+  return normalizeClipboardFile(
+    fallbackClipboardFile,
+    guessMimeTypeFromFileName(fallbackClipboardFile.name)
+  );
+}
+
+function buildRequirementBrief(
+  rawRequirementDescription: string,
+  attachmentDraft: AttachmentDraft | null,
+  fallbackRequirementBrief: string | null = null
+): string | null {
+  const trimmedRequirementDescription = rawRequirementDescription.trim();
+  if (trimmedRequirementDescription) {
+    return trimmedRequirementDescription;
+  }
+
+  const trimmedFallbackRequirementBrief = fallbackRequirementBrief?.trim() ?? "";
+  if (trimmedFallbackRequirementBrief) {
+    return trimmedFallbackRequirementBrief;
+  }
+
+  if (!attachmentDraft) {
+    return null;
+  }
+
+  const attachmentLabel =
+    attachmentDraft.kind === "image"
+      ? "Attached image"
+      : attachmentDraft.kind === "video"
+        ? "Attached video"
+        : "Attached file";
+  return `${attachmentLabel}: ${attachmentDraft.file.name || "clipboard-upload"}`;
+}
+
+function getAttachmentLabel(attachmentKind: AttachmentKind): string {
+  if (attachmentKind === "image") {
+    return "Image attachment";
+  }
+  if (attachmentKind === "video") {
+    return "Video attachment";
+  }
+  return "File attachment";
+}
+
+function renderAttachmentPreview(attachmentDraft: AttachmentDraft): ReactNode {
+  if (!attachmentDraft.previewUrl) {
+    return (
+      <span className="devflow-feedback__attachment-icon">
+        <PaperclipIcon className="devflow-icon devflow-icon--small" />
+      </span>
+    );
+  }
+
+  if (attachmentDraft.kind === "video") {
+    return (
+      <video
+        className="devflow-feedback__attachment-preview"
+        src={attachmentDraft.previewUrl}
+        muted
+        playsInline
+        preload="metadata"
+      />
+    );
+  }
+
+  return (
+    <img
+      className="devflow-feedback__attachment-preview"
+      src={attachmentDraft.previewUrl}
+      alt={attachmentDraft.file.name}
+    />
+  );
+}
+
 function App() {
-  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const createRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const editRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const feedbackAttachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -210,9 +407,13 @@ function App() {
   const [isEditPanelOpen, setIsEditPanelOpen] = useState(false);
   const [newRequirementTitle, setNewRequirementTitle] = useState("");
   const [newRequirementDescription, setNewRequirementDescription] = useState("");
+  const [createRequirementAttachmentDraft, setCreateRequirementAttachmentDraft] =
+    useState<AttachmentDraft | null>(null);
   const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
+  const [editRequirementAttachmentDraft, setEditRequirementAttachmentDraft] =
+    useState<AttachmentDraft | null>(null);
   const [feedbackInputText, setFeedbackInputText] = useState("");
   const [feedbackAttachmentDraft, setFeedbackAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
@@ -246,12 +447,42 @@ function App() {
   function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
     setNewRequirementTitle("");
     setNewRequirementDescription("");
+    setCreateRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+      return null;
+    });
+    if (createRequirementAttachmentInputRef.current) {
+      createRequirementAttachmentInputRef.current.value = "";
+    }
     setNewRequirementProjectId(nextProjectId);
   }
 
   function openCreateRequirementPanel(): void {
     resetCreateRequirementDraft();
     setIsCreatePanelOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function resetEditRequirementDraft(): void {
+    setEditRequirementTitle("");
+    setEditRequirementDescription("");
+    setEditRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+      return null;
+    });
+    if (editRequirementAttachmentInputRef.current) {
+      editRequirementAttachmentInputRef.current.value = "";
+    }
+  }
+
+  function closeRequirementEditor(): void {
+    setIsEditPanelOpen(false);
+    resetEditRequirementDraft();
     setErrorMessage(null);
     setSuccessMessage(null);
   }
@@ -273,6 +504,22 @@ function App() {
     }
     void loadProjectList();
   }, [isProjectPanelOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (createRequirementAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(createRequirementAttachmentDraft.previewUrl);
+      }
+    };
+  }, [createRequirementAttachmentDraft]);
+
+  useEffect(() => {
+    return () => {
+      if (editRequirementAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(editRequirementAttachmentDraft.previewUrl);
+      }
+    };
+  }, [editRequirementAttachmentDraft]);
 
   useEffect(() => {
     return () => {
@@ -929,9 +1176,13 @@ function App() {
   async function handleCreateRequirement(): Promise<void> {
     const nextRequirementTitle = newRequirementTitle.trim();
     const nextRequirementDescription = newRequirementDescription.trim();
+    const nextRequirementBrief = buildRequirementBrief(
+      nextRequirementDescription,
+      createRequirementAttachmentDraft
+    );
 
-    if (!nextRequirementTitle || !nextRequirementDescription) {
-      setErrorMessage("Title and description are required.");
+    if (!nextRequirementTitle || !nextRequirementBrief) {
+      setErrorMessage("Title and description or image/video are required.");
       setSuccessMessage(null);
       return;
     }
@@ -944,14 +1195,30 @@ function App() {
       const createdTask = await taskApi.create({
         task_title: nextRequirementTitle,
         project_id: newRequirementProjectId,
-        requirement_brief: nextRequirementDescription,
+        requirement_brief: nextRequirementBrief,
       });
 
-      await logApi.create({
-        task_id: createdTask.id,
-        text_content: nextRequirementDescription,
-        state_tag: DevLogStateTag.NONE,
-      });
+      if (createRequirementAttachmentDraft) {
+        if (createRequirementAttachmentDraft.kind === "image") {
+          await mediaApi.uploadImage(
+            createRequirementAttachmentDraft.file,
+            nextRequirementDescription,
+            createdTask.id
+          );
+        } else {
+          await mediaApi.uploadAttachment(
+            createRequirementAttachmentDraft.file,
+            nextRequirementDescription,
+            createdTask.id
+          );
+        }
+      } else {
+        await logApi.create({
+          task_id: createdTask.id,
+          text_content: nextRequirementDescription,
+          state_tag: DevLogStateTag.NONE,
+        });
+      }
 
       setWorkspaceView("active");
       setSelectedTaskId(createdTask.id);
@@ -1157,6 +1424,7 @@ function App() {
       return;
     }
 
+    resetEditRequirementDraft();
     setEditRequirementTitle(selectedTask.task_title);
     setEditRequirementDescription(selectedTaskSnapshot.summary);
     setIsEditPanelOpen(true);
@@ -1171,19 +1439,24 @@ function App() {
 
     const nextRequirementTitle = editRequirementTitle.trim();
     const nextRequirementDescription = editRequirementDescription.trim();
+    const nextRequirementBrief = buildRequirementBrief(
+      nextRequirementDescription,
+      editRequirementAttachmentDraft,
+      selectedTaskSnapshot.summary
+    );
 
-    if (!nextRequirementTitle || !nextRequirementDescription) {
-      setErrorMessage("Requirement title and summary are required.");
+    if (!nextRequirementTitle || !nextRequirementBrief) {
+      setErrorMessage("Requirement title and summary or image/video are required.");
       setSuccessMessage(null);
       return;
     }
 
     const titleChanged = nextRequirementTitle !== selectedTask.task_title;
-    const summaryChanged =
-      nextRequirementDescription !== selectedTaskSnapshot.summary;
+    const summaryChanged = nextRequirementBrief !== selectedTaskSnapshot.summary;
+    const attachmentChanged = editRequirementAttachmentDraft !== null;
 
-    if (!titleChanged && !summaryChanged) {
-      setIsEditPanelOpen(false);
+    if (!titleChanged && !summaryChanged && !attachmentChanged) {
+      closeRequirementEditor();
       return;
     }
 
@@ -1199,18 +1472,35 @@ function App() {
     try {
       await taskApi.update(selectedTask.id, {
         task_title: nextRequirementTitle,
-        requirement_brief: nextRequirementDescription,
+        requirement_brief: nextRequirementBrief,
       });
 
-      await logApi.create({
-        task_id: selectedTask.id,
-        text_content: buildRequirementUpdateLog(
-          selectedTask.task_title,
-          nextRequirementTitle,
-          nextRequirementDescription
-        ),
-        state_tag: DevLogStateTag.NONE,
-      });
+      const requirementUpdateLogText = buildRequirementUpdateLog(
+        selectedTask.task_title,
+        nextRequirementTitle,
+        nextRequirementBrief
+      );
+      if (editRequirementAttachmentDraft) {
+        if (editRequirementAttachmentDraft.kind === "image") {
+          await mediaApi.uploadImage(
+            editRequirementAttachmentDraft.file,
+            requirementUpdateLogText,
+            selectedTask.id
+          );
+        } else {
+          await mediaApi.uploadAttachment(
+            editRequirementAttachmentDraft.file,
+            requirementUpdateLogText,
+            selectedTask.id
+          );
+        }
+      } else {
+        await logApi.create({
+          task_id: selectedTask.id,
+          text_content: requirementUpdateLogText,
+          state_tag: DevLogStateTag.NONE,
+        });
+      }
       didPersistRequirementChange = true;
 
       let nextSuccessMessage = "Requirement changes were appended to history.";
@@ -1229,7 +1519,7 @@ function App() {
       }
 
       setWorkspaceView("changes");
-      setIsEditPanelOpen(false);
+      closeRequirementEditor();
       setSuccessMessage(nextSuccessMessage);
       await loadDashboardData(true);
     } catch (updateError) {
@@ -1365,8 +1655,8 @@ function App() {
 
       setFeedbackInputText("");
       setFeedbackAttachmentDraft(null);
-      if (attachmentInputRef.current) {
-        attachmentInputRef.current.value = "";
+      if (feedbackAttachmentInputRef.current) {
+        feedbackAttachmentInputRef.current.value = "";
       }
 
       if (shouldRegeneratePrdAfterFeedback) {
@@ -1461,10 +1751,7 @@ function App() {
   function handleFeedbackPaste(
     clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
   ): void {
-    const clipboardItemList = Array.from(clipboardEvent.clipboardData.items);
-    const pastedFile = clipboardItemList.find(
-      (clipboardItem) => clipboardItem.kind === "file"
-    )?.getAsFile();
+    const pastedFile = getClipboardFile(clipboardEvent);
 
     if (!pastedFile) {
       return;
@@ -1485,22 +1772,112 @@ function App() {
     setAttachmentDraftFromFile(nextFile);
   }
 
+  function handleCreateRequirementPaste(
+    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+  ): void {
+    const pastedFile = getClipboardFile(clipboardEvent);
+
+    if (!pastedFile) {
+      return;
+    }
+
+    clipboardEvent.preventDefault();
+    setCreateRequirementAttachmentDraftFromFile(pastedFile);
+  }
+
+  function handleEditRequirementPaste(
+    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+  ): void {
+    const pastedFile = getClipboardFile(clipboardEvent);
+
+    if (!pastedFile) {
+      return;
+    }
+
+    clipboardEvent.preventDefault();
+    setEditRequirementAttachmentDraftFromFile(pastedFile);
+  }
+
+  function handleCreateRequirementAttachmentInputChange(
+    changeEvent: ChangeEvent<HTMLInputElement>
+  ): void {
+    const nextFile = changeEvent.target.files?.[0];
+    if (!nextFile) {
+      return;
+    }
+
+    setCreateRequirementAttachmentDraftFromFile(nextFile);
+  }
+
+  function handleEditRequirementAttachmentInputChange(
+    changeEvent: ChangeEvent<HTMLInputElement>
+  ): void {
+    const nextFile = changeEvent.target.files?.[0];
+    if (!nextFile) {
+      return;
+    }
+
+    setEditRequirementAttachmentDraftFromFile(nextFile);
+  }
+
+  function setCreateRequirementAttachmentDraftFromFile(nextFile: File): void {
+    setCreateRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+
+      return buildAttachmentDraftFromFile(nextFile);
+    });
+    setSuccessMessage(null);
+    setErrorMessage(null);
+  }
+
+  function setEditRequirementAttachmentDraftFromFile(nextFile: File): void {
+    setEditRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+
+      return buildAttachmentDraftFromFile(nextFile);
+    });
+    setSuccessMessage(null);
+    setErrorMessage(null);
+  }
+
   function setAttachmentDraftFromFile(nextFile: File): void {
     setFeedbackAttachmentDraft((previousAttachmentDraft) => {
       if (previousAttachmentDraft?.previewUrl) {
         URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
       }
 
-      return {
-        file: nextFile,
-        kind: nextFile.type.startsWith("image/") ? "image" : "file",
-        previewUrl: nextFile.type.startsWith("image/")
-          ? URL.createObjectURL(nextFile)
-          : null,
-      };
+      return buildAttachmentDraftFromFile(nextFile);
     });
     setSuccessMessage(null);
     setErrorMessage(null);
+  }
+
+  function clearCreateRequirementAttachmentDraft(): void {
+    setCreateRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+      return null;
+    });
+    if (createRequirementAttachmentInputRef.current) {
+      createRequirementAttachmentInputRef.current.value = "";
+    }
+  }
+
+  function clearEditRequirementAttachmentDraft(): void {
+    setEditRequirementAttachmentDraft((previousAttachmentDraft) => {
+      if (previousAttachmentDraft?.previewUrl) {
+        URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
+      }
+      return null;
+    });
+    if (editRequirementAttachmentInputRef.current) {
+      editRequirementAttachmentInputRef.current.value = "";
+    }
   }
 
   async function handleCreateProject(): Promise<void> {
@@ -1618,8 +1995,8 @@ function App() {
       }
       return null;
     });
-    if (attachmentInputRef.current) {
-      attachmentInputRef.current.value = "";
+    if (feedbackAttachmentInputRef.current) {
+      feedbackAttachmentInputRef.current.value = "";
     }
   }
 
@@ -1925,22 +2302,71 @@ function App() {
                   }
                 />
 
-                <textarea
-                  className="devflow-input devflow-input--textarea"
-                  placeholder="Describe what you want to build..."
-                  value={newRequirementDescription}
-                  onChange={(changeEvent) =>
-                    setNewRequirementDescription(changeEvent.target.value)
-                  }
-                />
+                <div className="devflow-create-panel__composer">
+                  <button
+                    type="button"
+                    className="devflow-create-panel__attach"
+                    onClick={() => createRequirementAttachmentInputRef.current?.click()}
+                    disabled={activeMutationName === "create"}
+                    aria-label="Attach image or video to requirement"
+                  >
+                    <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                  </button>
+
+                  <textarea
+                    className="devflow-input devflow-input--textarea devflow-input--textarea-with-attachment"
+                    placeholder="Describe what you want to build..."
+                    value={newRequirementDescription}
+                    onChange={(changeEvent) =>
+                      setNewRequirementDescription(changeEvent.target.value)
+                    }
+                    onPaste={handleCreateRequirementPaste}
+                  />
+
+                  <input
+                    ref={createRequirementAttachmentInputRef}
+                    className="devflow-feedback__file-input"
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={handleCreateRequirementAttachmentInputChange}
+                  />
+                </div>
+
+                {createRequirementAttachmentDraft ? (
+                  <div className="devflow-feedback__attachment">
+                    {renderAttachmentPreview(createRequirementAttachmentDraft)}
+
+                    <div className="devflow-feedback__attachment-copy">
+                      <span className="devflow-feedback__attachment-name">
+                        {createRequirementAttachmentDraft.file.name}
+                      </span>
+                      <span className="devflow-feedback__attachment-meta">
+                        {getAttachmentLabel(createRequirementAttachmentDraft.kind)}
+                        {" · "}
+                        {formatFileSize(createRequirementAttachmentDraft.file.size)}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="devflow-feedback__attachment-remove"
+                      onClick={clearCreateRequirementAttachmentDraft}
+                    >
+                      <XIcon className="devflow-icon devflow-icon--small" />
+                    </button>
+                  </div>
+                ) : (
+                  <p className="devflow-create-panel__hint">
+                    Tip: Paste an image/video into the description box or attach one
+                    from disk.
+                  </p>
+                )}
 
                 <select
                   className="devflow-input devflow-input--select"
                   value={newRequirementProjectId ?? ""}
                   onChange={(changeEvent) =>
-                    setNewRequirementProjectId(
-                      changeEvent.target.value || null
-                    )
+                    setNewRequirementProjectId(changeEvent.target.value || null)
                   }
                 >
                   <option value="">-- 不关联项目 --</option>
@@ -2286,19 +2712,70 @@ function App() {
                         }
                       />
 
-                      <textarea
-                        className="devflow-input devflow-input--textarea"
-                        placeholder="Updated requirement summary"
-                        value={editRequirementDescription}
-                        onChange={(changeEvent) =>
-                          setEditRequirementDescription(changeEvent.target.value)
-                        }
-                      />
+                      <div className="devflow-create-panel__composer">
+                        <textarea
+                          className="devflow-input devflow-input--textarea devflow-input--textarea-with-attachment"
+                          placeholder="Updated requirement summary"
+                          value={editRequirementDescription}
+                          onChange={(changeEvent) =>
+                            setEditRequirementDescription(changeEvent.target.value)
+                          }
+                          onPaste={handleEditRequirementPaste}
+                        />
+
+                        <button
+                          type="button"
+                          className="devflow-create-panel__attach"
+                          onClick={() => editRequirementAttachmentInputRef.current?.click()}
+                          disabled={activeMutationName === "update"}
+                          aria-label="Attach image or video to requirement revision"
+                        >
+                          <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                        </button>
+
+                        <input
+                          ref={editRequirementAttachmentInputRef}
+                          className="devflow-feedback__file-input"
+                          type="file"
+                          accept="image/*,video/*"
+                          onChange={handleEditRequirementAttachmentInputChange}
+                        />
+                      </div>
+
+                      {editRequirementAttachmentDraft ? (
+                        <div className="devflow-feedback__attachment">
+                          {renderAttachmentPreview(editRequirementAttachmentDraft)}
+
+                          <div className="devflow-feedback__attachment-copy">
+                            <span className="devflow-feedback__attachment-name">
+                              {editRequirementAttachmentDraft.file.name}
+                            </span>
+                            <span className="devflow-feedback__attachment-meta">
+                              {getAttachmentLabel(editRequirementAttachmentDraft.kind)}
+                              {" · "}
+                              {formatFileSize(editRequirementAttachmentDraft.file.size)}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="devflow-feedback__attachment-remove"
+                            onClick={clearEditRequirementAttachmentDraft}
+                          >
+                            <XIcon className="devflow-icon devflow-icon--small" />
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="devflow-create-panel__hint">
+                          Tip: Paste an image/video into the summary box or attach one
+                          from disk.
+                        </p>
+                      )}
 
                       <div className="devflow-create-panel__actions">
                         <ActionButton
                           variant="ghost"
-                          onClick={() => setIsEditPanelOpen(false)}
+                          onClick={closeRequirementEditor}
                         >
                           Cancel
                         </ActionButton>
@@ -2551,26 +3028,14 @@ function App() {
                   <div className="devflow-feedback">
                     {feedbackAttachmentDraft ? (
                       <div className="devflow-feedback__attachment">
-                        {feedbackAttachmentDraft.previewUrl ? (
-                          <img
-                            className="devflow-feedback__attachment-preview"
-                            src={feedbackAttachmentDraft.previewUrl}
-                            alt={feedbackAttachmentDraft.file.name}
-                          />
-                        ) : (
-                          <span className="devflow-feedback__attachment-icon">
-                            <PaperclipIcon className="devflow-icon devflow-icon--small" />
-                          </span>
-                        )}
+                        {renderAttachmentPreview(feedbackAttachmentDraft)}
 
                         <div className="devflow-feedback__attachment-copy">
                           <span className="devflow-feedback__attachment-name">
                             {feedbackAttachmentDraft.file.name}
                           </span>
                           <span className="devflow-feedback__attachment-meta">
-                            {feedbackAttachmentDraft.kind === "image"
-                              ? "Image attachment"
-                              : "File attachment"}
+                            {getAttachmentLabel(feedbackAttachmentDraft.kind)}
                             {" · "}
                             {formatFileSize(feedbackAttachmentDraft.file.size)}
                           </span>
@@ -2590,7 +3055,7 @@ function App() {
                       <button
                         type="button"
                         className="devflow-feedback__attach"
-                        onClick={() => attachmentInputRef.current?.click()}
+                        onClick={() => feedbackAttachmentInputRef.current?.click()}
                         disabled={activeMutationName === "feedback"}
                       >
                         <PaperclipIcon className="devflow-icon devflow-icon--small" />
@@ -2598,7 +3063,7 @@ function App() {
 
                       <textarea
                         className="devflow-feedback__textarea"
-                        placeholder="Ask AI to refine the PRD, or paste an image/file directly..."
+                        placeholder="Ask AI to refine the PRD, or paste an image/video/file directly..."
                         value={feedbackInputText}
                         onChange={(changeEvent) =>
                           setFeedbackInputText(changeEvent.target.value)
@@ -2621,7 +3086,7 @@ function App() {
                       </button>
 
                       <input
-                        ref={attachmentInputRef}
+                        ref={feedbackAttachmentInputRef}
                         className="devflow-feedback__file-input"
                         type="file"
                         onChange={handleAttachmentInputChange}
@@ -2629,7 +3094,7 @@ function App() {
                     </div>
                     <p className="devflow-feedback__hint">
                       Tip: Press Enter to send, Shift + Enter for new line, or paste an
-                      image/file directly into the composer.
+                      image/video/file directly into the composer.
                     </p>
                   </div>
                 ) : null}
