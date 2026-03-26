@@ -369,8 +369,13 @@ def test_prepare_task_completion_rejects_changes_requested_tasks(
 def test_start_task_persists_created_worktree_path_under_task_root(
     db_session: Session,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Starting a linked task should persist the created path and copy env files."""
+    from utils.settings import Config
+
+    monkeypatch.setattr(Config, "WORKTREE_BRANCH_AI_NAMING_ENABLED", False)
+
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
     source_env_file_path = repo_root_path / ".env"
     source_env_file_path.write_text("API_KEY=demo\n", encoding="utf-8")
@@ -421,7 +426,7 @@ def test_start_task_persists_created_worktree_path_under_task_root(
             expected_worktree_path,
             ["symbolic-ref", "--short", "HEAD"],
         )
-        == f"task/{created_task.id[:8]}"
+        == f"task/{created_task.id[:8]}-create-linked-worktree"
     )
     assert (expected_worktree_path / ".env").read_text(encoding="utf-8") == (
         source_env_file_path.read_text(encoding="utf-8")

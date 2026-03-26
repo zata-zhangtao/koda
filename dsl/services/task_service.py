@@ -74,16 +74,40 @@ class TaskService:
             )
 
         from dsl.services.git_worktree_service import GitWorktreeService
+        from dsl.services.worktree_branch_naming_service import (
+            WorktreeBranchNamingService,
+        )
 
-        branch_name_str = GitWorktreeService.build_task_branch_name(task_obj.id)
+        recent_log_row_list: list[tuple[str]] = (
+            db_session.query(DevLog.text_content)
+            .filter(DevLog.task_id == task_obj.id)
+            .order_by(DevLog.created_at.desc())
+            .limit(3)
+            .all()
+        )
+        recent_log_text_list = [
+            recent_log_text_str
+            for (recent_log_text_str,) in recent_log_row_list
+            if recent_log_text_str
+        ]
+        branch_naming_result_obj = (
+            WorktreeBranchNamingService.build_task_branch_naming_result(
+                task_id_str=task_obj.id,
+                task_title_str=task_obj.task_title,
+                requirement_brief_str=task_obj.requirement_brief,
+                recent_context_text_list=recent_log_text_list,
+            )
+        )
         created_worktree_path = GitWorktreeService.create_task_worktree(
             repo_root_path=repo_path_obj,
             task_id=task_obj.id,
+            task_branch_name_str=branch_naming_result_obj.branch_name_str,
         )
         task_obj.worktree_path = str(created_worktree_path)
         logger.info(
             f"Task {task_obj.id[:8]}... worktree created: {created_worktree_path} "
-            f"(branch: {branch_name_str})"
+            f"(branch: {branch_naming_result_obj.branch_name_str}, "
+            f"branch_naming_source: {branch_naming_result_obj.naming_source_str})"
         )
 
     @staticmethod

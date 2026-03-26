@@ -756,7 +756,7 @@ async def _run_post_review_lint_with_auto_rerun(
         return True, first_output_line_list
 
     lint_retry_log_text_str = (
-        f"⚠️ {lint_cycle_label_str}首次执行未通过，" "开始自动重跑一次 pre-commit lint。"
+        f"⚠️ {lint_cycle_label_str}首次执行未通过，开始自动重跑一次 pre-commit lint。"
     )
     await asyncio.to_thread(
         _write_log_to_db,

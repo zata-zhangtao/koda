@@ -59,6 +59,7 @@ flowchart LR
 - `codex_runner`：Prompt 构造、`codex exec` 调用、日志回写与阶段推进
 
 当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。`worktree_path` 写入任务前，系统还会补齐基础环境准备，包括复制仓库内 `.env*` 文件、按现有策略处理前端依赖，以及在存在 `pyproject.toml` 时执行 `uv sync --all-extras`。
+对应任务分支默认采用 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 语义命名，失败时回退为标题规则化 slug，若仍为空再回退为 `task/<task_id[:8]>`，并在日志中记录命名来源。
 
 ### 数据层
 

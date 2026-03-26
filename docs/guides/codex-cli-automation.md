@@ -19,11 +19,12 @@
 1. 前端点击“开始任务”
 2. 后端将任务推进到 `prd_generating`
 3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，还会复制 `.env*` 并准备基础前后端依赖环境
-4. `run_codex_prd` 组装 PRD Prompt
-5. 后端调用 `codex exec`
-6. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
-7. 成功后任务推进到 `prd_waiting_confirmation`
-8. 默认停在确认阶段，等待用户确认 PRD；不会自动继续执行代码实现，也不会默认提交代码
+4. 新建 worktree 分支默认命名为 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 命名，失败时自动回退到标题规则化 slug，若仍为空则回退到 `task/<task_id[:8]>`
+5. `run_codex_prd` 组装 PRD Prompt
+6. 后端调用 `codex exec`
+7. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
+8. 成功后任务推进到 `prd_waiting_confirmation`
+9. 默认停在确认阶段，等待用户确认 PRD；不会自动继续执行代码实现，也不会默认提交代码
 
 ### 编码执行链路
 
@@ -253,6 +254,7 @@ Codex 的工作目录选择顺序如下：
 - 复制源仓库中的 `.env*` 文件到新 worktree（保留相对路径）
 - 若检测到前端项目，则按现有 `WORKTREE_FRONTEND_STRATEGY` / `WORKTREE_SKIP_FRONTEND_INSTALL` 约定处理依赖
 - 若检测到 `pyproject.toml`，则尝试执行 `uv sync --all-extras`
+- 分支命名来源会记录到后端日志（`ai` / `title_fallback` / `legacy_fallback`），便于排查命名回退
 
 如果 bootstrap 失败，任务启动会直接报错，而不是把不可直接使用的 worktree 写入任务状态。
 

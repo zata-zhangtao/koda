@@ -671,7 +671,8 @@ def start_task(
     """启动任务：创建 git worktree 并进入 PRD_GENERATING 阶段.
 
     仅允许从 backlog 阶段触发。若任务关联了 Project，将立即在项目仓库中创建
-    git worktree（分支名：task/<task_id[:8]>）。
+    git worktree（默认分支名：`task/<task_id[:8]>-<semantic-slug>`；
+    AI 命名不可用时自动回退）。
 
     Args:
         task_id: 任务 ID

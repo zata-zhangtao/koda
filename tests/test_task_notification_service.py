@@ -109,10 +109,8 @@ def test_send_stalled_task_notification_only_once_per_stage_window() -> None:
         ]
         TaskNotificationService._send_task_notification.__globals__[
             "send_notification_email_via_settings"
-        ] = (
-            lambda email_settings_obj,
-            subject_str,
-            body_html_str: email_service.EmailDeliveryResult(
+        ] = lambda email_settings_obj, subject_str, body_html_str: (
+            email_service.EmailDeliveryResult(
                 success=True,
                 receiver_email=email_settings_obj.receiver_email,
             )
@@ -288,10 +286,8 @@ def test_send_stalled_task_notification_skips_audit_until_delivery_is_available(
             )
             TaskNotificationService._send_task_notification.__globals__[
                 "send_notification_email_via_settings"
-            ] = (
-                lambda email_settings_obj,
-                subject_str,
-                body_html_str: email_service.EmailDeliveryResult(
+            ] = lambda email_settings_obj, subject_str, body_html_str: (
+                email_service.EmailDeliveryResult(
                     success=True,
                     receiver_email=email_settings_obj.receiver_email,
                 )
@@ -417,10 +413,8 @@ def test_send_stalled_task_notification_allows_retry_after_transient_delivery_fa
         try:
             TaskNotificationService._send_task_notification.__globals__[
                 "send_notification_email_via_settings"
-            ] = (
-                lambda email_settings_obj,
-                subject_str,
-                body_html_str: email_service.EmailDeliveryResult(
+            ] = lambda email_settings_obj, subject_str, body_html_str: (
+                email_service.EmailDeliveryResult(
                     success=False,
                     receiver_email=email_settings_obj.receiver_email,
                     failure_message="SMTP error when sending email: temporary outage",
@@ -443,10 +437,8 @@ def test_send_stalled_task_notification_allows_retry_after_transient_delivery_fa
 
             TaskNotificationService._send_task_notification.__globals__[
                 "send_notification_email_via_settings"
-            ] = (
-                lambda email_settings_obj,
-                subject_str,
-                body_html_str: email_service.EmailDeliveryResult(
+            ] = lambda email_settings_obj, subject_str, body_html_str: (
+                email_service.EmailDeliveryResult(
                     success=True,
                     receiver_email=email_settings_obj.receiver_email,
                 )
@@ -560,10 +552,8 @@ def test_send_stalled_task_notification_allows_resend_after_reentering_stage() -
         )
         TaskNotificationService._send_task_notification.__globals__[
             "send_notification_email_via_settings"
-        ] = (
-            lambda email_settings_obj,
-            subject_str,
-            body_html_str: email_service.EmailDeliveryResult(
+        ] = lambda email_settings_obj, subject_str, body_html_str: (
+            email_service.EmailDeliveryResult(
                 success=True,
                 receiver_email=email_settings_obj.receiver_email,
             )
@@ -738,10 +728,8 @@ def test_scan_and_send_stalled_task_notifications_filters_stage_and_threshold() 
         ] = configured_settings_factory
         TaskNotificationService._send_task_notification.__globals__[
             "send_notification_email_via_settings"
-        ] = (
-            lambda email_settings_obj,
-            subject_str,
-            body_html_str: email_service.EmailDeliveryResult(
+        ] = lambda email_settings_obj, subject_str, body_html_str: (
+            email_service.EmailDeliveryResult(
                 success=True,
                 receiver_email=email_settings_obj.receiver_email,
             )

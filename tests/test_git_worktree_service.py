@@ -122,6 +122,29 @@ def test_create_task_worktree_uses_default_branch_and_path(tmp_path: Path) -> No
     )
 
 
+def test_create_task_worktree_accepts_explicit_semantic_branch_name(
+    tmp_path: Path,
+) -> None:
+    """Fallback worktree creation should honor explicit semantic branch names."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    explicit_branch_name_str = "task/12345678-fix-login-timeout"
+
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+        task_branch_name_str=explicit_branch_name_str,
+    )
+
+    assert (
+        created_worktree_path
+        == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    )
+    assert (
+        _run_git_command(created_worktree_path, ["symbolic-ref", "--short", "HEAD"])
+        == explicit_branch_name_str
+    )
+
+
 def test_create_task_worktree_passes_task_root_to_path_aware_script(
     tmp_path: Path,
 ) -> None:

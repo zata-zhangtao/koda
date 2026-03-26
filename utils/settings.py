@@ -43,6 +43,25 @@ def _load_path_env(env_var_name: str, default_path: Path) -> Path:
     return Path(raw_env_value).expanduser()
 
 
+def _load_float_env(env_var_name: str, default_value: float) -> float:
+    """读取浮点数环境变量.
+
+    Args:
+        env_var_name (str): 环境变量名
+        default_value (float): 默认值
+
+    Returns:
+        float: 解析后的浮点数
+    """
+    raw_env_value = os.getenv(env_var_name)
+    if raw_env_value is None or raw_env_value.strip() == "":
+        return default_value
+    try:
+        return float(raw_env_value)
+    except ValueError:
+        return default_value
+
+
 def _load_app_timezone_name() -> str:
     """加载并验证应用时区配置.
 
@@ -80,6 +99,9 @@ class Config:
         KODA_TUNNEL_ID (str): 单租户隧道标识
         KODA_TUNNEL_SHARED_TOKEN (str): agent 与 gateway 共用鉴权令牌
         KODA_TUNNEL_UPSTREAM_URL (str): 本地 agent 转发的上游地址
+        WORKTREE_BRANCH_AI_NAMING_ENABLED (bool): 是否启用 AI worktree 分支命名
+        WORKTREE_BRANCH_AI_MODEL (str): 用于 worktree 分支命名的模型名
+        WORKTREE_BRANCH_AI_TIMEOUT_SECONDS (float): AI 命名超时时间（秒）
     """
 
     # 目录配置
@@ -134,6 +156,18 @@ class Config:
     KODA_TUNNEL_UPSTREAM_URL: ClassVar[str] = os.getenv(
         "KODA_TUNNEL_UPSTREAM_URL",
         "http://127.0.0.1:8000",
+    )
+    WORKTREE_BRANCH_AI_NAMING_ENABLED: ClassVar[bool] = _load_bool_env(
+        "WORKTREE_BRANCH_AI_NAMING_ENABLED",
+        True,
+    )
+    WORKTREE_BRANCH_AI_MODEL: ClassVar[str] = os.getenv(
+        "WORKTREE_BRANCH_AI_MODEL",
+        "qwen-flash",
+    )
+    WORKTREE_BRANCH_AI_TIMEOUT_SECONDS: ClassVar[float] = _load_float_env(
+        "WORKTREE_BRANCH_AI_TIMEOUT_SECONDS",
+        8.0,
     )
 
     @classmethod

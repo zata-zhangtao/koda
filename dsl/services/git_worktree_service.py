@@ -34,16 +34,20 @@ class GitWorktreeService:
     """Helpers for task branch and worktree lifecycle operations."""
 
     @staticmethod
-    def build_task_branch_name(task_id: str) -> str:
+    def build_task_branch_name(task_id: str, semantic_slug: str | None = None) -> str:
         """Build the canonical task branch name.
 
         Args:
             task_id: Task UUID
+            semantic_slug: Optional semantic slug for readable branch naming
 
         Returns:
-            str: Task branch name, for example ``task/12345678``
+            str: Task branch name, for example ``task/12345678`` or
+                ``task/12345678-fix-login``
         """
         task_short_id_str = task_id[:8]
+        if semantic_slug:
+            return f"task/{task_short_id_str}-{semantic_slug}"
         return f"task/{task_short_id_str}"
 
     @staticmethod
@@ -76,12 +80,17 @@ class GitWorktreeService:
         return repo_root_path.parent / "task"
 
     @staticmethod
-    def create_task_worktree(repo_root_path: Path, task_id: str) -> Path:
+    def create_task_worktree(
+        repo_root_path: Path,
+        task_id: str,
+        task_branch_name_str: str | None = None,
+    ) -> Path:
         """Create a task worktree using repo-local scripts when available.
 
         Args:
             repo_root_path: Repository root path
             task_id: Task UUID
+            task_branch_name_str: Optional branch name override
 
         Returns:
             Path: Created worktree path
@@ -97,6 +106,7 @@ class GitWorktreeService:
         command_spec_obj = GitWorktreeService._build_worktree_create_command_spec(
             repo_root_path=repo_root_path,
             task_id=task_id,
+            task_branch_name_str=task_branch_name_str,
         )
 
         try:
@@ -123,7 +133,7 @@ class GitWorktreeService:
         )
         if not created_worktree_path.exists():
             raise ValueError(
-                "创建 git worktree 后未找到预期目录：" f"{created_worktree_path}"
+                f"创建 git worktree 后未找到预期目录：{created_worktree_path}"
             )
 
         if command_spec_obj.requires_post_create_bootstrap:
@@ -161,17 +171,21 @@ class GitWorktreeService:
     def _build_worktree_create_command_spec(
         repo_root_path: Path,
         task_id: str,
+        task_branch_name_str: str | None = None,
     ) -> WorktreeCreateCommandSpec:
         """Choose the correct worktree creation command for the repository.
 
         Args:
             repo_root_path: Repository root path
             task_id: Task UUID
+            task_branch_name_str: Optional explicit branch name
 
         Returns:
             WorktreeCreateCommandSpec: Command and expected path information
         """
-        task_branch_name_str = GitWorktreeService.build_task_branch_name(task_id)
+        resolved_task_branch_name_str = task_branch_name_str or (
+            GitWorktreeService.build_task_branch_name(task_id)
+        )
         default_worktree_path = GitWorktreeService.build_task_worktree_path(
             repo_root_path, task_id
         )
@@ -195,7 +209,7 @@ class GitWorktreeService:
                 command_argument_list=[
                     str(path_and_branch_script_path),
                     str(default_worktree_path),
-                    task_branch_name_str,
+                    resolved_task_branch_name_str,
                 ],
                 expected_worktree_path=default_worktree_path,
                 requires_post_create_bootstrap=True,
@@ -217,10 +231,10 @@ class GitWorktreeService:
             return WorktreeCreateCommandSpec(
                 command_argument_list=[
                     str(branch_only_script_path),
-                    task_branch_name_str,
+                    resolved_task_branch_name_str,
                 ],
                 expected_worktree_path=None,
-                branch_name_for_lookup=task_branch_name_str,
+                branch_name_for_lookup=resolved_task_branch_name_str,
             )
 
         return WorktreeCreateCommandSpec(
@@ -230,7 +244,7 @@ class GitWorktreeService:
                 "add",
                 str(default_worktree_path),
                 "-b",
-                task_branch_name_str,
+                resolved_task_branch_name_str,
                 "main",
             ],
             expected_worktree_path=default_worktree_path,
@@ -278,7 +292,7 @@ class GitWorktreeService:
             stdout_text = (bootstrap_error.stdout or "").strip()
             failure_reason_text = stderr_text or stdout_text or str(bootstrap_error)
             raise ValueError(
-                "创建 git worktree 后环境准备失败：" f"{failure_reason_text}"
+                f"创建 git worktree 后环境准备失败：{failure_reason_text}"
             ) from bootstrap_error
 
     @staticmethod
