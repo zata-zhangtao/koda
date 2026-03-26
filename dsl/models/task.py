@@ -35,6 +35,7 @@ class Task(Base):
         lifecycle_status (TaskLifecycleStatus): 任务生命周期状态（向后兼容）
         workflow_stage (WorkflowStage): 工作流业务阶段；后台运行态由独立字段补充
         stage_updated_at (datetime): 最近一次进入当前工作流阶段的时间
+        last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         created_at (datetime): 创建时间
         closed_at (datetime | None): 关闭时间
@@ -69,6 +70,10 @@ class Task(Base):
     stage_updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=utc_now_naive,
+    )
+    last_ai_activity_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
     worktree_path: Mapped[str | None] = mapped_column(
         String(500),

@@ -39,12 +39,13 @@ import {
   configureAppTimezone,
   formatDateTime,
   formatHourMinute,
-  formatMonthDay,
   toTimestampValue,
 } from "./utils/datetime";
 import {
   AIProcessingStatus,
   DevLogStateTag,
+  type TaskCardMetadata,
+  type TaskDisplayStageKey,
   TaskLifecycleStatus,
   WorkflowStage,
   type DevLog,
@@ -54,6 +55,7 @@ import {
 } from "./types";
 
 type RequirementStage = WorkflowStage;
+type RequirementDisplayStage = TaskDisplayStageKey;
 
 type TimelineKind = "ai_log" | "human_review" | "system_event";
 type CompactTimelineCategory =
@@ -71,9 +73,10 @@ type AttachmentKind = "image" | "video" | "file";
 interface RequirementViewModel {
   task: Task;
   description: string;
-  stage: RequirementStage;
-  stageLabel: string;
-  createdLabel: string;
+  displayStage: RequirementDisplayStage;
+  displayStageLabel: string;
+  cardMetaLabel: string;
+  cardMetaTitle: string;
 }
 
 interface TimelineViewModel {
@@ -168,6 +171,7 @@ const RESUMABLE_AUTOMATION_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PR_PREPARING,
 ]);
 const ACTIVE_DASHBOARD_POLL_INTERVAL_MS = 3000;
+const TASK_CARD_METADATA_POLL_INTERVAL_MS = 60_000;
 const SELECTED_TASK_LOG_POLL_INTERVAL_MS = 2000;
 const SELECTED_TASK_LOG_INITIAL_LIMIT = 300;
 const SELECTED_TASK_LOG_OLDER_BATCH_LIMIT = 300;
@@ -189,6 +193,10 @@ const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PR_PREPARING,
   WorkflowStage.ACCEPTANCE_IN_PROGRESS,
   WorkflowStage.CHANGES_REQUESTED,
+]);
+const WAITING_USER_METADATA_CANDIDATE_STAGE_SET = new Set<WorkflowStage>([
+  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+  WorkflowStage.TEST_IN_PROGRESS,
 ]);
 
 let hasInitializedMermaidRenderer = false;
@@ -395,9 +403,13 @@ function App() {
   const createRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const editRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const feedbackAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const latestTaskListRef = useRef<Task[]>([]);
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
+  const [taskCardMetadataMap, setTaskCardMetadataMap] = useState<
+    Record<string, TaskCardMetadata>
+  >({});
   const [allDevLogList, setAllDevLogList] = useState<DevLog[]>([]);
   const [selectedTaskLogList, setSelectedTaskLogList] = useState<DevLog[]>([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
@@ -623,6 +635,13 @@ function App() {
       ? selectedTaskLogList
       : devLogsByTaskId[selectedTask.id] ?? [];
   }, [devLogsByTaskId, selectedTask, selectedTaskLogList]);
+  const selectedTaskCardMetadata = useMemo(
+    () =>
+      selectedTask
+        ? resolveTaskCardMetadata(selectedTask, taskCardMetadataMap)
+        : null,
+    [selectedTask, taskCardMetadataMap]
+  );
   const selectedTaskSnapshot = useMemo(
     () =>
       selectedTask
@@ -648,9 +667,13 @@ function App() {
   const requirementViewModelList = useMemo(
     () =>
       visibleTaskList.map((taskItem) =>
-        buildRequirementViewModel(taskItem, devLogsByTaskId[taskItem.id] ?? [])
+        buildRequirementViewModel(
+          taskItem,
+          devLogsByTaskId[taskItem.id] ?? [],
+          resolveTaskCardMetadata(taskItem, taskCardMetadataMap)
+        )
       ),
-    [devLogsByTaskId, visibleTaskList]
+    [devLogsByTaskId, taskCardMetadataMap, visibleTaskList]
   );
   const selectedTimelineItemList = useMemo(
     () =>
@@ -782,11 +805,22 @@ function App() {
     [selectedTask, selectedTaskDevLogs]
   );
   const selectedTaskStageLabel = useMemo(
+    () => selectedTaskCardMetadata?.display_stage_label ?? null,
+    [selectedTaskCardMetadata]
+  );
+  const selectedTaskDisplayStage = useMemo(
+    () => selectedTaskCardMetadata?.display_stage_key ?? null,
+    [selectedTaskCardMetadata]
+  );
+  const selectedTaskAiActivityLabel = useMemo(
     () =>
-      selectedTask
-        ? formatDisplayStageLabel(selectedTask, selectedTaskDevLogs)
-        : null,
-    [selectedTask, selectedTaskDevLogs]
+      formatTaskCardActivityLabel(selectedTaskCardMetadata?.last_ai_activity_at ?? null),
+    [selectedTaskCardMetadata]
+  );
+  const selectedTaskAiActivityTitle = useMemo(
+    () =>
+      formatTaskCardActivityTitle(selectedTaskCardMetadata?.last_ai_activity_at ?? null),
+    [selectedTaskCardMetadata]
   );
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
@@ -801,22 +835,70 @@ function App() {
 
   const isSelectedTaskInActiveExecution =
     selectedTask?.is_codex_task_running ?? false;
+  const hasAnyTaskInActiveExecution = useMemo(
+    () => taskList.some((taskItem) => taskItem.is_codex_task_running),
+    [taskList]
+  );
   const canCompleteSelectedTask = selectedTask
     ? canCompleteTask(selectedTask, selectedTaskStage) &&
       !selectedTask.is_codex_task_running
     : false;
 
   useEffect(() => {
-    if (!isSelectedTaskInActiveExecution) {
+    latestTaskListRef.current = taskList;
+  }, [taskList]);
+
+  useEffect(() => {
+    if (!hasAnyTaskInActiveExecution) {
       return;
     }
     const pollingIntervalId = window.setInterval(() => {
-      void loadDashboardData(true, { includeGlobalLogs: false });
+      void loadDashboardData(true, {
+        includeGlobalLogs: false,
+        includeTaskCardMetadata: false,
+      });
     }, ACTIVE_DASHBOARD_POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(pollingIntervalId);
     };
-  }, [isSelectedTaskInActiveExecution]);
+  }, [hasAnyTaskInActiveExecution]);
+
+  async function refreshTaskCardMetadata(options?: {
+    fallbackTaskList?: Task[];
+    errorLabel?: string;
+  }): Promise<void> {
+    const fallbackTaskList = options?.fallbackTaskList ?? latestTaskListRef.current;
+    try {
+      const taskCardMetadataList = await taskApi.listCardMetadata();
+      setTaskCardMetadataMap(buildTaskCardMetadataMap(taskCardMetadataList));
+    } catch (taskCardMetadataError) {
+      console.error(
+        options?.errorLabel ?? "Failed to load task card metadata:",
+        taskCardMetadataError
+      );
+      setTaskCardMetadataMap((previousTaskCardMetadataMap) =>
+        buildTaskCardMetadataFallbackMap(
+          fallbackTaskList,
+          previousTaskCardMetadataMap
+        )
+      );
+    }
+  }
+
+  useEffect(() => {
+    const pollTaskCardMetadata = () => {
+      void refreshTaskCardMetadata();
+    };
+
+    pollTaskCardMetadata();
+    const metadataPollIntervalId = window.setInterval(
+      pollTaskCardMetadata,
+      TASK_CARD_METADATA_POLL_INTERVAL_MS
+    );
+    return () => {
+      window.clearInterval(metadataPollIntervalId);
+    };
+  }, []);
 
   useEffect(() => {
     if (visibleTaskList.length === 0) {
@@ -1083,9 +1165,12 @@ function App() {
     silent = false,
     options?: {
       includeGlobalLogs?: boolean;
+      includeTaskCardMetadata?: boolean;
     }
   ): Promise<void> {
     const shouldIncludeGlobalLogs = options?.includeGlobalLogs ?? true;
+    const shouldIncludeTaskCardMetadata =
+      options?.includeTaskCardMetadata ?? true;
     if (!silent) {
       setIsDashboardLoading(true);
     }
@@ -1095,15 +1180,22 @@ function App() {
     const devLogListPromise = shouldIncludeGlobalLogs
       ? logApi.list()
       : Promise.resolve<DevLog[] | null>(null);
+    const taskCardMetadataPromise = shouldIncludeTaskCardMetadata
+      ? taskApi.listCardMetadata()
+      : Promise.resolve<TaskCardMetadata[] | null>(null);
     const [
       runAccountResult,
       taskListResult,
       devLogListResult,
+      taskCardMetadataResult,
     ] = await Promise.allSettled([
       runAccountPromise,
       taskListPromise,
       devLogListPromise,
+      taskCardMetadataPromise,
     ]);
+    let nextTaskList: Task[] | null = null;
+    let shouldRefreshWaitingUserMetadata = false;
 
     // On fetch failure, preserve previous state rather than wiping to empty.
     // This prevents the UI from going blank during transient server restarts
@@ -1112,11 +1204,20 @@ function App() {
       setCurrentRunAccount(runAccountResult.value);
     }
     if (taskListResult.status === "fulfilled") {
-      const nextTaskList = sortTaskListByCreatedAt(taskListResult.value);
-      setTaskList(nextTaskList);
+      const previousTaskListSnapshot = latestTaskListRef.current;
+      const sortedNextTaskList = sortTaskListByCreatedAt(taskListResult.value);
+      nextTaskList = sortedNextTaskList;
+      shouldRefreshWaitingUserMetadata =
+        !shouldIncludeTaskCardMetadata &&
+        shouldRefreshTaskCardMetadataAfterTaskListUpdate(
+          previousTaskListSnapshot,
+          sortedNextTaskList
+        );
+      latestTaskListRef.current = sortedNextTaskList;
+      setTaskList(sortedNextTaskList);
       setSelectedTaskId((previousSelectedTaskId) => {
         if (!previousSelectedTaskId) return previousSelectedTaskId;
-        const hasMatchingTask = nextTaskList.some(
+        const hasMatchingTask = sortedNextTaskList.some(
           (taskItem) => taskItem.id === previousSelectedTaskId
         );
         return hasMatchingTask ? previousSelectedTaskId : null;
@@ -1126,6 +1227,28 @@ function App() {
       if (devLogListResult.value !== null) {
         setAllDevLogList(sortDevLogListByCreatedAt(devLogListResult.value));
       }
+    }
+    const fallbackTaskListForMetadata = nextTaskList ?? latestTaskListRef.current;
+    if (taskCardMetadataResult.status === "fulfilled") {
+      if (taskCardMetadataResult.value !== null) {
+        setTaskCardMetadataMap(
+          buildTaskCardMetadataMap(taskCardMetadataResult.value)
+        );
+      }
+    } else if (shouldIncludeTaskCardMetadata) {
+      setTaskCardMetadataMap((previousTaskCardMetadataMap) =>
+        buildTaskCardMetadataFallbackMap(
+          fallbackTaskListForMetadata,
+          previousTaskCardMetadataMap
+        )
+      );
+    }
+
+    if (shouldRefreshWaitingUserMetadata && nextTaskList !== null) {
+      void refreshTaskCardMetadata({
+        fallbackTaskList: nextTaskList,
+        errorLabel: "Failed to refresh waiting-user metadata:",
+      });
     }
 
     const dashboardErrors: string[] = [];
@@ -1140,6 +1263,13 @@ function App() {
     if (shouldIncludeGlobalLogs && devLogListResult.status === "rejected") {
       dashboardErrors.push("Failed to load timeline entries.");
       console.error(devLogListResult.reason);
+    }
+    if (
+      shouldIncludeTaskCardMetadata &&
+      taskCardMetadataResult.status === "rejected"
+    ) {
+      dashboardErrors.push("Failed to load task card metadata.");
+      console.error(taskCardMetadataResult.reason);
     }
 
     setErrorMessage(dashboardErrors.length > 0 ? dashboardErrors.join(" ") : null);
@@ -2471,12 +2601,33 @@ function App() {
                         <h2 className="devflow-detail__title">
                           {selectedTask.task_title}
                         </h2>
-                        {selectedTaskStage ? (
+                        {selectedTaskDisplayStage ? (
                           <StatusBadge
-                            status={selectedTaskStage}
+                            status={selectedTaskDisplayStage}
                             label={selectedTaskStageLabel ?? undefined}
                           />
                         ) : null}
+                      </div>
+                      <div className="devflow-detail__meta-row">
+                        <span className="devflow-detail__meta-pill">
+                          <span className="devflow-detail__meta-label">
+                            真实阶段
+                          </span>
+                          <span className="devflow-detail__meta-value">
+                            {formatStageLabel(selectedTask.workflow_stage)}
+                          </span>
+                        </span>
+                        <span
+                          className="devflow-detail__meta-pill"
+                          title={selectedTaskAiActivityTitle}
+                        >
+                          <span className="devflow-detail__meta-label">
+                            最近 AI
+                          </span>
+                          <span className="devflow-detail__meta-value">
+                            {selectedTaskAiActivityLabel}
+                          </span>
+                        </span>
                       </div>
                       <div className="devflow-detail__description-block">
                         <div
@@ -3857,7 +4008,7 @@ function ActionButton({
 }
 
 interface StatusBadgeProps {
-  status: RequirementStage;
+  status: RequirementDisplayStage;
   label?: string;
 }
 
@@ -3869,7 +4020,7 @@ function StatusBadge({ status, label }: StatusBadgeProps) {
         `devflow-badge--${status}`
       )}
     >
-      {label ?? formatStageLabel(status)}
+      {label ?? formatTaskDisplayStageLabel(status)}
     </span>
   );
 }
@@ -3905,11 +4056,14 @@ const RequirementCardButton = memo(function RequirementCardButton({
       >
         <div className="devflow-requirement-card__meta">
           <StatusBadge
-            status={requirementViewModel.stage}
-            label={requirementViewModel.stageLabel}
+            status={requirementViewModel.displayStage}
+            label={requirementViewModel.displayStageLabel}
           />
-          <span className="devflow-requirement-card__date">
-            {requirementViewModel.createdLabel}
+          <span
+            className="devflow-requirement-card__date"
+            title={requirementViewModel.cardMetaTitle}
+          >
+            {requirementViewModel.cardMetaLabel}
           </span>
         </div>
         <h3 className="devflow-requirement-card__title">
@@ -3925,14 +4079,16 @@ const RequirementCardButton = memo(function RequirementCardButton({
 
 function buildRequirementViewModel(
   taskItem: Task,
-  taskDevLogList: DevLog[]
+  taskDevLogList: DevLog[],
+  taskCardMetadata: TaskCardMetadata
 ): RequirementViewModel {
   return {
     task: taskItem,
     description: buildRequirementDescription(taskItem, taskDevLogList),
-    stage: deriveRequirementStage(taskItem, taskDevLogList),
-    stageLabel: formatDisplayStageLabel(taskItem, taskDevLogList),
-    createdLabel: formatMonthDay(taskItem.created_at),
+    displayStage: taskCardMetadata.display_stage_key,
+    displayStageLabel: taskCardMetadata.display_stage_label,
+    cardMetaLabel: formatTaskCardActivityLabel(taskCardMetadata.last_ai_activity_at),
+    cardMetaTitle: formatTaskCardActivityTitle(taskCardMetadata.last_ai_activity_at),
   };
 }
 
@@ -4614,31 +4770,163 @@ function deriveRequirementStage(
   return taskItem.workflow_stage;
 }
 
-function deriveSelfReviewDisplayState(
-  taskItem: Task,
-  taskDevLogList: DevLog[]
-): "passed_waiting" | null {
-  if (taskItem.workflow_stage !== WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
-    return null;
-  }
-
-  if (taskItem.is_codex_task_running) {
-    return null;
-  }
-
-  return hasLatestSelfReviewCyclePassed(taskDevLogList) ? "passed_waiting" : null;
+function buildTaskCardMetadataMap(
+  taskCardMetadataList: TaskCardMetadata[]
+): Record<string, TaskCardMetadata> {
+  return Object.fromEntries(
+    taskCardMetadataList.map((taskCardMetadata) => [
+      taskCardMetadata.task_id,
+      taskCardMetadata,
+    ])
+  );
 }
 
-function formatDisplayStageLabel(taskItem: Task, taskDevLogList: DevLog[]): string {
-  const selfReviewDisplayState = deriveSelfReviewDisplayState(
-    taskItem,
-    taskDevLogList
+function buildTaskCardMetadataFallbackMap(
+  taskList: Task[],
+  previousTaskCardMetadataMap: Record<string, TaskCardMetadata>
+): Record<string, TaskCardMetadata> {
+  return Object.fromEntries(
+    taskList.map((taskItem) => [
+      taskItem.id,
+      resolveTaskCardMetadataFromSnapshot(
+        taskItem,
+        previousTaskCardMetadataMap[taskItem.id]
+      ),
+    ])
   );
-  if (selfReviewDisplayState === "passed_waiting") {
-    return "Self Review Passed / Waiting to Complete";
+}
+
+function buildFallbackTaskCardMetadata(taskItem: Task): TaskCardMetadata {
+  return {
+    task_id: taskItem.id,
+    display_stage_key: taskItem.workflow_stage,
+    display_stage_label: formatStageLabel(taskItem.workflow_stage),
+    is_waiting_for_user: false,
+    last_ai_activity_at: taskItem.last_ai_activity_at,
+  };
+}
+
+function didTaskEnterWaitingUserMetadataRefreshWindow(
+  previousTaskSnapshot: Task | undefined,
+  nextTaskSnapshot: Task
+): boolean {
+  if (!previousTaskSnapshot) {
+    return false;
   }
 
-  return formatStageLabel(taskItem.workflow_stage);
+  return (
+    previousTaskSnapshot.is_codex_task_running &&
+    !nextTaskSnapshot.is_codex_task_running &&
+    WAITING_USER_METADATA_CANDIDATE_STAGE_SET.has(nextTaskSnapshot.workflow_stage)
+  );
+}
+
+function shouldRefreshTaskCardMetadataAfterTaskListUpdate(
+  previousTaskList: Task[],
+  nextTaskList: Task[]
+): boolean {
+  const previousTaskSnapshotMap = new Map(
+    previousTaskList.map((taskItem) => [taskItem.id, taskItem])
+  );
+  return nextTaskList.some((nextTaskItem) =>
+    didTaskEnterWaitingUserMetadataRefreshWindow(
+      previousTaskSnapshotMap.get(nextTaskItem.id),
+      nextTaskItem
+    )
+  );
+}
+
+function resolveTaskCardMetadata(
+  taskItem: Task,
+  taskCardMetadataMap: Record<string, TaskCardMetadata>
+): TaskCardMetadata {
+  return resolveTaskCardMetadataFromSnapshot(
+    taskItem,
+    taskCardMetadataMap[taskItem.id]
+  );
+}
+
+function resolveTaskCardMetadataFromSnapshot(
+  taskItem: Task,
+  cachedTaskCardMetadata: TaskCardMetadata | undefined
+): TaskCardMetadata {
+  const fallbackTaskCardMetadata = buildFallbackTaskCardMetadata(taskItem);
+  if (!cachedTaskCardMetadata) {
+    return fallbackTaskCardMetadata;
+  }
+
+  if (!isTaskCardMetadataCompatibleWithTaskSnapshot(taskItem, cachedTaskCardMetadata)) {
+    return fallbackTaskCardMetadata;
+  }
+
+  return {
+    ...cachedTaskCardMetadata,
+    last_ai_activity_at: selectNewestTaskCardActivityAt(
+      taskItem.last_ai_activity_at,
+      cachedTaskCardMetadata.last_ai_activity_at
+    ),
+  };
+}
+
+function isTaskCardMetadataCompatibleWithTaskSnapshot(
+  taskItem: Task,
+  taskCardMetadata: TaskCardMetadata
+): boolean {
+  if (taskCardMetadata.task_id !== taskItem.id) {
+    return false;
+  }
+
+  if (taskCardMetadata.display_stage_key === "waiting_user") {
+    return (
+      !taskItem.is_codex_task_running &&
+      WAITING_USER_METADATA_CANDIDATE_STAGE_SET.has(taskItem.workflow_stage)
+    );
+  }
+
+  return taskCardMetadata.display_stage_key === taskItem.workflow_stage;
+}
+
+function selectNewestTaskCardActivityAt(
+  taskLastAiActivityAt: string | null,
+  metadataLastAiActivityAt: string | null
+): string | null {
+  if (!taskLastAiActivityAt) {
+    return metadataLastAiActivityAt;
+  }
+  if (!metadataLastAiActivityAt) {
+    return taskLastAiActivityAt;
+  }
+
+  return toTimestampValue(taskLastAiActivityAt) >=
+    toTimestampValue(metadataLastAiActivityAt)
+    ? taskLastAiActivityAt
+    : metadataLastAiActivityAt;
+}
+
+function formatTaskDisplayStageLabel(
+  displayStage: RequirementDisplayStage
+): string {
+  if (displayStage === "waiting_user") {
+    return "等待用户";
+  }
+
+  return formatStageLabel(displayStage);
+}
+
+function formatTaskCardActivityLabel(lastAiActivityAt: string | null): string {
+  if (!lastAiActivityAt) {
+    return "AI --";
+  }
+
+  return `AI ${formatHourMinute(lastAiActivityAt)}`;
+}
+
+function formatTaskCardActivityTitle(lastAiActivityAt: string | null): string {
+  if (!lastAiActivityAt) {
+    return "最近 AI：暂无自动化输出";
+  }
+
+  return `最近 AI：${formatDateTime(lastAiActivityAt)}`;
 }
 
 function canCompleteTask(

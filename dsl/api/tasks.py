@@ -16,6 +16,7 @@ from dsl.models.task import Task
 from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
     TaskCreateSchema,
+    TaskCardMetadataSchema,
     TaskResponseSchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
@@ -60,6 +61,20 @@ _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST = [
     "轮 AI lint 定向修复完成，开始重新执行 pre-commit lint。",
 ]
 _ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
+_WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
+_WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
+_WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
+    WorkflowStage.BACKLOG: "Backlog",
+    WorkflowStage.PRD_GENERATING: "Drafting PRD",
+    WorkflowStage.PRD_WAITING_CONFIRMATION: "PRD Ready",
+    WorkflowStage.IMPLEMENTATION_IN_PROGRESS: "Coding",
+    WorkflowStage.SELF_REVIEW_IN_PROGRESS: "Self Review",
+    WorkflowStage.TEST_IN_PROGRESS: "Testing",
+    WorkflowStage.PR_PREPARING: "PR Prep",
+    WorkflowStage.ACCEPTANCE_IN_PROGRESS: "Acceptance",
+    WorkflowStage.CHANGES_REQUESTED: "Changes Requested",
+    WorkflowStage.DONE: "Done",
+}
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -98,6 +113,38 @@ def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
         task_obj.dev_logs,
         key=lambda dev_log_item: (dev_log_item.created_at, dev_log_item.id),
     )
+
+
+def _get_ordered_task_dev_logs_by_task_id(
+    db_session: Session,
+    task_id_list: list[str],
+) -> dict[str, list[DevLog]]:
+    """批量返回按时间排序的任务日志列表.
+
+    Args:
+        db_session: 数据库会话
+        task_id_list: 需要查询日志的任务 ID 列表
+
+    Returns:
+        dict[str, list[DevLog]]: `task_id -> ordered dev logs` 映射
+    """
+    ordered_task_dev_logs_by_task_id: dict[str, list[DevLog]] = {
+        task_id_str: [] for task_id_str in task_id_list
+    }
+    if not task_id_list:
+        return ordered_task_dev_logs_by_task_id
+
+    ordered_dev_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id.in_(task_id_list))
+        .order_by(DevLog.task_id.asc(), DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+    for dev_log_item in ordered_dev_log_list:
+        ordered_task_dev_logs_by_task_id.setdefault(dev_log_item.task_id, []).append(
+            dev_log_item
+        )
+    return ordered_task_dev_logs_by_task_id
 
 
 def _resolve_task_effective_work_dir_path(
@@ -363,6 +410,69 @@ def _create_manual_completion_override_log_if_needed(
     return manual_override_log_text
 
 
+def _format_workflow_stage_label(workflow_stage: WorkflowStage) -> str:
+    """格式化真实 workflow_stage 的默认展示文案.
+
+    Args:
+        workflow_stage: 真实工作流阶段
+
+    Returns:
+        str: 前端默认使用的阶段文案
+    """
+    return _WORKFLOW_STAGE_LABEL_MAP.get(
+        workflow_stage,
+        workflow_stage.value.replace("_", " "),
+    )
+
+
+def _build_task_card_metadata(
+    task_obj: Task,
+    ordered_task_dev_log_list: list[DevLog],
+    *,
+    is_task_running: bool,
+) -> TaskCardMetadataSchema:
+    """构建单个任务的卡片展示元数据.
+
+    Args:
+        task_obj: 任务对象
+        ordered_task_dev_log_list: 该任务按时间正序排列的日志列表
+        is_task_running: 当前后台自动化是否仍在运行
+
+    Returns:
+        TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
+    """
+    waiting_for_user_after_self_review = (
+        task_obj.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS
+        and not is_task_running
+        and _has_latest_self_review_cycle_passed(ordered_task_dev_log_list)
+    )
+    waiting_for_user_after_post_review_lint = (
+        task_obj.workflow_stage == WorkflowStage.TEST_IN_PROGRESS
+        and not is_task_running
+        and _has_latest_post_review_lint_cycle_passed(ordered_task_dev_log_list)
+    )
+    is_waiting_for_user = (
+        waiting_for_user_after_self_review or waiting_for_user_after_post_review_lint
+    )
+    display_stage_key = (
+        _WAITING_USER_DISPLAY_STAGE_KEY
+        if is_waiting_for_user
+        else task_obj.workflow_stage.value
+    )
+    display_stage_label = (
+        _WAITING_USER_DISPLAY_STAGE_LABEL
+        if is_waiting_for_user
+        else _format_workflow_stage_label(task_obj.workflow_stage)
+    )
+    return TaskCardMetadataSchema(
+        task_id=task_obj.id,
+        display_stage_key=display_stage_key,
+        display_stage_label=display_stage_label,
+        is_waiting_for_user=is_waiting_for_user,
+        last_ai_activity_at=task_obj.last_ai_activity_at,
+    )
+
+
 def _hydrate_task_response(
     task_obj: Task,
     *,
@@ -422,6 +532,43 @@ def list_tasks(
         )
         for task_item in task_list
     ]
+
+
+@router.get("/card-metadata", response_model=list[TaskCardMetadataSchema])
+def list_task_card_metadata(
+    db_session: Annotated[Session, Depends(get_db)],
+) -> list[TaskCardMetadataSchema]:
+    """列出任务卡片展示元数据.
+
+    该接口只返回 UI 展示层需要的派生信息，其中 `waiting_user`
+    仅表示“等待用户点击 Complete”的覆盖态，不代表新增了真实
+    `workflow_stage`。
+
+    Args:
+        db_session: 数据库会话
+
+    Returns:
+        list[TaskCardMetadataSchema]: 当前账户下全部任务的卡片展示元数据
+    """
+    run_account_id = _get_current_run_account_id(db_session)
+    task_list = TaskService.get_tasks(db_session, run_account_id)
+    task_id_list = [task_item.id for task_item in task_list]
+    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
+        db_session,
+        task_id_list,
+    )
+
+    task_card_metadata_list: list[TaskCardMetadataSchema] = []
+    for task_item in task_list:
+        task_card_metadata_list.append(
+            _build_task_card_metadata(
+                task_item,
+                ordered_task_dev_logs_by_task_id.get(task_item.id, []),
+                is_task_running=is_codex_task_running(task_item.id),
+            )
+        )
+
+    return task_card_metadata_list
 
 
 @router.post("", response_model=TaskResponseSchema, status_code=status.HTTP_201_CREATED)

@@ -1,0 +1,33 @@
+# Progress
+
+## 2026-03-26
+- Initialized planning session with `bash /home/atahang/.cc-switch/skills/planning-with-files/scripts/init-session.sh`.
+- Replaced migrated planning files with task-specific entries for the waiting-user card metadata bug.
+- Located likely backend/frontend files relevant to the issue and prepared for code-path inspection.
+- Read the active PRD and confirmed the issue is a display-state consistency bug, not a request to add a real workflow stage.
+- Inspected the current backend schema/API/service and frontend dashboard code; confirmed the requested card-metadata API and `last_ai_activity_at` persistence are not yet implemented.
+- Confirmed the active dashboard path is `frontend/src/App.tsx`; requirement cards and the detail header both still depend on local helper logic instead of a shared metadata API.
+- Identified the concrete frontend integration point: `loadDashboardData()` plus requirement-card/header view-model helpers.
+- Confirmed reusable backend helper points for the implementation: settled-cycle detection in `dsl/api/tasks.py` and automated log persistence in `dsl/services/codex_runner.py`.
+- Implemented `Task.last_ai_activity_at` persistence across ORM, schema, SQLite incremental patching, and Codex automated log writes.
+- Added `GET /api/tasks/card-metadata` plus backend display-stage derivation for settled self-review and settled post-review lint waiting states.
+- Rewired `frontend/src/App.tsx` so sidebar cards and the detail header both consume the same task-card metadata, render a `waiting_user` badge style, and show deterministic AI activity labels.
+- Added an independent 60-second metadata poll plus a one-shot refresh when a selected task first settles into the waiting-user window, keeping the new metadata off the existing 3-second hot path.
+- Updated docs (`docs/database/schema.md`, `docs/api/references.md`, `docs/architecture/system-design.md`) to describe `waiting_user` as a display-only state and document `last_ai_activity_at`.
+- Added regression coverage for card-metadata derivation and automated `last_ai_activity_at` refresh behavior.
+- Verification results:
+  - `uv run pytest tests/test_tasks_api.py tests/test_codex_runner.py -q` -> PASS (`32 passed`)
+  - `uv run pytest -q` -> PASS (`103 passed, 1 pre-existing warning from ai_agent/examples/test_utils_model_loader.py`)
+  - `cd frontend && npm run build` -> PASS
+  - `uv run mkdocs build` -> PASS
+- Re-opened the task for blocker-only follow-up after self-review reported two remaining issues in `frontend/src/App.tsx`: non-selected tasks do not get an immediate waiting-user metadata refresh, and failed metadata requests keep stale `taskCardMetadataMap` entries alive.
+- Planned the blocker fix around two targeted frontend changes: broaden the active `/tasks` polling trigger to any running task plus transition-based metadata refresh, and make metadata errors rebuild the map item-by-item from task snapshots without discarding still-compatible cached entries.
+- Implemented the blocker-only follow-up in `frontend/src/App.tsx`: metadata failure fallback now preserves compatible cached `waiting_user` metadata while synthesizing fallback entries for missing or incompatible tasks, and `resolveTaskCardMetadata(...)` rejects cached metadata that no longer matches the latest task state while preserving the newest AI activity timestamp.
+- Restored the selected-task execution banner variable after widening the polling scope, and tightened the task-list update flow so TypeScript can prove the refreshed list is non-null inside the success branch.
+- Verification results for the blocker fix:
+  - `cd frontend && npm run build` -> PASS
+- Re-opened the task again for the final blocker-only follow-up after self-review identified a regression in the new fallback path: a failed `/api/tasks/card-metadata` request still replaces valid cached `waiting_user` metadata with task-derived `Testing`/`Self Review`.
+- Confirmed the remaining fix scope is fully contained in `frontend/src/App.tsx`, centered on `refreshTaskCardMetadata()`, the `loadDashboardData()` metadata error branch, and how fallback metadata maps are constructed from `taskList`.
+- Implemented the final follow-up in `frontend/src/App.tsx`: both metadata-failure branches now use a shared snapshot resolver that keeps any cache entry still compatible with the latest task snapshot, so transient metadata outages no longer erase valid `waiting_user` card state.
+- Verification results for the final blocker fix:
+  - `cd frontend && npm run build` -> PASS

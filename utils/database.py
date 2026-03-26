@@ -27,6 +27,10 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added stage_updated_at column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN last_ai_activity_at DATETIME",
+        "Migration: added last_ai_activity_at column to tasks",
+    ),
+    (
         "ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)",
         "Migration: added repo_remote_url column to projects",
     ),

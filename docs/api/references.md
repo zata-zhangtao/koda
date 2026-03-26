@@ -61,6 +61,7 @@
     options:
       members:
         - list_tasks
+        - list_task_card_metadata
         - create_task
         - update_task_status
         - update_task_stage
@@ -74,6 +75,11 @@
         - open_task_terminal
         - update_task
         - get_task
+
+## 响应 Schema
+
+::: dsl.schemas.task_schema.TaskCardMetadataSchema
+    handler: python
 
 ::: dsl.api.logs
     handler: python

@@ -12,6 +12,7 @@ import type {
   Project,
   RunAccount,
   Task,
+  TaskCardMetadata,
   TaskChronicle,
   TimelineEntry,
   WebDAVSettings,
@@ -111,6 +112,9 @@ export const appConfigApi = {
 export const taskApi = {
   /** 列出任务 */
   list: () => fetchApi<Task[]>("/tasks"),
+
+  /** 列出任务卡片展示元数据 */
+  listCardMetadata: () => fetchApi<TaskCardMetadata[]>("/tasks/card-metadata"),
 
   /** 创建任务 */
   create: (data: { task_title: string; project_id?: string | null; requirement_brief?: string | null }) =>

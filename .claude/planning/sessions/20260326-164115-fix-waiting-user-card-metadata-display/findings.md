@@ -1,0 +1,18 @@
+# Findings
+
+## 2026-03-26
+- Confirmed the active PRD path is `tasks/prd-ac901b14.md`.
+- Repository contains likely backend entrypoints under `dsl/api/tasks.py`, `dsl/services/task_service.py`, `dsl/services/codex_runner.py`, and likely frontend consumers under `frontend/src/App.tsx`, `frontend/src/components/Sidebar.tsx`, and `frontend/src/types/index.ts`.
+- Current planning files were migrated from older tasks, so they were reset to avoid mixing unrelated work into this execution trace.
+- PRD confirms the intended architecture: keep `workflow_stage` as the real state, expose a derived `waiting_user` display state via `GET /api/tasks/card-metadata`, and poll that metadata every 60 seconds separately from `/api/tasks`.
+- The current bug described in the PRD is specifically that the detail area already recognizes the settled post-review state, while the left sidebar still maps `test_in_progress` directly to `Testing`.
+- Current backend implementation does not yet expose `GET /api/tasks/card-metadata`; `dsl/api/tasks.py`, `dsl/services/task_service.py`, `dsl/schemas/task_schema.py`, `dsl/models/task.py`, and `utils/database.py` also show no existing `last_ai_activity_at` field or card-metadata schema/service.
+- Current frontend implementation still computes display labels locally inside `frontend/src/App.tsx`; `formatDisplayStageLabel(...)` only special-cases settled self-review and does not cover settled post-review lint, while the standalone `frontend/src/components/Sidebar.tsx` is not the active dashboard path for this bug.
+- `frontend/src/App.tsx` currently drives both the requirement card badge and selected-task header label from local helper functions: `deriveRequirementStage(...)` returns the raw `workflow_stage`, and `formatDisplayStageLabel(...)` only exposes `"Self Review Passed / Waiting to Complete"` for settled self-review. This explains why `test_in_progress` still renders as `Testing` on the left.
+- Existing task API tests cover resume/complete semantics around settled self-review and settled post-review lint, so the new display-state layer must not alter those workflow rules; it should only add a separate metadata response plus timestamps.
+- `loadDashboardData()` currently fetches only `/api/tasks`, `run-account`, and optionally global logs. There is no separate 60-second metadata polling path yet, so both the display-stage override and AI activity timestamp still need to be introduced end to end.
+- Backend already contains reusable settled-cycle helpers in `dsl/api/tasks.py`: `_has_latest_self_review_cycle_passed(...)` and `_has_latest_post_review_lint_cycle_passed(...)`. These can drive card metadata without changing resume/complete rules.
+- `dsl/services/codex_runner.py` centralizes automated DevLog persistence via `_write_log_to_db(...)`, making it the correct place to refresh `Task.last_ai_activity_at` on every automated AI output.
+- The bug is not only missing `test_in_progress -> waiting_user` derivation. The sidebar and detail header were reading different freshness levels of log data (`global logs` vs `selectedTaskLogList`), which is why the screenshot could already show “等待用户” on the right while the left card still stayed on `Testing`.
+- The implemented fix uses a dedicated `GET /api/tasks/card-metadata` route plus a new `Task.last_ai_activity_at` field, so the display override and “最近 AI”活动时间 now come from one backend-derived source.
+- A pure 60-second metadata poll would still leave a stale window exactly when automation stops, so the frontend also needs a one-shot metadata refresh when a selected task first enters the settled self-review or settled post-review-lint waiting window.

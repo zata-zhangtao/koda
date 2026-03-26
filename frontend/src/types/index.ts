@@ -34,6 +34,9 @@ export enum WorkflowStage {
   DONE = "done",
 }
 
+/** 任务卡片展示态 key */
+export type TaskDisplayStageKey = WorkflowStage | "waiting_user";
+
 /** AI 处理状态 */
 export enum AIProcessingStatus {
   PENDING = "PENDING",
@@ -84,12 +87,22 @@ export interface Task {
   task_title: string;
   lifecycle_status: TaskLifecycleStatus;
   workflow_stage: WorkflowStage;
+  last_ai_activity_at: string | null;
   worktree_path: string | null;
   requirement_brief: string | null;
   created_at: string;
   closed_at: string | null;
   log_count: number;
   is_codex_task_running: boolean;
+}
+
+/** 任务卡片与详情头部共用的展示元数据 */
+export interface TaskCardMetadata {
+  task_id: string;
+  display_stage_key: TaskDisplayStageKey;
+  display_stage_label: string;
+  is_waiting_for_user: boolean;
+  last_ai_activity_at: string | null;
 }
 
 /** DevLog 类型 */

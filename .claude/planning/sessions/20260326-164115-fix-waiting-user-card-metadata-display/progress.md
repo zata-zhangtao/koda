@@ -1,0 +1,22 @@
+# Progress
+
+## 2026-03-26
+- Initialized planning session with `bash /home/atahang/.cc-switch/skills/planning-with-files/scripts/init-session.sh`.
+- Replaced migrated planning files with task-specific entries for the waiting-user card metadata bug.
+- Located likely backend/frontend files relevant to the issue and prepared for code-path inspection.
+- Read the active PRD and confirmed the issue is a display-state consistency bug, not a request to add a real workflow stage.
+- Inspected the current backend schema/API/service and frontend dashboard code; confirmed the requested card-metadata API and `last_ai_activity_at` persistence are not yet implemented.
+- Confirmed the active dashboard path is `frontend/src/App.tsx`; requirement cards and the detail header both still depend on local helper logic instead of a shared metadata API.
+- Identified the concrete frontend integration point: `loadDashboardData()` plus requirement-card/header view-model helpers.
+- Confirmed reusable backend helper points for the implementation: settled-cycle detection in `dsl/api/tasks.py` and automated log persistence in `dsl/services/codex_runner.py`.
+- Implemented `Task.last_ai_activity_at` persistence across ORM, schema, SQLite incremental patching, and Codex automated log writes.
+- Added `GET /api/tasks/card-metadata` plus backend display-stage derivation for settled self-review and settled post-review lint waiting states.
+- Rewired `frontend/src/App.tsx` so sidebar cards and the detail header both consume the same task-card metadata, render a `waiting_user` badge style, and show deterministic AI activity labels.
+- Added an independent 60-second metadata poll plus a one-shot refresh when a selected task first settles into the waiting-user window, keeping the new metadata off the existing 3-second hot path.
+- Updated docs (`docs/database/schema.md`, `docs/api/references.md`, `docs/architecture/system-design.md`) to describe `waiting_user` as a display-only state and document `last_ai_activity_at`.
+- Added regression coverage for card-metadata derivation and automated `last_ai_activity_at` refresh behavior.
+- Verification results:
+  - `uv run pytest tests/test_tasks_api.py tests/test_codex_runner.py -q` -> PASS (`32 passed`)
+  - `uv run pytest -q` -> PASS (`103 passed, 1 pre-existing warning from ai_agent/examples/test_utils_model_loader.py`)
+  - `cd frontend && npm run build` -> PASS
+  - `uv run mkdocs build` -> PASS

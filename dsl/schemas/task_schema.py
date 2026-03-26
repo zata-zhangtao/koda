@@ -77,6 +77,7 @@ class TaskResponseSchema(DSLResponseSchema):
         task_title: 任务标题
         lifecycle_status: 任务生命周期状态（向后兼容）
         workflow_stage: 工作流业务阶段；后台运行态由 is_codex_task_running 补充
+        last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
         created_at: 创建时间
         closed_at: 关闭时间
         log_count: 日志条目数量（计算字段）
@@ -94,6 +95,10 @@ class TaskResponseSchema(DSLResponseSchema):
         default=WorkflowStage.BACKLOG,
         description="工作流业务阶段",
     )
+    last_ai_activity_at: datetime | None = Field(
+        None,
+        description="最近一次 Codex 自动化输出写入时间",
+    )
     worktree_path: str | None = Field(None, description="git worktree 绝对路径")
     requirement_brief: str | None = Field(None, description="需求描述文本")
     created_at: datetime = Field(..., description="创建时间")
@@ -102,4 +107,34 @@ class TaskResponseSchema(DSLResponseSchema):
     is_codex_task_running: bool = Field(
         default=False,
         description="该任务的后台自动化是否仍在运行",
+    )
+
+
+class TaskCardMetadataSchema(DSLResponseSchema):
+    """Task 卡片与详情头部共用的展示元数据.
+
+    该 Schema 只描述 UI 展示态，不会改变 `Task.workflow_stage`
+    这一真实工作流阶段字段。
+
+    Attributes:
+        task_id: 对应任务 ID
+        display_stage_key: 展示态 key；可能为 `waiting_user` 或真实 workflow_stage 值
+        display_stage_label: 直接给前端 badge 使用的文案
+        is_waiting_for_user: 当前是否处于“等待用户”展示态
+        last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
+    """
+
+    task_id: str = Field(..., description="对应任务 ID")
+    display_stage_key: str = Field(
+        ...,
+        description="展示态 key；可能为 waiting_user 或真实 workflow_stage 值",
+    )
+    display_stage_label: str = Field(..., description="展示态文案")
+    is_waiting_for_user: bool = Field(
+        ...,
+        description="当前是否处于等待用户展示态",
+    )
+    last_ai_activity_at: datetime | None = Field(
+        None,
+        description="最近一次 Codex 自动化输出写入时间",
     )

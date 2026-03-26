@@ -558,6 +558,38 @@ img {
   margin-bottom: 10px;
 }
 
+.devflow-detail__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.devflow-detail__meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(245, 245, 244, 0.95);
+  color: #57534e;
+}
+
+.devflow-detail__meta-label {
+  color: #a8a29e;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.devflow-detail__meta-value {
+  color: #292524;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .devflow-detail__title {
   margin: 0;
   font-size: clamp(1.6rem, 3.2vw, 2.2rem);
@@ -2193,6 +2225,11 @@ img {
 .devflow-badge--test_in_progress {
   background: rgba(6, 182, 212, 0.11);
   color: #0e7490;
+}
+
+.devflow-badge--waiting_user {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
 }
 
 .devflow-badge--pr_preparing {

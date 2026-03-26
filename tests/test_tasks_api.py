@@ -15,6 +15,7 @@ from dsl.api.tasks import (
     complete_task,
     get_task,
     get_task_prd_file,
+    list_task_card_metadata,
     list_tasks,
     regenerate_task_prd,
     resume_task,
@@ -25,6 +26,7 @@ from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
 from utils.database import Base
+from utils.helpers import serialize_datetime_for_api
 
 
 @pytest.fixture
@@ -104,6 +106,104 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+
+
+def test_list_task_card_metadata_derives_waiting_user_without_changing_workflow_stage(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card metadata should expose waiting_user as a display-only override."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    review_waiting_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Self review waiting",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    )
+    lint_waiting_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint waiting",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    still_running_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint still running",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    db_session.add_all([review_waiting_task, lint_waiting_task, still_running_task])
+    db_session.commit()
+
+    review_waiting_task.last_ai_activity_at = review_waiting_task.created_at
+    lint_waiting_task.last_ai_activity_at = lint_waiting_task.created_at
+    still_running_task.last_ai_activity_at = still_running_task.created_at
+    db_session.add_all([review_waiting_task, lint_waiting_task, still_running_task])
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=review_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="AI 自检闭环完成",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=lint_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="post-review lint 闭环完成：pre-commit 已通过",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=still_running_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="post-review lint 闭环完成：pre-commit 已通过",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        tasks_api,
+        "is_codex_task_running",
+        lambda task_id: task_id == still_running_task.id,
+    )
+
+    task_card_metadata_list = list_task_card_metadata(db_session)
+    task_card_metadata_by_task_id = {
+        task_card_metadata.task_id: task_card_metadata
+        for task_card_metadata in task_card_metadata_list
+    }
+
+    review_waiting_metadata = task_card_metadata_by_task_id[review_waiting_task.id]
+    lint_waiting_metadata = task_card_metadata_by_task_id[lint_waiting_task.id]
+    still_running_metadata = task_card_metadata_by_task_id[still_running_task.id]
+
+    assert review_waiting_metadata.display_stage_key == "waiting_user"
+    assert review_waiting_metadata.display_stage_label == "等待用户"
+    assert review_waiting_metadata.is_waiting_for_user is True
+    assert review_waiting_metadata.model_dump(mode="json")[
+        "last_ai_activity_at"
+    ] == serialize_datetime_for_api(review_waiting_task.last_ai_activity_at)
+
+    assert lint_waiting_metadata.display_stage_key == "waiting_user"
+    assert lint_waiting_metadata.display_stage_label == "等待用户"
+    assert lint_waiting_metadata.is_waiting_for_user is True
+
+    assert (
+        still_running_metadata.display_stage_key == WorkflowStage.TEST_IN_PROGRESS.value
+    )
+    assert still_running_metadata.display_stage_label == "Testing"
+    assert still_running_metadata.is_waiting_for_user is False
 
 
 def test_regenerate_task_prd_schedules_background_job_with_media_context(

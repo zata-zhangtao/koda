@@ -126,6 +126,8 @@ flowchart TD
 
 `test_in_progress` 现在已有第一种真实落地语义：承载 post-review pre-commit lint 与 lint-fix 闭环；更重的容器级集成测试仍属于后续自动化扩展。`acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
 
+当任务真实阶段停在 `self_review_in_progress` 或 `test_in_progress`，且最近一轮 review / post-review lint 已通过、后台自动化也已经空闲时，前端会通过 `GET /api/tasks/card-metadata` 把 badge 展示覆盖为“等待用户”。这只是展示层状态，真实 `workflow_stage` 不会变成新的 `waiting_user`。
+
 ## 任务与时间线的数据回路
 
 一个典型的任务执行会经过下面的链路：
@@ -135,9 +137,11 @@ flowchart TD
 3. 后端根据任务上下文构造 Prompt
 4. `codex exec` 在项目根目录或 worktree 中执行
 5. 标准输出被批量写回 `DevLog`
-6. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志，而不是重复重拉大批量时间线
-7. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
-8. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
+6. 每次自动化输出落 `DevLog` 时，后端会同步刷新 `Task.last_ai_activity_at`
+7. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志，而不是重复重拉大批量时间线
+8. 左侧需求卡片与详情头部每 60 秒单独轮询 `/api/tasks/card-metadata`，统一消费 badge 展示态与 `last_ai_activity_at`
+9. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
+10. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md` 的内容；后端会按该任务前缀做兼容查找
 
 为了避免这条链路在 SQLite 上放大锁竞争，任务列表使用聚合查询计算 `log_count`，日志列表在同一条查询中联表带回 `task_title`，而不是在响应阶段触发额外的关系懒加载。
 

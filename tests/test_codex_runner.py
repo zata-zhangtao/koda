@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
@@ -174,6 +175,68 @@ def test_finalize_completion_in_db_refreshes_stage_updated_at() -> None:
             assert reloaded_task_obj.stage_updated_at > original_stage_updated_at
             assert reloaded_task_obj.closed_at == reloaded_task_obj.stage_updated_at
             assert reloaded_task_obj.worktree_path is None
+        finally:
+            verification_session.close()
+    finally:
+        seed_session.close()
+
+
+def test_write_log_to_db_refreshes_last_ai_activity_at() -> None:
+    """Automated log writes should also refresh the task-level AI activity timestamp."""
+    session_factory = _build_db_session_factory()
+    seed_session = session_factory()
+    try:
+        run_account_obj = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="Linux",
+            git_branch_name=None,
+            is_active=True,
+        )
+        seed_session.add(run_account_obj)
+        seed_session.commit()
+
+        task_obj = Task(
+            run_account_id=run_account_obj.id,
+            task_title="Refresh AI activity",
+            workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+            lifecycle_status=TaskLifecycleStatus.OPEN,
+        )
+        seed_session.add(task_obj)
+        seed_session.commit()
+        task_id_str = task_obj.id
+        run_account_id_str = run_account_obj.id
+
+        original_session_local = codex_runner.SessionLocal
+        codex_runner.SessionLocal = session_factory
+        try:
+            codex_runner._write_log_to_db(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                text_content_str="Codex emitted a new line.",
+            )
+        finally:
+            codex_runner.SessionLocal = original_session_local
+
+        verification_session = session_factory()
+        try:
+            reloaded_task_obj = (
+                verification_session.query(Task).filter(Task.id == task_id_str).first()
+            )
+            persisted_dev_log_obj = (
+                verification_session.query(DevLog)
+                .filter(DevLog.task_id == task_id_str)
+                .first()
+            )
+
+            assert reloaded_task_obj is not None
+            assert persisted_dev_log_obj is not None
+            assert reloaded_task_obj.last_ai_activity_at is not None
+            assert (
+                reloaded_task_obj.last_ai_activity_at
+                == persisted_dev_log_obj.created_at
+            )
+            assert persisted_dev_log_obj.text_content == "Codex emitted a new line."
         finally:
             verification_session.close()
     finally:

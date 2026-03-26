@@ -1755,6 +1755,9 @@ def _write_log_to_db(
 ) -> None:
     """向数据库写入一条 DevLog（同步，供 asyncio.to_thread 使用）.
 
+    日志写入与 `Task.last_ai_activity_at` 刷新分成两个事务执行，
+    这样即使后者失败，也不会回滚已经成功落库的 AI 输出日志。
+
     Args:
         task_id_str: 关联任务 ID
         run_account_id_str: 运行账户 ID
@@ -1763,19 +1766,34 @@ def _write_log_to_db(
     """
     from dsl.models.dev_log import DevLog
     from dsl.models.enums import DevLogStateTag
+    from dsl.models.task import Task
 
     db_session = SessionLocal()
     try:
+        created_at_datetime = utc_now_naive()
         new_dev_log = DevLog(
             id=str(uuid.uuid4()),
             task_id=task_id_str,
             run_account_id=run_account_id_str,
             text_content=text_content_str,
             state_tag=DevLogStateTag(state_tag_value),
-            created_at=utc_now_naive(),
+            created_at=created_at_datetime,
         )
         db_session.add(new_dev_log)
         db_session.commit()
+
+        try:
+            task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
+            if task_obj is not None:
+                task_obj.last_ai_activity_at = created_at_datetime
+                db_session.commit()
+        except Exception as task_timestamp_error:
+            logger.error(
+                "Failed to refresh last_ai_activity_at for task %s...: %s",
+                task_id_str[:8],
+                task_timestamp_error,
+            )
+            db_session.rollback()
     except Exception as db_write_error:
         logger.error(
             f"Failed to write DevLog for task {task_id_str[:8]}...: {db_write_error}"

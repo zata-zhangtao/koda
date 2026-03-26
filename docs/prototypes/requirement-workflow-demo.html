@@ -48,6 +48,7 @@
     .stage-badge--impl          { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
     .stage-badge--review        { background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb; }
     .stage-badge--test          { background: #1c3a2f; color: #34d399; border: 1px solid #059669; }
+    .stage-badge--waiting_user  { background: #78350f; color: #fbbf24; border: 1px solid #f59e0b; }
     .stage-badge--pr            { background: #2d1f63; color: #a78bfa; border: 1px solid #7c3aed; }
     .stage-badge--acceptance    { background: #1f2d1f; color: #86efac; border: 1px solid #16a34a; }
     .stage-badge--changes       { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
@@ -62,13 +63,18 @@
     .task-card:hover { background: var(--bg-card2); border-color: var(--border); }
     .task-card.active { background: var(--bg-card2); border-color: var(--blue); }
     .task-card__title { font-weight: 500; font-size: 13px; margin-bottom: 6px; }
-    .task-card__meta { display: flex; align-items: center; gap: 8px; }
+    .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .task-card__stamp { font-size: 11px; color: var(--text-secondary); }
+    .task-card__stamp strong { color: var(--text-primary); font-weight: 600; }
 
     /* Detail Panel */
     .detail { flex: 1; overflow-y: auto; padding: 28px 32px; }
     .detail__header { margin-bottom: 24px; }
     .detail__title { font-size: 20px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.4px; }
     .detail__desc { color: var(--text-secondary); line-height: 1.6; font-size: 13px; }
+    .detail__meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .detail__meta-item { font-size: 12px; color: var(--text-secondary); }
+    .detail__status-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #221718; border: 1px solid #92400e; color: #fde68a; font-size: 12px; line-height: 1.5; }
 
     /* Action Bar */
     .action-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px; padding: 16px; background: var(--bg-card); border-radius: 10px; border: 1px solid var(--border); }
@@ -228,9 +234,22 @@ let tasks = [
       { kind: 'system', icon: '✅', time: '12:00', text: 'PR #42 已合并，需求验收通过，标记为完成。' },
     ],
   },
+  {
+    id: '5',
+    title: '左侧卡片等待用户状态同步',
+    description: '当 post-review lint 已通过且等待用户点击 Complete 时，左侧卡片应显示「等待用户」，并补充上次 AI 活动时间。',
+    stage: 'testing',
+    waitingUser: true,
+    lastAiActivity: '18:36',
+    logs: [
+      { kind: 'system', icon: '🧪', time: '18:31', text: '已进入自动化验证阶段，开始执行 post-review lint。' },
+      { kind: 'ai', icon: '🤖', time: '18:36', text: 'post-review lint 闭环完成：pre-commit 已通过。' },
+      { kind: 'system', icon: '⏸️', time: '18:36', text: '当前 workflow_stage 保持为 testing，但展示态切换为「等待用户」，等待用户点击 Complete。' },
+    ],
+  },
 ];
 
-let selectedId = '1';
+let selectedId = '5';
 
 // ============================================================
 // Helpers
@@ -239,9 +258,34 @@ function getStageInfo(stageId) {
   return STAGES.find(s => s.id === stageId) || STAGES[0];
 }
 
-function stageBadge(stageId) {
+function stageBadge(stageId, labelOverride = null, badgeClassOverride = null) {
   const s = getStageInfo(stageId);
-  return `<span class="stage-badge stage-badge--${s.badgeClass}">${s.label}</span>`;
+  const badgeLabel = labelOverride || s.label;
+  const badgeClass = badgeClassOverride || s.badgeClass;
+  return `<span class="stage-badge stage-badge--${badgeClass}">${badgeLabel}</span>`;
+}
+
+function getDisplayStageBadge(task) {
+  if (task.waitingUser) {
+    return {
+      label: '等待用户',
+      badgeClass: 'waiting_user',
+    };
+  }
+
+  const stageInfo = getStageInfo(task.stage);
+  return {
+    label: stageInfo.label,
+    badgeClass: stageInfo.badgeClass,
+  };
+}
+
+function getLastAiActivityText(task) {
+  if (!task.lastAiActivity) {
+    return 'AI --';
+  }
+
+  return `AI ${task.lastAiActivity}`;
 }
 
 function showNotification(msg, type = 'success') {
@@ -307,10 +351,43 @@ function handleStartExecution(taskId) {
   setBusy('btn-execute', true);
   setTimeout(() => {
     task.stage = 'implementation';
+    task.waitingUser = false;
+    task.lastAiActivity = now();
     task.logs.push({ kind: 'system', icon: '⚡', time: now(), text: '开始执行：AI 进入无打扰编码阶段，正在基于 PRD 生成代码…' });
     renderAll();
     showNotification('🚀 AI 开始执行编码任务', 'success');
   }, 900);
+}
+
+function handleMarkWaitingUser(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  task.stage = 'testing';
+  task.waitingUser = true;
+  task.lastAiActivity = now();
+  task.logs.push({
+    kind: 'system',
+    icon: '⏸️',
+    time: now(),
+    text: 'post-review lint 已通过。展示态从「测试中」切换为「等待用户」，并记录上次 AI 活动时间。'
+  });
+  renderAll();
+  showNotification('已切换到等待用户展示态', 'info');
+}
+
+function handleCompleteWaiting(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  task.waitingUser = false;
+  task.stage = 'pr_preparing';
+  task.logs.push({
+    kind: 'human',
+    icon: '👤',
+    time: now(),
+    text: '用户点击 Complete，任务进入 PR 准备阶段。'
+  });
+  renderAll();
+  showNotification('已进入 PR 准备阶段', 'success');
 }
 
 function handleNextStage(taskId) {
@@ -332,12 +409,18 @@ function now() {
 // ============================================================
 function renderTaskList() {
   const container = document.getElementById('taskList');
-  container.innerHTML = tasks.map(t => `
-    <div class="task-card ${t.id === selectedId ? 'active' : ''}" onclick="selectTask('${t.id}')">
-      <div class="task-card__title">${t.title}</div>
-      <div class="task-card__meta">${stageBadge(t.stage)}</div>
-    </div>
-  `).join('');
+  container.innerHTML = tasks.map(t => {
+    const displayStageBadge = getDisplayStageBadge(t);
+    return `
+      <div class="task-card ${t.id === selectedId ? 'active' : ''}" onclick="selectTask('${t.id}')">
+        <div class="task-card__title">${t.title}</div>
+        <div class="task-card__meta">
+          ${stageBadge(t.stage, displayStageBadge.label, displayStageBadge.badgeClass)}
+          <span class="task-card__stamp"><strong>${getLastAiActivityText(t)}</strong></span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderStateMachine(currentStage) {
@@ -383,6 +466,16 @@ function renderActionButtons(task) {
       <span>→ 推进阶段（演示）</span></button>`;
   }
 
+  if (s === 'testing' && !task.waitingUser) {
+    buttons += `<button class="btn btn--outline btn--sm" onclick="handleMarkWaitingUser('${task.id}')">
+      <span>⏸ 标记等待用户</span></button>`;
+  }
+
+  if (task.waitingUser) {
+    buttons += `<button class="btn btn--confirm btn--sm" onclick="handleCompleteWaiting('${task.id}')">
+      <span>✅ Complete（演示）</span></button>`;
+  }
+
   if (!buttons) buttons = `<span style="color:var(--text-secondary); font-size:13px;">✅ 所有阶段已完成</span>`;
 
   return `<div>
@@ -409,12 +502,27 @@ function renderDetail() {
   const task = tasks.find(t => t.id === selectedId);
   if (!task) return;
 
-  document.getElementById('headerStage').innerHTML = stageBadge(task.stage);
+  const displayStageBadge = getDisplayStageBadge(task);
+  document.getElementById('headerStage').innerHTML = stageBadge(
+    task.stage,
+    displayStageBadge.label,
+    displayStageBadge.badgeClass
+  );
 
   document.getElementById('detailPanel').innerHTML = `
     <div class="detail__header">
       <div class="detail__title">${task.title}</div>
       <div class="detail__desc">${task.description}</div>
+      <div class="detail__meta">
+        <span class="detail__meta-item">Workflow Stage: <strong>${getStageInfo(task.stage).label}</strong></span>
+        <span class="detail__meta-item">上次 AI 活动: <strong>${task.lastAiActivity || '--'}</strong></span>
+      </div>
+      ${task.waitingUser ? `
+        <div class="detail__status-note">
+          当前真实 workflow stage 仍为 <strong>testing</strong>，但卡片与详情头部统一展示为
+          <strong>等待用户</strong>，避免左侧卡片继续显示“测试中”。
+        </div>
+      ` : ''}
     </div>
     ${renderStateMachine(task.stage)}
     ${renderActionButtons(task)}
