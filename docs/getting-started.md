@@ -142,7 +142,12 @@ just docs-build
 
 ### 任务点击“开始任务”后没有自动生成 PRD
 
-优先检查开发机上是否安装了 `codex` CLI。当前实现中，如果找不到 `codex`，后端会写入一条 `BUG` 类型的 DevLog，并把阶段回退到 `changes_requested`。
+优先检查当前配置执行器是否安装可用：
+
+- `KODA_AUTOMATION_RUNNER=codex` 时检查 `codex`
+- `KODA_AUTOMATION_RUNNER=claude` 时检查 `claude`
+
+当前实现中，如果找不到对应可执行文件，后端会写入一条带 `runner_kind` 的 `BUG` 类型 DevLog，并把阶段回退到 `changes_requested`。
 
 ### 点击“打开终端”没有反应或报错
 

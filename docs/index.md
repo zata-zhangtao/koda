@@ -7,7 +7,7 @@ Koda 当前的真实主线不是“通用 Python 模板”，而是一套围绕 
 仓库已经落地的能力可以概括为三件事：
 
 - 把需求拆成 `Task`，并用 `DevLog` 持续记录上下文、反馈、附件和 AI 输出。
-- 让 FastAPI 后端在任务启动或执行时调起 `codex exec`，自动生成 PRD 或代码实现。
+- 让 FastAPI 后端在任务启动或执行时调起可配置执行器（`codex` / `claude`），自动生成 PRD 或代码实现。
 - 用 React 前端把任务状态、对话时间线、PRD 内容和项目入口组织成一个单机开发工作台。
 
 ## 核心特性
@@ -15,7 +15,7 @@ Koda 当前的真实主线不是“通用 Python 模板”，而是一套围绕 
 - **需求卡片工作流**：`backlog`、`prd_generating`、`implementation_in_progress` 等阶段已经进入数据模型与前端展示。
 - **任务时间线**：文本日志、图片附件、状态标记和 AI 输出统一归档到同一条需求历史里。
 - **项目绑定与 Worktree**：任务可关联本地 Git 仓库，并在启动时创建独立 worktree。新 worktree 默认创建在仓库同级的 `task/` 目录下，例如项目仓库是 `/Users/zata/code/my-app` 时，任务 worktree 默认会落到 `/Users/zata/code/task/my-app-wt-12345678`。
-- **Codex 自动化**：后端通过 `dsl/services/codex_runner.py` 构造 Prompt、调用 `codex exec`、写回日志并推进阶段；当前已支持有上限的 `review -> 自动回改 -> review` 与 `lint -> AI lint-fix -> lint` 两段自动闭环。
+- **多执行器自动化**：后端通过统一编排层调用 `dsl/services/codex_runner.py`（执行器无关主流程）与 `dsl/services/runners/`（CLI 适配层），按 `KODA_AUTOMATION_RUNNER` 选择 `codex` 或 `claude`。
 - **媒体与导出**：支持图片上传、缩略图生成、Markdown 编年史导出。
 - **AI 模型配置工具**：`ai_agent/` 中保留了可复用的模型注册与凭据解析能力。
 
@@ -59,7 +59,8 @@ just dsl-dev
 
 ### AI 资产
 
-- `dsl/services/codex_runner.py`：Prompt 构造、`codex exec` 调用、实时日志回写、阶段推进
+- `dsl/services/codex_runner.py`：执行器无关编排、Prompt 构造、实时日志回写、阶段推进
+- `dsl/services/runners/`：Runner 协议、注册中心与 Codex / Claude CLI 适配器
 - `ai_agent/utils/model_loader.py`：模型配置读取与聊天模型实例化
 - `ai_agent/utils/models.json`：提供商与模型注册表
 - `ai_agent/.env.example`：AI 服务凭据示例
@@ -91,7 +92,7 @@ just dsl-dev
 - 第一次接手项目：先看[快速开始](getting-started.md)
 - 想理解真实模块边界：看[系统设计](architecture/system-design.md)
 - 想改配置或端口：看[配置说明](guides/configuration.md)
-- 想看 Codex 是怎么接进任务流的：看[Codex 自动化](guides/codex-cli-automation.md)
+- 想看多执行器是怎么接进任务流的：看[多执行器自动化](guides/codex-cli-automation.md)
 - 想核对对象签名：看[API 参考](api/references.md)
 
 ## 文档维护约定

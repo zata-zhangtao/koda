@@ -1,13 +1,14 @@
-"""Codex 执行器服务模块.
+"""自动化执行器编排模块.
 
-负责构建任务 Prompt、以非交互方式调用 codex exec CLI，
-并将执行过程的 stdout/stderr 实时写入 DevLog 时间线.
+负责构建任务 Prompt、按配置选择 CLI Runner（Codex / Claude）执行，
+并将执行过程的 stdout/stderr 实时写入 DevLog 时间线。
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -17,9 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dsl.services.prd_file_service import list_task_prd_file_paths
+from dsl.services.runners.base import AutomationRunner
+from dsl.services.runners.registry import get_runner_by_kind
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
+from utils.settings import config
 
 
 # codex exec 每次最多批量写入的行数
@@ -42,9 +46,6 @@ _user_cancelled_tasks: set[str] = set()
 
 # 意外中断时的最大自动重试次数
 _MAX_AUTO_RETRY = 2
-
-# codex 意外中断时在输出中出现的标志性字符串
-_CODEX_INTERRUPTED_MARKERS = ("task interrupted",)
 
 # self-review 输出中的结构化状态标记
 _SELF_REVIEW_STATUS_MARKER = "SELF_REVIEW_STATUS"
@@ -69,6 +70,27 @@ _POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST = [
     "run",
     "--all-files",
 ]
+
+
+def _resolve_active_runner() -> AutomationRunner:
+    """Resolve the currently configured automation runner.
+
+    Returns:
+        AutomationRunner: Active runner implementation instance.
+
+    Raises:
+        ValueError: If config points to an unsupported runner kind.
+    """
+    return get_runner_by_kind(config.KODA_AUTOMATION_RUNNER)
+
+
+def get_active_runner_kind() -> str:
+    """Return the active runner kind from runtime config.
+
+    Returns:
+        str: Active runner kind.
+    """
+    return _resolve_active_runner().runner_kind
 
 
 def register_task_background_activity(task_id_str: str) -> None:
@@ -155,17 +177,40 @@ class PostReviewLintExecutionResult:
     latest_lint_output_line_list: list[str]
 
 
-def _output_contains_interruption(output_lines: list[str]) -> bool:
-    """检查 codex 输出的末尾若干行是否包含中断标志.
+def _output_contains_interruption(
+    output_lines: list[str],
+    interruption_marker_tuple: tuple[str, ...],
+) -> bool:
+    """检查输出末尾若干行是否包含中断标志.
 
     Args:
         output_lines: codex 输出行列表
+        interruption_marker_tuple: Runner 定义的中断标识关键词
 
     Returns:
         bool: 若最后 10 行中出现中断标志则返回 True
     """
-    recent_lines_str = "\n".join(output_lines[-10:]).lower()
-    return any(marker in recent_lines_str for marker in _CODEX_INTERRUPTED_MARKERS)
+    recent_output_line_list = [
+        raw_output_line_str.lower() for raw_output_line_str in output_lines[-10:]
+    ]
+    normalized_marker_list = [
+        raw_marker_str.strip().lower()
+        for raw_marker_str in interruption_marker_tuple
+        if raw_marker_str.strip()
+    ]
+
+    for recent_output_line_str in recent_output_line_list:
+        for normalized_marker_str in normalized_marker_list:
+            marker_pattern = re.compile(rf"\b{re.escape(normalized_marker_str)}\b")
+            for marker_match in marker_pattern.finditer(recent_output_line_str):
+                prefix_context_str = recent_output_line_str[
+                    max(0, marker_match.start() - 24) : marker_match.start()
+                ]
+                # 忽略 “not interrupted” 等否定表达，避免把成功执行误判为中断。
+                if re.search(r"\b(?:not|no|without|never)\s*$", prefix_context_str):
+                    continue
+                return True
+    return False
 
 
 def _extract_trailing_marker_value(
@@ -422,6 +467,7 @@ def _write_phase_log_header(
     task_id_str: str,
     phase_log_label_str: str,
     overwrite_existing_log_bool: bool,
+    runner_kind_str: str,
 ) -> None:
     """写入任务日志文件的阶段头部.
 
@@ -430,9 +476,11 @@ def _write_phase_log_header(
         task_id_str: 任务 UUID 字符串
         phase_log_label_str: 阶段标签，如 codex-exec 或 codex-review
         overwrite_existing_log_bool: 是否覆盖旧文件
+        runner_kind_str: 当前执行器类型
     """
     header_text_str = (
         f"=== Koda {phase_log_label_str} | task {task_id_str[:8]} | "
+        f"runner_kind={runner_kind_str} | "
         f"{serialize_datetime_for_api(utc_now_naive())} ===\n"
     )
 
@@ -847,23 +895,25 @@ def _is_git_operation_still_in_progress(
     return False
 
 
-def _build_codex_conflict_resolution_prompt(
+def _build_runner_conflict_resolution_prompt(
     *,
     task_title_str: str,
     dev_log_text_list: list[str],
     repo_path: Path,
     operation_kind_str: str,
+    runner_display_name_str: str,
 ) -> str:
-    """Build the Codex prompt for automatic Git conflict resolution.
+    """Build the runner prompt for automatic Git conflict resolution.
 
     Args:
         task_title_str: Task title
         dev_log_text_list: Recent task history
         repo_path: Repository or worktree path containing conflicts
         operation_kind_str: Either ``rebase`` or ``merge``
+        runner_display_name_str: Runner display name shown in prompt
 
     Returns:
-        str: Prompt text for ``codex exec``
+        str: Prompt text for runner non-interactive execution
     """
     recent_context_block_str = _build_recent_context_block(
         dev_log_text_list=dev_log_text_list,
@@ -878,7 +928,7 @@ def _build_codex_conflict_resolution_prompt(
         else "解决完冲突后执行 `git add .`，然后继续 `git merge --continue`；如果该命令不可用，则使用 `git commit --no-edit` 完成 merge。"
     )
 
-    return f"""你现在处于 Koda 的自动 Git 冲突修复阶段，需要为当前任务自动处理 `{operation_kind_str}` 冲突。
+    return f"""你现在处于 Koda 的自动 Git 冲突修复阶段，需要用 {runner_display_name_str} 为当前任务自动处理 `{operation_kind_str}` 冲突。
 
 ## 任务标题
 {task_title_str}
@@ -901,7 +951,7 @@ def _build_codex_conflict_resolution_prompt(
 请现在直接执行。"""
 
 
-def _run_logged_codex_conflict_resolution(
+def _run_logged_runner_conflict_resolution(
     *,
     task_id_str: str,
     run_account_id_str: str,
@@ -911,7 +961,7 @@ def _run_logged_codex_conflict_resolution(
     repo_path: Path,
     operation_kind_str: str,
 ) -> subprocess.CompletedProcess[str] | None:
-    """Invoke Codex to resolve a rebase or merge conflict in place.
+    """Invoke active runner to resolve a rebase or merge conflict in place.
 
     Args:
         task_id_str: Task UUID
@@ -923,50 +973,57 @@ def _run_logged_codex_conflict_resolution(
         operation_kind_str: Either ``rebase`` or ``merge``
 
     Returns:
-        subprocess.CompletedProcess[str] | None: Completed process object, or None if Codex is unavailable
+        subprocess.CompletedProcess[str] | None: Completed process object, or None if runner CLI is unavailable
     """
-    codex_executable_path_str = shutil.which("codex")
-    if not codex_executable_path_str:
-        missing_codex_text = f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 codex CLI，无法自动修复。"
-        _append_text_to_task_log(task_log_path, missing_codex_text)
-        _write_log_to_db(task_id_str, run_account_id_str, missing_codex_text, "BUG")
+    active_runner_obj = _resolve_active_runner()
+    runner_executable_path_str = shutil.which(active_runner_obj.executable_name)
+    if not runner_executable_path_str:
+        missing_runner_text = (
+            f"❌ 检测到 `{operation_kind_str}` 冲突，但当前环境未找到 "
+            f"runner_kind={active_runner_obj.runner_kind} 的可执行文件 "
+            f"`{active_runner_obj.executable_name}`，无法自动修复。\n"
+            f"{active_runner_obj.build_missing_cli_hint()}"
+        )
+        _append_text_to_task_log(task_log_path, missing_runner_text)
+        _write_log_to_db(task_id_str, run_account_id_str, missing_runner_text, "BUG")
         return None
 
-    codex_prompt_text_str = _build_codex_conflict_resolution_prompt(
+    runner_prompt_text_str = _build_runner_conflict_resolution_prompt(
         task_title_str=task_title_str,
         dev_log_text_list=dev_log_text_list,
         repo_path=repo_path,
         operation_kind_str=operation_kind_str,
+        runner_display_name_str=active_runner_obj.runner_display_name,
     )
-    command_display_str = (
-        f"codex exec --dangerously-bypass-approvals-and-sandbox "
-        f"<{operation_kind_str}-conflict-prompt>"
+    command_display_str = active_runner_obj.build_command_preview().replace(
+        "<prompt>",
+        f"<{operation_kind_str}-conflict-prompt>",
     )
     _append_text_to_task_log(
-        task_log_path, f"$ (codex-{operation_kind_str}-conflict) {command_display_str}"
+        task_log_path,
+        f"$ (runner-{operation_kind_str}-conflict) {command_display_str}",
     )
 
-    _CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
+    _RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
 
     try:
         completed_process = subprocess.run(
             [
-                codex_executable_path_str,
-                "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                codex_prompt_text_str,
+                runner_executable_path_str,
+                *active_runner_obj.build_exec_argument_list(runner_prompt_text_str),
             ],
             cwd=str(repo_path),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=_CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS,
+            timeout=_RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         timeout_text = (
-            f"❌ Codex conflict resolution ({operation_kind_str}) timed out after "
-            f"{_CODEX_CONFLICT_RESOLUTION_TIMEOUT_SECONDS}s — aborting {operation_kind_str}."
+            f"❌ runner_kind={active_runner_obj.runner_kind} conflict resolution "
+            f"({operation_kind_str}) timed out after "
+            f"{_RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS}s — aborting {operation_kind_str}."
         )
         _append_text_to_task_log(task_log_path, timeout_text)
         _write_log_to_db(task_id_str, run_account_id_str, timeout_text, "BUG")
@@ -984,7 +1041,10 @@ def _run_logged_codex_conflict_resolution(
         _append_text_to_task_log(task_log_path, "(no output)")
     _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
 
-    resolution_status_text = f"Codex conflict resolution ({operation_kind_str}) -> exit {completed_process.returncode}"
+    resolution_status_text = (
+        f"runner_kind={active_runner_obj.runner_kind} conflict resolution "
+        f"({operation_kind_str}) -> exit {completed_process.returncode}"
+    )
     if combined_output_text:
         resolution_status_text += f"\n{combined_output_text}"
     _write_log_to_db(
@@ -994,6 +1054,28 @@ def _run_logged_codex_conflict_resolution(
         "OPTIMIZATION" if completed_process.returncode == 0 else "BUG",
     )
     return completed_process
+
+
+def _run_logged_codex_conflict_resolution(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    repo_path: Path,
+    operation_kind_str: str,
+) -> subprocess.CompletedProcess[str] | None:
+    """Backward-compatible wrapper for legacy function name."""
+    return _run_logged_runner_conflict_resolution(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        task_title_str=task_title_str,
+        dev_log_text_list=dev_log_text_list,
+        repo_path=repo_path,
+        operation_kind_str=operation_kind_str,
+    )
 
 
 def _finalize_completion_in_db(
@@ -1071,6 +1153,7 @@ def _execute_git_completion_flow(
         task_id_str=task_id_str,
         phase_log_label_str="git-complete",
         overwrite_existing_log_bool=False,
+        runner_kind_str=get_active_runner_kind(),
     )
 
     try:
@@ -1250,8 +1333,9 @@ def _execute_git_completion_flow(
                         merge_completed_bool = True
                     continue
 
+                active_runner_kind_str = get_active_runner_kind()
                 failure_reason_text = (
-                    f"{operation_kind_str} 冲突已触发 Codex 自动修复，但未能成功完成："
+                    f"{operation_kind_str} 冲突已触发 runner_kind={active_runner_kind_str} 自动修复，但未能成功完成："
                     f"{shlex.join(command_argument_list)}"
                 )
             else:
@@ -1368,6 +1452,73 @@ async def _create_codex_subprocess(
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
         codex_prompt_text_str,
+        cwd=str(work_dir_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+
+async def _create_claude_subprocess(
+    claude_executable_path_str: str,
+    claude_prompt_text_str: str,
+    work_dir_path: Path,
+) -> asyncio.subprocess.Process:
+    """创建 Claude Code CLI 子进程.
+
+    Args:
+        claude_executable_path_str: claude 可执行文件路径
+        claude_prompt_text_str: 发给 claude 的 Prompt
+        work_dir_path: 运行目录
+
+    Returns:
+        asyncio.subprocess.Process: 已启动的子进程对象
+    """
+    return await asyncio.create_subprocess_exec(
+        claude_executable_path_str,
+        "-p",
+        claude_prompt_text_str,
+        "--dangerously-skip-permissions",
+        cwd=str(work_dir_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+
+async def _create_runner_subprocess(
+    runner_obj: AutomationRunner,
+    runner_executable_path_str: str,
+    runner_prompt_text_str: str,
+    work_dir_path: Path,
+) -> asyncio.subprocess.Process:
+    """创建执行器 CLI 子进程.
+
+    Args:
+        runner_obj: Runner 对象
+        runner_executable_path_str: Runner 可执行文件路径
+        runner_prompt_text_str: Prompt 文本
+        work_dir_path: 运行目录
+
+    Returns:
+        asyncio.subprocess.Process: 已启动的子进程对象
+    """
+    if runner_obj.runner_kind == "codex":
+        return await _create_codex_subprocess(
+            codex_executable_path_str=runner_executable_path_str,
+            codex_prompt_text_str=runner_prompt_text_str,
+            work_dir_path=work_dir_path,
+        )
+    if runner_obj.runner_kind == "claude":
+        return await _create_claude_subprocess(
+            claude_executable_path_str=runner_executable_path_str,
+            claude_prompt_text_str=runner_prompt_text_str,
+            work_dir_path=work_dir_path,
+        )
+
+    return await asyncio.create_subprocess_exec(
+        runner_executable_path_str,
+        *runner_obj.build_exec_argument_list(runner_prompt_text_str),
         cwd=str(work_dir_path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -1887,13 +2038,13 @@ async def _run_codex_phase(
     overwrite_existing_log_bool: bool,
     clear_cancel_marker_at_start_bool: bool = True,
 ) -> CodexPhaseExecutionResult:
-    """执行一个通用的 Codex 阶段，统一处理日志、重试和取消逻辑.
+    """执行一个通用的 Runner 阶段，统一处理日志、重试和取消逻辑.
 
     Args:
         task_id_str: 任务 UUID 字符串
         run_account_id_str: 运行账户 UUID 字符串
-        codex_prompt_text_str: 发给 codex exec 的 Prompt
-        work_dir_path: codex 的工作目录
+        codex_prompt_text_str: 发给执行器 CLI 的 Prompt
+        work_dir_path: 执行器工作目录
         phase_log_label_str: 本地日志中的阶段标签
         phase_display_name_str: 用户可见的阶段名，用于日志文案
         cancelled_log_text_str: 用户取消时要写入的日志文本
@@ -1903,16 +2054,20 @@ async def _run_codex_phase(
     Returns:
         CodexPhaseExecutionResult: 本次阶段执行结果
     """
-    codex_executable_path_str = shutil.which("codex")
-    if not codex_executable_path_str:
-        missing_codex_log_text = (
-            "❌ 未找到 codex 可执行文件，请确认 codex CLI 已安装并在 PATH 中。"
+    active_runner_obj = _resolve_active_runner()
+    runner_executable_path_str = shutil.which(active_runner_obj.executable_name)
+    if not runner_executable_path_str:
+        missing_runner_log_text = (
+            "❌ 未找到目标执行器可执行文件："
+            f"runner_kind={active_runner_obj.runner_kind}, "
+            f"executable={active_runner_obj.executable_name}。\n"
+            f"{active_runner_obj.build_missing_cli_hint()}"
         )
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            missing_codex_log_text,
+            missing_runner_log_text,
             "BUG",
         )
         return CodexPhaseExecutionResult(success=False, output_lines=[])
@@ -1938,17 +2093,31 @@ async def _run_codex_phase(
         task_id_str=task_id_str,
         phase_log_label_str=phase_log_label_str,
         overwrite_existing_log_bool=overwrite_existing_log_bool,
+        runner_kind_str=active_runner_obj.runner_kind,
+    )
+    runner_context_log_text = (
+        f"🤖 runner_kind={active_runner_obj.runner_kind} | phase={phase_log_label_str} | "
+        f"command=`{active_runner_obj.build_command_preview()}`"
+    )
+    _append_text_to_task_log(task_log_path, runner_context_log_text)
+    await asyncio.to_thread(
+        _write_log_to_db,
+        task_id_str,
+        run_account_id_str,
+        runner_context_log_text,
+        "OPTIMIZATION",
     )
 
     for attempt_index in range(_MAX_AUTO_RETRY + 1):
-        codex_process_obj: asyncio.subprocess.Process | None = None
+        runner_process_obj: asyncio.subprocess.Process | None = None
         try:
-            codex_process_obj = await _create_codex_subprocess(
-                codex_executable_path_str=codex_executable_path_str,
-                codex_prompt_text_str=codex_prompt_text_str,
+            runner_process_obj = await _create_runner_subprocess(
+                runner_obj=active_runner_obj,
+                runner_executable_path_str=runner_executable_path_str,
+                runner_prompt_text_str=codex_prompt_text_str,
                 work_dir_path=work_dir_path,
             )
-            _running_codex_processes[task_id_str] = codex_process_obj
+            _running_codex_processes[task_id_str] = runner_process_obj
 
             pending_output_line_list: list[str] = []
             aggregated_output_line_list: list[str] = []
@@ -1978,8 +2147,8 @@ async def _run_codex_phase(
                     pending_output_line_list.clear()
                     last_flush_time_float = asyncio.get_running_loop().time()
 
-            assert codex_process_obj.stdout is not None
-            async for raw_stdout_line_bytes in codex_process_obj.stdout:
+            assert runner_process_obj.stdout is not None
+            async for raw_stdout_line_bytes in runner_process_obj.stdout:
                 decoded_stdout_line_str = raw_stdout_line_bytes.decode(
                     "utf-8",
                     errors="replace",
@@ -1993,12 +2162,13 @@ async def _run_codex_phase(
                     _append_text_to_task_log(task_log_path, decoded_stdout_line_str)
                 await flush_pending_output_lines()
 
-            phase_return_code_int = await codex_process_obj.wait()
+            phase_return_code_int = await runner_process_obj.wait()
             await flush_pending_output_lines(force=True)
             _append_exit_code_to_task_log(task_log_path, phase_return_code_int)
 
             if phase_return_code_int == 0 and not _output_contains_interruption(
-                aggregated_output_line_list
+                aggregated_output_line_list,
+                active_runner_obj.interruption_marker_tuple,
             ):
                 return CodexPhaseExecutionResult(
                     success=True,
@@ -2025,7 +2195,8 @@ async def _run_codex_phase(
 
             if attempt_index < _MAX_AUTO_RETRY:
                 retry_log_text_str = (
-                    f"⚠️ {phase_display_name_str}阶段意外中断（exit {phase_return_code_int}），"
+                    f"⚠️ runner_kind={active_runner_obj.runner_kind} "
+                    f"{phase_display_name_str}阶段意外中断（exit {phase_return_code_int}），"
                     f"自动重试（{attempt_index + 1}/{_MAX_AUTO_RETRY}）..."
                 )
                 await asyncio.to_thread(
@@ -2037,13 +2208,18 @@ async def _run_codex_phase(
                 )
                 _append_text_to_task_log(task_log_path, retry_log_text_str)
                 logger.warning(
-                    f"Task {task_id_str[:8]}... {phase_display_name_str} interrupted, "
-                    f"retrying ({attempt_index + 1}/{_MAX_AUTO_RETRY})"
+                    "Task %s... runner_kind=%s %s interrupted, retrying (%s/%s)",
+                    task_id_str[:8],
+                    active_runner_obj.runner_kind,
+                    phase_display_name_str,
+                    attempt_index + 1,
+                    _MAX_AUTO_RETRY,
                 )
                 continue
 
             exhausted_retry_log_text_str = (
-                f"❌ {phase_display_name_str}阶段失败（exit {phase_return_code_int}），"
+                f"❌ runner_kind={active_runner_obj.runner_kind} "
+                f"{phase_display_name_str}阶段失败（exit {phase_return_code_int}），"
                 f"已重试 {_MAX_AUTO_RETRY} 次。"
             )
             await asyncio.to_thread(
@@ -2054,8 +2230,11 @@ async def _run_codex_phase(
                 "BUG",
             )
             logger.warning(
-                f"Task {task_id_str[:8]}... {phase_display_name_str} failed after "
-                f"{_MAX_AUTO_RETRY} retries."
+                "Task %s... runner_kind=%s %s failed after %s retries.",
+                task_id_str[:8],
+                active_runner_obj.runner_kind,
+                phase_display_name_str,
+                _MAX_AUTO_RETRY,
             )
             return CodexPhaseExecutionResult(
                 success=False,
@@ -2064,8 +2243,11 @@ async def _run_codex_phase(
 
         except Exception as unexpected_phase_error:
             logger.exception(
-                f"Unexpected error in {phase_log_label_str} for {task_id_str[:8]}... "
-                f"(attempt {attempt_index + 1})"
+                "Unexpected error in %s for %s... (runner_kind=%s, attempt %s)",
+                phase_log_label_str,
+                task_id_str[:8],
+                active_runner_obj.runner_kind,
+                attempt_index + 1,
             )
 
             if task_id_str in _user_cancelled_tasks:
@@ -2083,7 +2265,8 @@ async def _run_codex_phase(
 
             if attempt_index < _MAX_AUTO_RETRY:
                 retry_log_text_str = (
-                    f"⚠️ {phase_display_name_str}阶段意外异常（{unexpected_phase_error}），"
+                    f"⚠️ runner_kind={active_runner_obj.runner_kind} "
+                    f"{phase_display_name_str}阶段意外异常（{unexpected_phase_error}），"
                     f"自动重试（{attempt_index + 1}/{_MAX_AUTO_RETRY}）..."
                 )
                 await asyncio.to_thread(
@@ -2096,7 +2279,8 @@ async def _run_codex_phase(
                 continue
 
             unexpected_failure_log_text_str = (
-                f"❌ {phase_display_name_str}阶段发生意外错误：{unexpected_phase_error}"
+                f"❌ runner_kind={active_runner_obj.runner_kind} "
+                f"{phase_display_name_str}阶段发生意外错误：{unexpected_phase_error}"
             )
             await asyncio.to_thread(
                 _write_log_to_db,
@@ -2109,9 +2293,9 @@ async def _run_codex_phase(
 
         finally:
             _running_codex_processes.pop(task_id_str, None)
-            if codex_process_obj and codex_process_obj.returncode is None:
+            if runner_process_obj and runner_process_obj.returncode is None:
                 try:
-                    codex_process_obj.kill()
+                    runner_process_obj.kill()
                 except ProcessLookupError:
                     pass
 
@@ -2127,7 +2311,7 @@ async def run_codex_prd(
     worktree_path_str: str | None = None,
     auto_confirm_prd_and_execute_bool: bool | None = None,
 ) -> None:
-    """调用 codex 生成 PRD，完成后按任务策略推进阶段.
+    """调用当前执行器生成 PRD，完成后按任务策略推进阶段.
 
     fire-and-forget，不向调用方抛出异常。
 
@@ -2136,12 +2320,13 @@ async def run_codex_prd(
         run_account_id_str: 运行账户 UUID 字符串
         task_title_str: 任务标题
         dev_log_text_list: 历史日志文本列表
-        work_dir_path: codex 工作目录
+        work_dir_path: Runner 工作目录
         worktree_path_str: git worktree 路径（可选）
         auto_confirm_prd_and_execute_bool: 是否自动确认 PRD 并直接执行（None 表示从数据库读取）
     """
     register_task_background_activity(task_id_str)
     try:
+        active_runner_kind_str = get_active_runner_kind()
         prd_prompt_text_str = build_codex_prd_prompt(
             task_title=task_title_str,
             dev_log_text_list=dev_log_text_list,
@@ -2167,7 +2352,7 @@ async def run_codex_prd(
             run_account_id_str=run_account_id_str,
             codex_prompt_text_str=prd_prompt_text_str,
             work_dir_path=work_dir_path,
-            phase_log_label_str="codex-prd",
+            phase_log_label_str=f"{active_runner_kind_str}-prd",
             phase_display_name_str="PRD 生成",
             cancelled_log_text_str="🛑 用户手动中断了 PRD 生成。",
             overwrite_existing_log_bool=True,
@@ -2179,15 +2364,29 @@ async def run_codex_prd(
                     _advance_stage_in_db, task_id_str, "changes_requested"
                 )
                 return
+            prd_failure_log_text_str = (
+                "❌ PRD 生成失败，无法自动产出待确认的 PRD。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            prd_failure_reason_text_str = (
+                "PRD 生成阶段执行失败，未能自动产出可确认的 PRD。"
+            )
+            if active_runner_kind_str != "codex":
+                prd_failure_log_text_str = (
+                    f"❌ runner_kind={active_runner_kind_str} PRD 生成失败，"
+                    "无法自动产出待确认的 PRD。\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                )
+                prd_failure_reason_text_str = (
+                    f"runner_kind={active_runner_kind_str} "
+                    "PRD 生成阶段执行失败，未能自动产出可确认的 PRD。"
+                )
             await _move_task_to_changes_requested(
                 task_id_str=task_id_str,
                 run_account_id_str=run_account_id_str,
                 task_title_str=task_title_str,
-                failure_log_text_str=(
-                    "❌ PRD 生成失败，无法自动产出待确认的 PRD。\n"
-                    "任务已进入：待修改（changes_requested），需要人工介入。"
-                ),
-                failure_reason_str="PRD 生成阶段执行失败，未能自动产出可确认的 PRD。",
+                failure_log_text_str=prd_failure_log_text_str,
+                failure_reason_str=prd_failure_reason_text_str,
             )
             return
 
@@ -2270,12 +2469,13 @@ async def run_codex_review(
         run_account_id_str: 运行账户 UUID 字符串
         task_title_str: 任务标题
         dev_log_text_list: 历史日志文本列表
-        work_dir_path: codex 的工作目录
+        work_dir_path: Runner 的工作目录
         worktree_path_str: 预期的 git worktree 路径（可选）
 
     Returns:
         SelfReviewExecutionResult: self-review 闭环结果
     """
+    active_runner_kind_str = get_active_runner_kind()
     review_context_log_list = list(dev_log_text_list)
     invalid_status_retry_count_int = 0
     review_round_index_int = 1
@@ -2290,9 +2490,9 @@ async def run_codex_review(
             total_review_round_count_int=total_review_round_count_int,
         )
         review_phase_label_str = (
-            "codex-review"
+            f"{active_runner_kind_str}-review"
             if review_round_index_int == 1
-            else f"codex-review-round-{review_round_index_int}"
+            else f"{active_runner_kind_str}-review-round-{review_round_index_int}"
         )
         review_phase_display_name_str = (
             "AI 自检"
@@ -2482,7 +2682,9 @@ async def run_codex_review(
             run_account_id_str=run_account_id_str,
             codex_prompt_text_str=review_fix_prompt_text_str,
             work_dir_path=work_dir_path,
-            phase_log_label_str=f"codex-review-fix-round-{review_round_index_int}",
+            phase_log_label_str=(
+                f"{active_runner_kind_str}-review-fix-round-{review_round_index_int}"
+            ),
             phase_display_name_str=f"AI 自动回改（第 {review_round_index_int} 轮）",
             cancelled_log_text_str=f"🛑 用户手动中断了第 {review_round_index_int} 轮 AI 自动回改。",
             overwrite_existing_log_bool=False,
@@ -2563,6 +2765,7 @@ async def run_post_review_lint(
         PostReviewLintExecutionResult: lint loop result
     """
     task_log_path = get_task_log_path(task_id_str)
+    active_runner_kind_str = get_active_runner_kind()
     lint_context_log_list = list(dev_log_text_list)
     latest_lint_output_line_list: list[str] = []
 
@@ -2571,11 +2774,13 @@ async def run_post_review_lint(
         task_id_str=task_id_str,
         phase_log_label_str="post-review-lint",
         overwrite_existing_log_bool=False,
+        runner_kind_str=get_active_runner_kind(),
     )
 
     lint_start_log_text = (
         "🧪 已进入自动化验证阶段，开始执行 post-review lint："
-        f"`{shlex.join(_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST)}`。"
+        f"`{shlex.join(_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST)}`"
+        f"（runner_kind={active_runner_kind_str}）。"
     )
     await asyncio.to_thread(
         _write_log_to_db,
@@ -2645,7 +2850,9 @@ async def run_post_review_lint(
             run_account_id_str=run_account_id_str,
             codex_prompt_text_str=lint_fix_prompt_text_str,
             work_dir_path=work_dir_path,
-            phase_log_label_str=f"codex-lint-fix-round-{lint_fix_round_index_int}",
+            phase_log_label_str=(
+                f"{active_runner_kind_str}-lint-fix-round-{lint_fix_round_index_int}"
+            ),
             phase_display_name_str=f"AI Lint 定向修复（第 {lint_fix_round_index_int} 轮）",
             cancelled_log_text_str=f"🛑 用户手动中断了第 {lint_fix_round_index_int} 轮 AI lint 定向修复。",
             overwrite_existing_log_bool=False,
@@ -2868,7 +3075,7 @@ async def run_codex_task(
     work_dir_path: Path,
     worktree_path_str: str | None = None,
 ) -> None:
-    """非交互方式运行 codex exec，并在成功后进入真实的 self-review 阶段.
+    """非交互方式运行当前执行器，并在成功后进入真实的 self-review 阶段.
 
     整个函数设计为 fire-and-forget（后台任务），不向调用方抛出异常。
     执行失败时将 workflow_stage 回退至 changes_requested。
@@ -2878,11 +3085,12 @@ async def run_codex_task(
         run_account_id_str: 运行账户 UUID 字符串
         task_title_str: 任务标题，用于构建 Prompt
         dev_log_text_list: 历史日志文本列表，用于构建上下文
-        work_dir_path: codex 的工作目录（代码仓库根路径）
+        work_dir_path: Runner 的工作目录（代码仓库根路径）
         worktree_path_str: 预期的 git worktree 路径（可选）
     """
     register_task_background_activity(task_id_str)
     try:
+        active_runner_kind_str = get_active_runner_kind()
         implementation_prompt_text_str = build_codex_prompt(
             task_title=task_title_str,
             dev_log_text_list=dev_log_text_list,
@@ -2890,7 +3098,10 @@ async def run_codex_task(
         )
 
         logger.info(
-            f"Starting codex exec for task {task_id_str[:8]}... in work_dir={work_dir_path}"
+            "Starting runner_kind=%s execution for task %s... in work_dir=%s",
+            active_runner_kind_str,
+            task_id_str[:8],
+            work_dir_path,
         )
 
         implementation_phase_result = await _run_codex_phase(
@@ -2898,8 +3109,8 @@ async def run_codex_task(
             run_account_id_str=run_account_id_str,
             codex_prompt_text_str=implementation_prompt_text_str,
             work_dir_path=work_dir_path,
-            phase_log_label_str="codex-exec",
-            phase_display_name_str="codex exec",
+            phase_log_label_str=f"{active_runner_kind_str}-exec",
+            phase_display_name_str=f"{active_runner_kind_str} exec",
             cancelled_log_text_str="🛑 用户手动中断了任务执行。",
             overwrite_existing_log_bool=True,
         )
@@ -2910,15 +3121,28 @@ async def run_codex_task(
                     _advance_stage_in_db, task_id_str, "changes_requested"
                 )
                 return
+            implementation_failure_log_text_str = (
+                "❌ codex exec 执行失败，任务实现阶段未能完成。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            )
+            implementation_failure_reason_str = (
+                "codex exec 执行失败，AI 未能完成初次实现阶段。"
+            )
+            if active_runner_kind_str != "codex":
+                implementation_failure_log_text_str = (
+                    f"❌ runner_kind={active_runner_kind_str} 执行失败，任务实现阶段未能完成。\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                )
+                implementation_failure_reason_str = (
+                    f"runner_kind={active_runner_kind_str} 执行失败，"
+                    "AI 未能完成初次实现阶段。"
+                )
             await _move_task_to_changes_requested(
                 task_id_str=task_id_str,
                 run_account_id_str=run_account_id_str,
                 task_title_str=task_title_str,
-                failure_log_text_str=(
-                    "❌ codex exec 执行失败，任务实现阶段未能完成。\n"
-                    "任务已进入：待修改（changes_requested），需要人工介入。"
-                ),
-                failure_reason_str="codex exec 执行失败，AI 未能完成初次实现阶段。",
+                failure_log_text_str=implementation_failure_log_text_str,
+                failure_reason_str=implementation_failure_reason_str,
             )
             return
 
@@ -2926,6 +3150,11 @@ async def run_codex_task(
             "✅ codex exec 执行完成（exit 0）。\n"
             "工作流阶段即将推进至：AI 自检中（self_review_in_progress），并启动自动 self-review 闭环。"
         )
+        if active_runner_kind_str != "codex":
+            completion_log_text = (
+                f"✅ runner_kind={active_runner_kind_str} 执行完成（exit 0）。\n"
+                "工作流阶段即将推进至：AI 自检中（self_review_in_progress），并启动自动 self-review 闭环。"
+            )
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
@@ -3005,13 +3234,17 @@ async def run_codex_completion(
     """
     del work_dir_path
 
+    active_runner_kind_str = get_active_runner_kind()
     register_task_background_activity(task_id_str)
     try:
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            "🚀 已收到完成请求，Koda 正在执行：`git add .` -> `git commit` -> `git rebase main`。若 rebase 冲突，会自动调用 Codex 修复；随后会在承载 `main` 的工作区完成 merge 与清理。",
+            "🚀 已收到完成请求，Koda 正在执行：`git add .` -> `git commit` -> "
+            "`git rebase main`。若 rebase 冲突，会自动调用 "
+            f"runner_kind={active_runner_kind_str} 修复；随后会在承载 `main` "
+            "的工作区完成 merge 与清理。",
             "OPTIMIZATION",
         )
 

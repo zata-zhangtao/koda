@@ -22,17 +22,17 @@ from dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.codex_runner import (
-    cancel_codex_task,
+from dsl.services.automation_runner import (
+    cancel_task_automation,
     clear_task_background_activity,
     get_task_log_path,
-    is_codex_task_running,
+    is_task_automation_running,
     register_task_background_activity,
-    run_codex_completion,
-    run_codex_prd,
-    run_codex_review_resume,
-    run_codex_task,
-    run_post_review_lint_resume,
+    run_task_completion,
+    run_task_implementation,
+    run_task_post_review_lint_resume,
+    run_task_prd,
+    run_task_self_review_resume,
 )
 from dsl.services.log_service import LogService
 from dsl.services.prd_file_service import find_task_prd_file_path
@@ -43,6 +43,16 @@ from utils.logger import logger
 from utils.settings import config
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# Backward-compatible aliases for internal references/tests while
+# route orchestration now uses runner-agnostic entrypoints.
+is_codex_task_running = is_task_automation_running
+run_codex_prd = run_task_prd
+run_codex_task = run_task_implementation
+run_codex_review_resume = run_task_self_review_resume
+run_post_review_lint_resume = run_task_post_review_lint_resume
+run_codex_completion = run_task_completion
+cancel_codex_task = cancel_task_automation
 
 _SELF_REVIEW_PASSED_LOG_MARKER_LIST = [
     "AI 自检闭环完成",

@@ -4,7 +4,7 @@
 
 这个仓库里的 AI 相关资产分成两层：
 
-- **主业务链路中的自动化能力**：围绕任务卡片调用 `codex exec`
+- **主业务链路中的自动化能力**：围绕任务卡片调用可配置 runner CLI（`codex` / `claude`）
 - **旁路工具能力**：围绕模型注册表、凭据解析和 LangChain 模型实例化
 
 两者都与 AI 有关，但职责不同，不能混为一谈。
@@ -13,7 +13,9 @@
 
 | 位置 | 类型 | 作用 |
 | --- | --- | --- |
-| `dsl/services/codex_runner.py` | 自动化执行器 | 构造 PRD Prompt 与实现 Prompt，调用 `codex exec` |
+| `dsl/services/automation_runner.py` | 统一入口 | API 层使用的执行器无关编排入口 |
+| `dsl/services/codex_runner.py` | 自动化编排器 | 构造 Prompt、统一阶段编排、按配置调度 runner |
+| `dsl/services/runners/` | CLI 适配层 | Runner 协议、注册中心与 Codex / Claude 实现 |
 | `dsl/models/enums.py` | 工作流状态 | 定义 `WorkflowStage` 与 `AIProcessingStatus` |
 | `ai_agent/utils/model_loader.py` | 工具库 | 读取模型配置并创建聊天模型 |
 | `ai_agent/utils/models.json` | 模型注册表 | 声明提供商、模型类别与基础 URL |
@@ -23,11 +25,11 @@
 
 ### PRD 生成
 
-`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求 Codex 在 worktree 中生成包含 `原始需求标题` 与 `需求名称（AI 归纳）` 的 PRD，并写入任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`。
+`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求当前 runner 在 worktree 中生成包含 `原始需求标题` 与 `需求名称（AI 归纳）` 的 PRD，并写入任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`。
 
 ### 编码执行
 
-`run_codex_task` 会把任务标题、历史日志和 worktree 路径拼成实现 Prompt，要求 Codex 在现有项目结构中完成改动，并把结果实时写回 `DevLog`。
+`run_codex_task` 会把任务标题、历史日志和 worktree 路径拼成实现 Prompt，要求当前 runner 在现有项目结构中完成改动，并把结果实时写回 `DevLog`。
 
 ### AI 字段预留
 

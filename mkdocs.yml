@@ -1,5 +1,5 @@
 site_name: Koda 文档
-site_description: 面向 DevStream Log 与 Codex 自动化研发工作流的工程文档
+site_description: 面向 DevStream Log 与多执行器自动化研发工作流的工程文档
 
 theme:
   name: material
@@ -53,7 +53,7 @@ nav:
       - 配置说明: guides/configuration.md
       - 部署说明: guides/deployment.md
       - 公网暴露: guides/public-exposure.md
-      - Codex 自动化: guides/codex-cli-automation.md
+      - 多执行器自动化: guides/codex-cli-automation.md
   - 核心:
       - AI 资产: core/ai-assets.md
       - Prompt 管理: core/prompt-management.md

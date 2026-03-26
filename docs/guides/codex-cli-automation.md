@@ -1,8 +1,13 @@
-# Codex 自动化
+# 多执行器自动化
 
 ## 总览
 
-这个仓库不是“仅仅支持手动调用 Codex”，而是已经把 `codex exec` 接进了任务生命周期。
+这个仓库不是“仅仅支持手动调用某个 CLI”，而是已经把可配置执行器接进了任务生命周期。
+
+当前通过 `KODA_AUTOMATION_RUNNER` 选择执行器：
+
+- `codex`（默认）
+- `claude`
 
 真实调用入口有两个：
 
@@ -10,7 +15,11 @@
 - `dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
 - `dsl/api/tasks.py` 的 `resume_task` 会在后台从持久化工作流阶段恢复中断的自动化
 
-对应的核心实现位于 `dsl/services/codex_runner.py`。
+对应的核心实现位于：
+
+- `dsl/services/automation_runner.py`（API 层统一入口）
+- `dsl/services/codex_runner.py`（执行器无关主编排）
+- `dsl/services/runners/`（Runner 协议、注册中心和 CLI 适配器）
 
 ## 当前实现方式
 
@@ -21,7 +30,7 @@
 3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，还会复制 `.env*` 并准备基础前后端依赖环境
 4. 新建 worktree 分支默认命名为 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 命名，失败时自动回退到标题规则化 slug，若仍为空则回退到 `task/<task_id[:8]>`
 5. `run_codex_prd` 组装 PRD Prompt
-6. 后端调用 `codex exec`
+6. 后端按配置调用目标 runner CLI（`codex` 或 `claude`）
 7. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
 8. 成功后按任务策略分流：
    - 默认策略：推进到 `prd_waiting_confirmation`，等待用户确认 PRD
@@ -34,7 +43,7 @@
 1. 前端点击“开始执行”
 2. 后端将任务推进到 `implementation_in_progress`
 3. `run_codex_task` 组装实现 Prompt
-4. 后端调用 `codex exec`
+4. 后端按配置调用目标 runner CLI（`codex` 或 `claude`）
 5. 输出继续实时写入 `DevLog`
 6. 实现成功后任务推进到 `self_review_in_progress`
 7. 后端立即启动 `run_codex_review` 执行 AI 自检与代码评审
@@ -168,10 +177,14 @@
 
 ## 实际调用特征
 
-当前仓库中的调用并没有使用 `--json` 事件流，而是选择了更直接的标准输出监听方式：
+当前仓库中的调用并没有使用统一 JSON 事件流，而是选择了更直接的标准输出监听方式：
 
 ```bash
+# codex
 codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"
+
+# claude
+claude -p "<prompt>" --dangerously-skip-permissions
 ```
 
 实现细节如下：
@@ -180,6 +193,7 @@ codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"
 - `stderr` 被合并到 `stdout`
 - 输出按行读取
 - 每积累 5 行，或等待 1.5 秒，就批量写入一条 `DevLog`
+- 每个阶段日志头部会写入 `runner_kind=<codex|claude>` 便于排障
 
 ## 日志与可观测性
 
@@ -212,12 +226,28 @@ tasks/prd-{task_id[:8]}-<english-requirement-slug>.md
 
 ## 故障处理
 
-### 未安装 `codex`
+### 执行器 CLI 缺失
 
-如果开发机找不到 `codex` 可执行文件：
+如果开发机找不到当前配置执行器的可执行文件：
 
-- 后端会写入一条 `BUG` 类型的 DevLog
+- 后端会写入一条 `BUG` 类型的 DevLog（包含 `runner_kind`、`executable` 和安装提示）
 - 任务阶段会回退到 `changes_requested`
+
+#### Codex 排障
+
+当 `KODA_AUTOMATION_RUNNER=codex` 时：
+
+- 先确认 `codex --version` 可执行
+- 确认 PATH 中包含 `codex` 可执行文件
+- 若仍失败，检查 DevLog 中 `runner_kind=codex` 的缺失提示
+
+#### Claude 排障
+
+当 `KODA_AUTOMATION_RUNNER=claude` 时：
+
+- 先确认 `claude --version` 可执行
+- 确认 PATH 中包含 `claude` 可执行文件
+- 若仍失败，检查 DevLog 中 `runner_kind=claude` 的缺失提示
 
 ### `changes_requested` 的真实语义
 

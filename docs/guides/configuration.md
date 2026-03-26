@@ -35,6 +35,7 @@ Koda 现在有三类关键配置：
 | `LOG_LEVEL` | `INFO` | Python 日志级别 |
 | `APP_NAME` | `app` | 日志记录器名称 |
 | `APP_TIMEZONE` | `Asia/Shanghai` | 应用展示时区 |
+| `KODA_AUTOMATION_RUNNER` | `codex` | 任务自动化执行器类型（`codex` / `claude`） |
 | `DATABASE_URL` | `sqlite:///.../data/dsl.db` | 默认 SQLite 数据库 |
 | `MEDIA_STORAGE_PATH` | `<repo>/data/media` | 图片与附件目录 |
 | `AI_CONFIDENCE_THRESHOLD` | `0.85` | AI 解析置信度阈值预留值 |
@@ -69,6 +70,7 @@ Koda 现在有三类关键配置：
 - 根目录 `.env.example` 故意保持 `SERVE_FRONTEND_DIST=false`；如果要直接套用公网打包模式，请复制 `deploy/public-forward/agent.env.example`。
 - 前端启动时会请求只读接口 `/api/app-config`，继续用它同步 `APP_TIMEZONE`。
 - 根目录 `.env.example` 适合本机 DSL / agent；服务器不要直接复用这个文件。
+- `KODA_AUTOMATION_RUNNER` 若配置为非法值，后端会在启动时直接失败并提示可用值。
 
 ## 服务器公网入口配置
 

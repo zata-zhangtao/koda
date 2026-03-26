@@ -17,6 +17,7 @@ from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
 from dsl.services import codex_runner, email_service
+from dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
 from utils.database import Base
 from utils.helpers import utc_now_naive
 
@@ -269,6 +270,25 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
     assert "`git merge <task branch>`" in completion_prompt_text
     assert "任务摘要 / requirement brief" in completion_prompt_text
     assert "不要 push" in completion_prompt_text
+
+
+def test_output_contains_interruption_ignores_negated_interrupted_phrase() -> None:
+    """Interruption detection should not match negated interruption phrases."""
+    assert (
+        codex_runner._output_contains_interruption(
+            ["All checks passed, execution was not interrupted."],
+            CLAUDE_CLI_RUNNER.interruption_marker_tuple,
+        )
+        is False
+    )
+
+
+def test_output_contains_interruption_matches_positive_phrase() -> None:
+    """Interruption detection should still match explicit interruption phrases."""
+    assert codex_runner._output_contains_interruption(
+        ["Execution interrupted by user cancellation."],
+        CLAUDE_CLI_RUNNER.interruption_marker_tuple,
+    )
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:

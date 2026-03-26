@@ -4,7 +4,7 @@
 
 当前仓库里的 Prompt 还没有独立成模板文件，而是直接写在 Python 代码里。这是一个典型的“先把自动化跑通，再逐步沉淀治理”的状态。
 
-如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `dsl/services/codex_runner.py`。
+如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `dsl/services/codex_runner.py`（执行器无关主编排）与 `dsl/services/runners/`（CLI 适配层）。
 
 ## Prompt 位置
 
@@ -59,7 +59,7 @@
 
 当前 Prompt 不是“只返回一段文本”这么简单，它们会影响真实工作流：
 
-- 决定 `codex exec` 在什么目录运行
+- 决定 runner CLI（`codex` / `claude`）在什么目录运行
 - 决定是否会生成 PRD 文件
 - 决定点击 `Complete` 后后台 Git 自动化如何描述 `commit`、`rebase`、Codex 冲突修复与 merge
 - 决定哪些内容被写回 `DevLog`
@@ -76,7 +76,7 @@
 
 ### 保持输出可观察
 
-- Prompt 变更后，要确保 Codex 的关键输出仍然会写回 `DevLog`
+- Prompt 变更后，要确保当前 runner 的关键输出仍然会写回 `DevLog`
 - PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}*.md` 读取结果
 
 ### 保持工程约束

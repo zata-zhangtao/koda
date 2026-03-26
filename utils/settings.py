@@ -112,6 +112,28 @@ def _load_app_timezone_name() -> str:
     return app_timezone_name
 
 
+def _load_automation_runner_kind() -> str:
+    """Load and validate automation runner kind.
+
+    Returns:
+        str: Normalized runner kind value.
+
+    Raises:
+        ValueError: When the configured runner kind is unsupported.
+    """
+    raw_runner_kind_str = os.getenv("KODA_AUTOMATION_RUNNER", "codex")
+    normalized_runner_kind_str = raw_runner_kind_str.strip().lower()
+    supported_runner_kind_set = {"codex", "claude"}
+    if normalized_runner_kind_str in supported_runner_kind_set:
+        return normalized_runner_kind_str
+
+    supported_runner_kind_text = ", ".join(sorted(supported_runner_kind_set))
+    raise ValueError(
+        "Invalid KODA_AUTOMATION_RUNNER value: "
+        f"{raw_runner_kind_str}. Supported values: {supported_runner_kind_text}"
+    )
+
+
 class Config:
     """配置类 - 集中管理所有配置项
 
@@ -122,6 +144,7 @@ class Config:
         LOG_LEVEL (str): 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
         APP_NAME (str): 应用名称，用于日志记录器命名
         APP_TIMEZONE (str): 应用级展示时区（IANA 名称）
+        KODA_AUTOMATION_RUNNER (str): 自动化执行器类型（`codex` 或 `claude`）
         TERMINAL_OPEN_COMMAND_TEMPLATE (str | None): 终端打开命令模板（可选）
         SERVE_FRONTEND_DIST (bool): 是否由 FastAPI 同源托管 `frontend/dist`
         FRONTEND_DIST_PATH (Path): 前端构建产物目录
@@ -147,6 +170,7 @@ class Config:
     LOG_LEVEL: ClassVar[str] = os.getenv("LOG_LEVEL", "INFO")
     APP_NAME: ClassVar[str] = os.getenv("APP_NAME", "app")
     APP_TIMEZONE: ClassVar[str] = _load_app_timezone_name()
+    KODA_AUTOMATION_RUNNER: ClassVar[str] = _load_automation_runner_kind()
 
     # 数据库配置
     DATABASE_URL: ClassVar[str] = os.getenv(

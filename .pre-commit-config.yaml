@@ -18,53 +18,53 @@ exclude: '^docs/|/migrations/'
 
 repos:
   # ==========================================
-  # 1. 基础文件卫生 (本地执行，避免远程仓库拉取失败)
+  # 1. 基础文件卫生 (本地自举执行，避免运行时从 GitHub 拉取)
   # ==========================================
   - repo: local
     hooks:
       - id: trailing-whitespace
         name: trailing-whitespace
-        entry: uv run --with pre-commit-hooks==4.6.0 trailing-whitespace-fixer
+        entry: uv run python -m pre_commit_hooks.trailing_whitespace_fixer
         language: system
+        types: [text]
       - id: end-of-file-fixer
         name: end-of-file-fixer
-        entry: uv run --with pre-commit-hooks==4.6.0 end-of-file-fixer
+        entry: uv run python -m pre_commit_hooks.end_of_file_fixer
         language: system
+        types: [text]
       - id: check-yaml
         name: check-yaml
-        entry: uv run --with pre-commit-hooks==4.6.0 check-yaml
+        entry: uv run python -m pre_commit_hooks.check_yaml --unsafe
         language: system
-        args: ['--unsafe']
         files: \.(yaml|yml)$
       - id: check-toml
         name: check-toml
-        entry: uv run --with pre-commit-hooks==4.6.0 check-toml
+        entry: uv run python -m pre_commit_hooks.check_toml
         language: system
         files: \.toml$
       - id: check-added-large-files
         name: check-added-large-files
-        entry: uv run --with pre-commit-hooks==4.6.0 check-added-large-files
+        entry: uv run python -m pre_commit_hooks.check_added_large_files --maxkb=50000
         language: system
-        args: ['--maxkb=50000']
       - id: debug-statements
         name: debug-statements
-        entry: uv run --with pre-commit-hooks==4.6.0 debug-statement-hook
+        entry: uv run python -m pre_commit_hooks.debug_statement_hook
         language: system
         types: [python]
 
   # ==========================================
-  # 2. Python 代码质量 (本地执行 Ruff)
+  # 2. Python 代码质量 (本地 Ruff，避免运行时从 GitHub 拉取)
   # ==========================================
   - repo: local
     hooks:
       - id: ruff
         name: ruff
-        entry: uv run --with ruff==0.4.8 ruff check --fix
+        entry: uv run ruff check --fix
         language: system
         types: [python]
       - id: ruff-format
         name: ruff-format
-        entry: uv run --with ruff==0.4.8 ruff format
+        entry: uv run ruff format
         language: system
         types: [python]
 

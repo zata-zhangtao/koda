@@ -259,6 +259,26 @@
         - build_log_tail_terminal_command
         - open_log_tail_terminal
 
+::: dsl.services.automation_runner
+    handler: python
+    options:
+      members:
+        - get_current_runner_kind
+        - is_task_automation_running
+        - run_task_prd
+        - run_task_implementation
+        - run_task_self_review_resume
+        - run_task_post_review_lint_resume
+        - run_task_completion
+
+::: dsl.services.runners.registry
+    handler: python
+    options:
+      members:
+        - list_supported_runner_kind_list
+        - get_runner_by_kind
+        - resolve_runner_kind
+
 ::: dsl.services.codex_runner
     handler: python
     options:

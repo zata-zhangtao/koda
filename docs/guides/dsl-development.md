@@ -68,12 +68,12 @@
 
 1. 创建任务，默认进入 `backlog`
 2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
-3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后按任务策略分流：
+3. `run_codex_prd` 调起当前配置 runner（`codex` / `claude`）生成 PRD，成功后按任务策略分流：
    - 默认：推进到 `prd_waiting_confirmation`，等待用户确认
    - 自动模式（`auto_confirm_prd_and_execute=true`）：直接推进到 `implementation_in_progress` 并启动实现链路
 4. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
 5. 点击“开始执行”，后端进入 `implementation_in_progress`
-6. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`
+6. `run_codex_task` 调起当前配置 runner 完成实现，成功后推进到 `self_review_in_progress`
 7. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
 8. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环，并通过统一通知服务发送 `changes_requested` 邮件
 9. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
@@ -139,7 +139,8 @@
 
 ### 改 AI 自动化时
 
-- 先看 `dsl/services/codex_runner.py`
+- 先看 `dsl/services/automation_runner.py`（API 入口）和 `dsl/services/codex_runner.py`（主编排）
+- 再看 `dsl/services/runners/`（runner 协议、注册中心和 Codex / Claude 适配器）
 - 明确是改 PRD Prompt 还是实现 Prompt
 - 注意日志写回、阶段推进和 `/tmp` 实时日志文件三者必须保持一致
 - 若修改 self-review / lint 自动化逻辑，要同时核对 review-only Prompt、review-fix Prompt、lint-fix Prompt、失败通知时机以及 `TaskService.execute_task(...)` 的入口契约
