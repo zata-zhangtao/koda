@@ -34,6 +34,25 @@ export enum WorkflowStage {
   DONE = "done",
 }
 
+/** 任务调度动作类型 */
+export enum TaskScheduleActionType {
+  START_TASK = "start_task",
+  RESUME_TASK = "resume_task",
+}
+
+/** 任务调度触发类型 */
+export enum TaskScheduleTriggerType {
+  ONCE = "once",
+  CRON = "cron",
+}
+
+/** 任务调度执行状态 */
+export enum TaskScheduleRunStatus {
+  SUCCEEDED = "succeeded",
+  FAILED = "failed",
+  SKIPPED = "skipped",
+}
+
 /** 任务卡片展示态 key */
 export type TaskDisplayStageKey = WorkflowStage | "waiting_user";
 
@@ -95,6 +114,39 @@ export interface Task {
   closed_at: string | null;
   log_count: number;
   is_codex_task_running: boolean;
+}
+
+/** TaskSchedule 类型 */
+export interface TaskSchedule {
+  id: string;
+  task_id: string;
+  run_account_id: string;
+  schedule_name: string;
+  action_type: TaskScheduleActionType;
+  trigger_type: TaskScheduleTriggerType;
+  run_at: string | null;
+  cron_expr: string | null;
+  timezone_name: string;
+  is_enabled: boolean;
+  next_run_at: string | null;
+  last_triggered_at: string | null;
+  last_result_status: TaskScheduleRunStatus | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** TaskScheduleRun 类型 */
+export interface TaskScheduleRun {
+  id: string;
+  schedule_id: string;
+  task_id: string;
+  planned_run_at: string;
+  triggered_at: string;
+  finished_at: string | null;
+  run_status: TaskScheduleRunStatus;
+  skip_reason: string | null;
+  error_message: string | null;
+  created_at: string;
 }
 
 /** 任务卡片与详情头部共用的展示元数据 */

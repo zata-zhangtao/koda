@@ -98,3 +98,41 @@ class TaskNotificationEventType(str, Enum):
     CHANGES_REQUESTED = "changes_requested"
     MANUAL_INTERRUPTION = "manual_interruption"
     STALLED_REMINDER = "stalled_reminder"
+
+
+class TaskScheduleActionType(str, Enum):
+    """任务调度动作类型.
+
+    Attributes:
+        START_TASK: 启动任务并触发 PRD 生成链路
+        RESUME_TASK: 从持久化阶段恢复自动化执行
+    """
+
+    START_TASK = "start_task"
+    RESUME_TASK = "resume_task"
+
+
+class TaskScheduleTriggerType(str, Enum):
+    """任务调度触发类型.
+
+    Attributes:
+        ONCE: 一次性触发
+        CRON: 基于 Cron 表达式周期触发
+    """
+
+    ONCE = "once"
+    CRON = "cron"
+
+
+class TaskScheduleRunStatus(str, Enum):
+    """任务调度执行结果状态.
+
+    Attributes:
+        SUCCEEDED: 调度动作已成功派发
+        FAILED: 调度动作派发失败
+        SKIPPED: 调度动作被跳过（例如任务已在运行）
+    """
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"

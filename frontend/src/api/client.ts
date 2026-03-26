@@ -14,6 +14,8 @@ import type {
   Task,
   TaskCardMetadata,
   TaskChronicle,
+  TaskSchedule,
+  TaskScheduleRun,
   TimelineEntry,
   WebDAVSettings,
   WebDAVSettingsUpdate,
@@ -203,6 +205,73 @@ export const taskApi = {
     fetchApi<Task>(`/tasks/${id}/cancel`, {
       method: "POST",
     }),
+};
+
+/** Task Schedule API */
+export const taskScheduleApi = {
+  /** 列出任务调度规则 */
+  list: (taskId: string) =>
+    fetchApi<TaskSchedule[]>(`/tasks/${taskId}/schedules`),
+
+  /** 创建任务调度规则 */
+  create: (
+    taskId: string,
+    data: {
+      schedule_name: string;
+      action_type: "start_task" | "resume_task";
+      trigger_type: "once" | "cron";
+      run_at?: string | null;
+      cron_expr?: string | null;
+      timezone_name?: string;
+      is_enabled?: boolean;
+    }
+  ) =>
+    fetchApi<TaskSchedule>(`/tasks/${taskId}/schedules`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** 更新任务调度规则 */
+  update: (
+    taskId: string,
+    scheduleId: string,
+    data: {
+      schedule_name?: string;
+      action_type?: "start_task" | "resume_task";
+      trigger_type?: "once" | "cron";
+      run_at?: string | null;
+      cron_expr?: string | null;
+      timezone_name?: string;
+      is_enabled?: boolean;
+    }
+  ) =>
+    fetchApi<TaskSchedule>(`/tasks/${taskId}/schedules/${scheduleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  /** 删除任务调度规则 */
+  delete: async (taskId: string, scheduleId: string) => {
+    const response = await fetch(`${API_BASE}/tasks/${taskId}/schedules/${scheduleId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+  },
+
+  /** 手动立即触发一次调度规则 */
+  runNow: (taskId: string, scheduleId: string) =>
+    fetchApi<TaskScheduleRun>(`/tasks/${taskId}/schedules/${scheduleId}/run-now`, {
+      method: "POST",
+    }),
+
+  /** 查询任务调度执行历史 */
+  listRuns: (taskId: string, limit = 50) =>
+    fetchApi<TaskScheduleRun[]>(
+      `/tasks/${taskId}/schedules/runs?limit=${encodeURIComponent(String(limit))}`
+    ),
 };
 
 /** Project API */

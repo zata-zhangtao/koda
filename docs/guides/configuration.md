@@ -46,6 +46,9 @@ Koda 现在有三类关键配置：
 | `KODA_TUNNEL_ID` | `default` | 单租户 tunnel 标识 |
 | `KODA_TUNNEL_SHARED_TOKEN` | 空字符串 | agent 与 gateway 共用 token |
 | `KODA_TUNNEL_UPSTREAM_URL` | `http://127.0.0.1:8000` | agent 转发目标 |
+| `SCHEDULER_ENABLE` | `true` | 是否启用任务调度轮询器 |
+| `SCHEDULER_POLL_INTERVAL_SECONDS` | `30` | 调度轮询间隔（秒） |
+| `SCHEDULER_MAX_DISPATCH_PER_TICK` | `20` | 每轮最多分发的到期规则数量 |
 
 ### 本机 agent 可选调优项
 
@@ -62,6 +65,7 @@ Koda 现在有三类关键配置：
 
 - `SERVE_FRONTEND_DIST=true` 时，`dsl/app.py` 会要求 `FRONTEND_DIST_PATH/index.html` 存在；如果未先构建前端，会直接失败并提示重新执行 `npm --prefix frontend run build`。
 - `just dsl-dev` 不依赖上述打包参数，仍然使用 Vite 开发服务器。
+- 调度器是单实例轮询模型；若暂不需要自动触发，可把 `SCHEDULER_ENABLE` 设为 `false`。
 - 根目录 `.env.example` 故意保持 `SERVE_FRONTEND_DIST=false`；如果要直接套用公网打包模式，请复制 `deploy/public-forward/agent.env.example`。
 - 前端启动时会请求只读接口 `/api/app-config`，继续用它同步 `APP_TIMEZONE`。
 - 根目录 `.env.example` 适合本机 DSL / agent；服务器不要直接复用这个文件。

@@ -736,6 +736,179 @@ img {
   position: relative;
 }
 
+.devflow-task-schedule-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.devflow-task-schedule-panel__summary {
+  color: #78716c;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.devflow-task-schedule-panel__create-card {
+  padding: 14px;
+}
+
+.devflow-task-schedule-panel__create-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.devflow-task-schedule-panel__enabled-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--devflow-line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #44403c;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.devflow-task-schedule-panel__list {
+  display: grid;
+  gap: 10px;
+}
+
+.devflow-task-schedule-panel__item {
+  padding: 12px;
+}
+
+.devflow-task-schedule-panel__item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.devflow-task-schedule-panel__item-title {
+  margin: 0;
+  color: #1c1917;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.devflow-task-schedule-panel__item-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.devflow-task-schedule-panel__item-status--enabled {
+  background: rgba(220, 252, 231, 0.95);
+  color: #047857;
+}
+
+.devflow-task-schedule-panel__item-status--disabled {
+  background: rgba(241, 245, 249, 0.95);
+  color: #475569;
+}
+
+.devflow-task-schedule-panel__item-meta {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.devflow-task-schedule-panel__item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.devflow-task-schedule-panel__runs {
+  padding: 12px;
+}
+
+.devflow-task-schedule-panel__runs-header {
+  margin-bottom: 8px;
+}
+
+.devflow-task-schedule-panel__runs-title {
+  margin: 0;
+  color: #1c1917;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.devflow-task-schedule-panel__runs-empty {
+  margin: 0;
+  color: #78716c;
+  font-size: 0.78rem;
+}
+
+.devflow-task-schedule-panel__run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.devflow-task-schedule-panel__run-item {
+  padding: 10px;
+  border: 1px solid var(--devflow-line);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.devflow-task-schedule-panel__run-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.devflow-task-schedule-panel__run-schedule {
+  color: #1f2937;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.devflow-task-schedule-panel__run-meta {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 0.72rem;
+}
+
+.devflow-task-schedule-panel__run-note {
+  margin-top: 6px;
+  color: #991b1b;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.devflow-task-schedule-panel__status {
+  color: #57534e;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.devflow-task-schedule-panel__status--succeeded {
+  color: #047857;
+}
+
+.devflow-task-schedule-panel__status--failed {
+  color: #b91c1c;
+}
+
+.devflow-task-schedule-panel__status--skipped {
+  color: #92400e;
+}
+
 .devflow-conversation__legend {
   margin: 0;
   padding: 10px 12px;

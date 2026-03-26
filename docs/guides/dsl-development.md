@@ -16,10 +16,10 @@
 1. `main.py` 调用 `uvicorn.run("dsl.app:app", ...)`
 2. `dsl.app.create_application()` 创建 FastAPI 应用
 3. `lifespan` 在启动时调用共享数据库初始化逻辑
-4. `lifespan` 同时启动每 60 秒一次的停滞任务提醒扫描器
+4. `lifespan` 同时启动停滞任务提醒扫描器与任务调度分发循环
 5. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
 6. 文件型 SQLite 连接会在创建时统一设置 `busy_timeout`、`foreign_keys=ON` 与 `journal_mode=WAL`，降低后台写日志和前台读接口并发时的锁冲突
-7. 应用注册 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle`、`email_settings` 路由
+7. 应用注册 `run_accounts`、`projects`、`tasks`、`task_schedules`、`logs`、`media`、`chronicle`、`email_settings` 路由
 8. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
 ### 路由与服务分工
@@ -28,6 +28,7 @@
 - `dsl/services/`：负责业务规则与状态推进
 - `dsl/models/`：定义数据库实体
 - `dsl/schemas/`：定义请求与响应模型
+- 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` 路由逻辑，不额外定义并行执行语义
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 
@@ -81,6 +82,19 @@
 12. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
 13. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
 14. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+
+### 调度能力（新增）
+
+当前已支持任务级调度规则：
+
+1. 一次性规则（`trigger_type=once`）在触发后自动停用
+2. 周期规则（`trigger_type=cron`）按时区与 Cron 规则推进 `next_run_at`
+3. 调度动作首期支持 `start_task`、`resume_task`
+4. 自动轮询分发会先领取调度窗口，再执行动作，避免同一窗口重复派发
+5. 每次分发都会写入 `TaskScheduleRun` 审计，状态包含 `succeeded` / `failed` / `skipped`
+6. 当任务已有后台自动化运行时，调度分发会标记为 `skipped`，不并发启动
+7. 任务详情页已提供调度面板，可创建规则、启停、立即执行并查看最近执行历史
+8. 前端创建 `once` 规则时会把 `datetime-local` 输入转换为 UTC ISO 并携带浏览器时区，避免与后端默认 `APP_TIMEZONE` 不一致导致触发时间偏移
 
 ### 已建模但尚未自动化闭环的阶段
 

@@ -32,6 +32,7 @@ import {
   mediaApi,
   projectApi,
   runAccountApi,
+  taskScheduleApi,
   taskApi,
 } from "./api/client";
 import { SettingsModal } from "./components/SettingsModal";
@@ -44,6 +45,9 @@ import {
 import {
   AIProcessingStatus,
   DevLogStateTag,
+  TaskScheduleActionType,
+  TaskScheduleRunStatus,
+  TaskScheduleTriggerType,
   type TaskCardMetadata,
   type TaskDisplayStageKey,
   TaskLifecycleStatus,
@@ -52,6 +56,8 @@ import {
   type Project,
   type RunAccount,
   type Task,
+  type TaskSchedule,
+  type TaskScheduleRun,
 } from "./types";
 
 type RequirementStage = WorkflowStage;
@@ -176,6 +182,8 @@ const SELECTED_TASK_LOG_POLL_INTERVAL_MS = 2000;
 const SELECTED_TASK_LOG_INITIAL_LIMIT = 300;
 const SELECTED_TASK_LOG_OLDER_BATCH_LIMIT = 300;
 const SELECTED_TASK_LOG_INCREMENTAL_LIMIT = 200;
+const SELECTED_TASK_SCHEDULE_POLL_INTERVAL_MS = 20_000;
+const SELECTED_TASK_SCHEDULE_RUN_LIMIT = 20;
 const INITIAL_VISIBLE_CONVERSATION_TURN_COUNT = 12;
 const VISIBLE_CONVERSATION_TURN_INCREMENT = 20;
 const COMPACT_TIMELINE_GROUP_VISIBLE_COUNT = 3;
@@ -204,6 +212,27 @@ let hasInitializedMermaidRenderer = false;
 function _isContinueCommand(text: string): boolean {
   const trimmed = text.trim();
   return CONTINUE_COMMAND_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+function resolveBrowserTimezoneName(): string | null {
+  const browserTimezoneName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const normalizedTimezoneName = browserTimezoneName?.trim();
+  if (!normalizedTimezoneName) {
+    return null;
+  }
+  return normalizedTimezoneName;
+}
+
+function convertDatetimeLocalValueToUtcIso(rawDatetimeLocalValue: string): string | null {
+  const normalizedDatetimeLocalValue = rawDatetimeLocalValue.trim();
+  if (!normalizedDatetimeLocalValue) {
+    return null;
+  }
+  const parsedLocalDatetime = new Date(normalizedDatetimeLocalValue);
+  if (Number.isNaN(parsedLocalDatetime.getTime())) {
+    return null;
+  }
+  return parsedLocalDatetime.toISOString();
 }
 
 function isLikelyImageFile(nextFile: File): boolean {
@@ -459,6 +488,25 @@ function App() {
   const [editingProjectPath, setEditingProjectPath] = useState("");
   const [editingProjectDescription, setEditingProjectDescription] = useState("");
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
+  const [selectedTaskScheduleList, setSelectedTaskScheduleList] = useState<TaskSchedule[]>(
+    []
+  );
+  const [selectedTaskScheduleRunList, setSelectedTaskScheduleRunList] = useState<
+    TaskScheduleRun[]
+  >([]);
+  const [isTaskSchedulePanelLoading, setIsTaskSchedulePanelLoading] = useState(false);
+  const [isTaskScheduleCreating, setIsTaskScheduleCreating] = useState(false);
+  const [activeTaskScheduleActionKey, setActiveTaskScheduleActionKey] = useState<
+    string | null
+  >(null);
+  const [taskScheduleDraftName, setTaskScheduleDraftName] = useState("");
+  const [taskScheduleDraftActionType, setTaskScheduleDraftActionType] =
+    useState<TaskScheduleActionType>(TaskScheduleActionType.START_TASK);
+  const [taskScheduleDraftTriggerType, setTaskScheduleDraftTriggerType] =
+    useState<TaskScheduleTriggerType>(TaskScheduleTriggerType.ONCE);
+  const [taskScheduleDraftRunAtText, setTaskScheduleDraftRunAtText] = useState("");
+  const [taskScheduleDraftCronExprText, setTaskScheduleDraftCronExprText] = useState("");
+  const [taskScheduleDraftIsEnabled, setTaskScheduleDraftIsEnabled] = useState(true);
 
   function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
     setNewRequirementTitle("");
@@ -848,6 +896,15 @@ function App() {
     ? canCompleteTask(selectedTask, selectedTaskStage) &&
       !selectedTask.is_codex_task_running
     : false;
+  const selectedTaskScheduleNameMap = useMemo(() => {
+    return selectedTaskScheduleList.reduce<Record<string, string>>(
+      (scheduleNameMap, taskScheduleItem) => {
+        scheduleNameMap[taskScheduleItem.id] = taskScheduleItem.schedule_name;
+        return scheduleNameMap;
+      },
+      {}
+    );
+  }, [selectedTaskScheduleList]);
 
   useEffect(() => {
     latestTaskListRef.current = taskList;
@@ -955,6 +1012,14 @@ function App() {
     setIsPrdFullscreenOpen(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
+    setSelectedTaskScheduleList([]);
+    setSelectedTaskScheduleRunList([]);
+    setTaskScheduleDraftName("");
+    setTaskScheduleDraftActionType(TaskScheduleActionType.START_TASK);
+    setTaskScheduleDraftTriggerType(TaskScheduleTriggerType.ONCE);
+    setTaskScheduleDraftRunAtText("");
+    setTaskScheduleDraftCronExprText("");
+    setTaskScheduleDraftIsEnabled(true);
   }, [workspaceView, detailTaskId]);
 
   useEffect(() => {
@@ -1083,6 +1148,66 @@ function App() {
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
+    };
+  }, [detailTaskId]);
+
+  useEffect(() => {
+    if (!detailTaskId) {
+      setSelectedTaskScheduleList([]);
+      setSelectedTaskScheduleRunList([]);
+      setIsTaskSchedulePanelLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchSelectedTaskScheduleData = async (silentBool: boolean) => {
+      if (!silentBool) {
+        setIsTaskSchedulePanelLoading(true);
+      }
+      const [taskScheduleListResult, taskScheduleRunListResult] =
+        await Promise.allSettled([
+          taskScheduleApi.list(detailTaskId),
+          taskScheduleApi.listRuns(detailTaskId, SELECTED_TASK_SCHEDULE_RUN_LIMIT),
+        ]);
+      if (cancelled) {
+        return;
+      }
+
+      if (taskScheduleListResult.status === "fulfilled") {
+        setSelectedTaskScheduleList(taskScheduleListResult.value);
+      } else {
+        console.error("Failed to load task schedules:", taskScheduleListResult.reason);
+      }
+
+      if (taskScheduleRunListResult.status === "fulfilled") {
+        setSelectedTaskScheduleRunList(taskScheduleRunListResult.value);
+      } else {
+        console.error(
+          "Failed to load task schedule runs:",
+          taskScheduleRunListResult.reason
+        );
+      }
+
+      if (!silentBool) {
+        if (
+          taskScheduleListResult.status === "rejected" ||
+          taskScheduleRunListResult.status === "rejected"
+        ) {
+          setErrorMessage((previousErrorMessage) =>
+            previousErrorMessage ?? "Failed to load task schedules."
+          );
+        }
+        setIsTaskSchedulePanelLoading(false);
+      }
+    };
+
+    void fetchSelectedTaskScheduleData(false);
+    const pollTaskScheduleId = window.setInterval(() => {
+      void fetchSelectedTaskScheduleData(true);
+    }, SELECTED_TASK_SCHEDULE_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollTaskScheduleId);
     };
   }, [detailTaskId]);
 
@@ -1305,6 +1430,178 @@ function App() {
       setAppTimezoneRevision((previousRevision) => previousRevision + 1);
     } catch (appConfigError) {
       console.error("Failed to load app config:", appConfigError);
+    }
+  }
+
+  async function reloadSelectedTaskSchedulePanel(taskId: string): Promise<void> {
+    const [taskScheduleList, taskScheduleRunList] = await Promise.all([
+      taskScheduleApi.list(taskId),
+      taskScheduleApi.listRuns(taskId, SELECTED_TASK_SCHEDULE_RUN_LIMIT),
+    ]);
+    setSelectedTaskScheduleList(taskScheduleList);
+    setSelectedTaskScheduleRunList(taskScheduleRunList);
+  }
+
+  async function handleCreateTaskSchedule(): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    const isOnceTriggerType =
+      taskScheduleDraftTriggerType === TaskScheduleTriggerType.ONCE;
+    const normalizedScheduleNameText = taskScheduleDraftName.trim();
+    const normalizedRunAtText = taskScheduleDraftRunAtText.trim();
+    const normalizedCronExprText = taskScheduleDraftCronExprText.trim();
+    const normalizedRunAtUtcIsoText = isOnceTriggerType
+      ? convertDatetimeLocalValueToUtcIso(normalizedRunAtText)
+      : null;
+    const browserTimezoneNameText = isOnceTriggerType
+      ? resolveBrowserTimezoneName()
+      : null;
+    if (!normalizedScheduleNameText) {
+      setErrorMessage("Schedule name is required.");
+      setSuccessMessage(null);
+      return;
+    }
+
+    if (isOnceTriggerType && !normalizedRunAtText) {
+      setErrorMessage("run_at is required when trigger type is once.");
+      setSuccessMessage(null);
+      return;
+    }
+    if (isOnceTriggerType && !normalizedRunAtUtcIsoText) {
+      setErrorMessage("run_at is invalid.");
+      setSuccessMessage(null);
+      return;
+    }
+    if (
+      taskScheduleDraftTriggerType === TaskScheduleTriggerType.CRON &&
+      !normalizedCronExprText
+    ) {
+      setErrorMessage("cron_expr is required when trigger type is cron.");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setIsTaskScheduleCreating(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await taskScheduleApi.create(selectedTask.id, {
+        schedule_name: normalizedScheduleNameText,
+        action_type: taskScheduleDraftActionType as "start_task" | "resume_task",
+        trigger_type: taskScheduleDraftTriggerType as "once" | "cron",
+        run_at: isOnceTriggerType ? normalizedRunAtUtcIsoText : null,
+        cron_expr:
+          taskScheduleDraftTriggerType === TaskScheduleTriggerType.CRON
+            ? normalizedCronExprText
+            : null,
+        timezone_name: browserTimezoneNameText ?? undefined,
+        is_enabled: taskScheduleDraftIsEnabled,
+      });
+      await reloadSelectedTaskSchedulePanel(selectedTask.id);
+      setTaskScheduleDraftName("");
+      if (taskScheduleDraftTriggerType === TaskScheduleTriggerType.ONCE) {
+        setTaskScheduleDraftRunAtText("");
+      } else {
+        setTaskScheduleDraftCronExprText("");
+      }
+      setSuccessMessage("Task schedule created.");
+    } catch (taskScheduleCreateError) {
+      console.error(taskScheduleCreateError);
+      setErrorMessage(
+        taskScheduleCreateError instanceof Error
+          ? taskScheduleCreateError.message
+          : "Failed to create task schedule."
+      );
+    } finally {
+      setIsTaskScheduleCreating(false);
+    }
+  }
+
+  async function handleToggleTaskSchedule(taskScheduleItem: TaskSchedule): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    const actionKey = `toggle:${taskScheduleItem.id}`;
+    setActiveTaskScheduleActionKey(actionKey);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await taskScheduleApi.update(selectedTask.id, taskScheduleItem.id, {
+        is_enabled: !taskScheduleItem.is_enabled,
+      });
+      await reloadSelectedTaskSchedulePanel(selectedTask.id);
+      setSuccessMessage(
+        taskScheduleItem.is_enabled ? "Task schedule disabled." : "Task schedule enabled."
+      );
+    } catch (taskScheduleUpdateError) {
+      console.error(taskScheduleUpdateError);
+      setErrorMessage(
+        taskScheduleUpdateError instanceof Error
+          ? taskScheduleUpdateError.message
+          : "Failed to update task schedule."
+      );
+    } finally {
+      setActiveTaskScheduleActionKey(null);
+    }
+  }
+
+  async function handleRunTaskScheduleNow(taskScheduleItem: TaskSchedule): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    const actionKey = `run-now:${taskScheduleItem.id}`;
+    setActiveTaskScheduleActionKey(actionKey);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await taskScheduleApi.runNow(selectedTask.id, taskScheduleItem.id);
+      await reloadSelectedTaskSchedulePanel(selectedTask.id);
+      setSuccessMessage("Task schedule run-now dispatched.");
+    } catch (taskScheduleRunNowError) {
+      console.error(taskScheduleRunNowError);
+      setErrorMessage(
+        taskScheduleRunNowError instanceof Error
+          ? taskScheduleRunNowError.message
+          : "Failed to run task schedule now."
+      );
+    } finally {
+      setActiveTaskScheduleActionKey(null);
+    }
+  }
+
+  async function handleDeleteTaskSchedule(taskScheduleItem: TaskSchedule): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    const shouldDeleteScheduleBool = window.confirm(
+      `Delete schedule "${taskScheduleItem.schedule_name}"?`
+    );
+    if (!shouldDeleteScheduleBool) {
+      return;
+    }
+
+    const actionKey = `delete:${taskScheduleItem.id}`;
+    setActiveTaskScheduleActionKey(actionKey);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      await taskScheduleApi.delete(selectedTask.id, taskScheduleItem.id);
+      await reloadSelectedTaskSchedulePanel(selectedTask.id);
+      setSuccessMessage("Task schedule deleted.");
+    } catch (taskScheduleDeleteError) {
+      console.error(taskScheduleDeleteError);
+      setErrorMessage(
+        taskScheduleDeleteError instanceof Error
+          ? taskScheduleDeleteError.message
+          : "Failed to delete task schedule."
+      );
+    } finally {
+      setActiveTaskScheduleActionKey(null);
     }
   }
 
@@ -2962,6 +3259,247 @@ function App() {
                       </div>
                     </CardSurface>
                   ) : null}
+
+                  <div className="devflow-detail-section devflow-task-schedule-panel">
+                    <div className="devflow-detail-section__header">
+                      <h3 className="devflow-detail-section__title">
+                        <HistoryIcon className="devflow-icon devflow-icon--small" />
+                        <span>Task Schedules</span>
+                      </h3>
+                      <span className="devflow-task-schedule-panel__summary">
+                        {isTaskSchedulePanelLoading
+                          ? "Loading..."
+                          : `${selectedTaskScheduleList.length} configured`}
+                      </span>
+                    </div>
+
+                    <CardSurface className="devflow-task-schedule-panel__create-card">
+                      <div className="devflow-task-schedule-panel__create-grid">
+                        <input
+                          className="devflow-input"
+                          placeholder="Schedule name"
+                          value={taskScheduleDraftName}
+                          onChange={(changeEvent) =>
+                            setTaskScheduleDraftName(changeEvent.target.value)
+                          }
+                        />
+                        <select
+                          className="devflow-input devflow-input--select"
+                          value={taskScheduleDraftActionType}
+                          onChange={(changeEvent) =>
+                            setTaskScheduleDraftActionType(
+                              changeEvent.target.value as TaskScheduleActionType
+                            )
+                          }
+                        >
+                          <option value={TaskScheduleActionType.START_TASK}>start_task</option>
+                          <option value={TaskScheduleActionType.RESUME_TASK}>resume_task</option>
+                        </select>
+                        <select
+                          className="devflow-input devflow-input--select"
+                          value={taskScheduleDraftTriggerType}
+                          onChange={(changeEvent) =>
+                            setTaskScheduleDraftTriggerType(
+                              changeEvent.target.value as TaskScheduleTriggerType
+                            )
+                          }
+                        >
+                          <option value={TaskScheduleTriggerType.ONCE}>once</option>
+                          <option value={TaskScheduleTriggerType.CRON}>cron</option>
+                        </select>
+                        {taskScheduleDraftTriggerType === TaskScheduleTriggerType.ONCE ? (
+                          <input
+                            className="devflow-input"
+                            type="datetime-local"
+                            value={taskScheduleDraftRunAtText}
+                            onChange={(changeEvent) =>
+                              setTaskScheduleDraftRunAtText(changeEvent.target.value)
+                            }
+                          />
+                        ) : (
+                          <input
+                            className="devflow-input"
+                            placeholder="Cron expression, e.g. 0 2 * * *"
+                            value={taskScheduleDraftCronExprText}
+                            onChange={(changeEvent) =>
+                              setTaskScheduleDraftCronExprText(changeEvent.target.value)
+                            }
+                          />
+                        )}
+                        <label className="devflow-task-schedule-panel__enabled-field">
+                          <input
+                            type="checkbox"
+                            checked={taskScheduleDraftIsEnabled}
+                            onChange={(changeEvent) =>
+                              setTaskScheduleDraftIsEnabled(changeEvent.target.checked)
+                            }
+                          />
+                          <span>Enabled</span>
+                        </label>
+                        <ActionButton
+                          variant="primary"
+                          busy={isTaskScheduleCreating}
+                          onClick={() => {
+                            void handleCreateTaskSchedule();
+                          }}
+                        >
+                          {isTaskScheduleCreating ? "Creating..." : "Save Schedule"}
+                        </ActionButton>
+                      </div>
+                    </CardSurface>
+
+                    {selectedTaskScheduleList.length === 0 ? (
+                      <div className="devflow-empty-card devflow-empty-card--detail">
+                        <p className="devflow-empty-card__text">
+                          No task schedule configured.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="devflow-task-schedule-panel__list">
+                        {selectedTaskScheduleList.map((taskScheduleItem) => {
+                          const toggleActionKey = `toggle:${taskScheduleItem.id}`;
+                          const runNowActionKey = `run-now:${taskScheduleItem.id}`;
+                          const deleteActionKey = `delete:${taskScheduleItem.id}`;
+                          const isToggleBusy =
+                            activeTaskScheduleActionKey === toggleActionKey;
+                          const isRunNowBusy =
+                            activeTaskScheduleActionKey === runNowActionKey;
+                          const isDeleteBusy =
+                            activeTaskScheduleActionKey === deleteActionKey;
+                          return (
+                            <CardSurface
+                              key={taskScheduleItem.id}
+                              className="devflow-task-schedule-panel__item"
+                            >
+                              <div className="devflow-task-schedule-panel__item-header">
+                                <h4 className="devflow-task-schedule-panel__item-title">
+                                  {taskScheduleItem.schedule_name}
+                                </h4>
+                                <span
+                                  className={
+                                    taskScheduleItem.is_enabled
+                                      ? "devflow-task-schedule-panel__item-status devflow-task-schedule-panel__item-status--enabled"
+                                      : "devflow-task-schedule-panel__item-status devflow-task-schedule-panel__item-status--disabled"
+                                  }
+                                >
+                                  {taskScheduleItem.is_enabled ? "Enabled" : "Disabled"}
+                                </span>
+                              </div>
+                              <p className="devflow-task-schedule-panel__item-meta">
+                                {formatTaskScheduleActionLabel(taskScheduleItem.action_type)}
+                                {" · "}
+                                {formatTaskScheduleTriggerLabel(taskScheduleItem.trigger_type)}
+                                {" · "}
+                                TZ {taskScheduleItem.timezone_name}
+                              </p>
+                              <p className="devflow-task-schedule-panel__item-meta">
+                                Next:{" "}
+                                {taskScheduleItem.next_run_at
+                                  ? formatDateTime(taskScheduleItem.next_run_at)
+                                  : "-"}
+                              </p>
+                              <p className="devflow-task-schedule-panel__item-meta">
+                                Last:{" "}
+                                <span
+                                  className={formatTaskScheduleRunStatusClassName(
+                                    taskScheduleItem.last_result_status
+                                  )}
+                                >
+                                  {formatTaskScheduleRunStatusLabel(
+                                    taskScheduleItem.last_result_status
+                                  )}
+                                </span>
+                              </p>
+                              <div className="devflow-task-schedule-panel__item-actions">
+                                <button
+                                  type="button"
+                                  className="devflow-detail-section__action"
+                                  disabled={isToggleBusy}
+                                  onClick={() => {
+                                    void handleToggleTaskSchedule(taskScheduleItem);
+                                  }}
+                                >
+                                  {isToggleBusy
+                                    ? "Saving..."
+                                    : taskScheduleItem.is_enabled
+                                      ? "Disable"
+                                      : "Enable"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="devflow-detail-section__action"
+                                  disabled={isRunNowBusy}
+                                  onClick={() => {
+                                    void handleRunTaskScheduleNow(taskScheduleItem);
+                                  }}
+                                >
+                                  {isRunNowBusy ? "Dispatching..." : "Run Now"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="devflow-detail-section__action"
+                                  disabled={isDeleteBusy}
+                                  onClick={() => {
+                                    void handleDeleteTaskSchedule(taskScheduleItem);
+                                  }}
+                                >
+                                  {isDeleteBusy ? "Deleting..." : "Delete"}
+                                </button>
+                              </div>
+                            </CardSurface>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <CardSurface className="devflow-task-schedule-panel__runs">
+                      <div className="devflow-task-schedule-panel__runs-header">
+                        <h4 className="devflow-task-schedule-panel__runs-title">
+                          Recent Schedule Runs
+                        </h4>
+                      </div>
+                      {selectedTaskScheduleRunList.length === 0 ? (
+                        <p className="devflow-task-schedule-panel__runs-empty">
+                          No schedule run history yet.
+                        </p>
+                      ) : (
+                        <div className="devflow-task-schedule-panel__run-list">
+                          {selectedTaskScheduleRunList.map((taskScheduleRunItem) => (
+                            <div
+                              key={taskScheduleRunItem.id}
+                              className="devflow-task-schedule-panel__run-item"
+                            >
+                              <div className="devflow-task-schedule-panel__run-primary">
+                                <span className="devflow-task-schedule-panel__run-schedule">
+                                  {selectedTaskScheduleNameMap[taskScheduleRunItem.schedule_id] ??
+                                    taskScheduleRunItem.schedule_id.slice(0, 8)}
+                                </span>
+                                <span
+                                  className={formatTaskScheduleRunStatusClassName(
+                                    taskScheduleRunItem.run_status
+                                  )}
+                                >
+                                  {formatTaskScheduleRunStatusLabel(
+                                    taskScheduleRunItem.run_status
+                                  )}
+                                </span>
+                              </div>
+                              <div className="devflow-task-schedule-panel__run-meta">
+                                Planned {formatDateTime(taskScheduleRunItem.planned_run_at)}
+                              </div>
+                              {taskScheduleRunItem.skip_reason ||
+                              taskScheduleRunItem.error_message ? (
+                                <div className="devflow-task-schedule-panel__run-note">
+                                  {taskScheduleRunItem.skip_reason ??
+                                    taskScheduleRunItem.error_message}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardSurface>
+                  </div>
 
                   <div className="devflow-detail-grid">
                     <div className="devflow-detail-section">
@@ -5192,6 +5730,52 @@ function formatStageLabel(stage: RequirementStage): string {
     [WorkflowStage.DONE]: "Done",
   };
   return stageLabelMap[stage] ?? stage.replace(/_/g, " ");
+}
+
+function formatTaskScheduleActionLabel(actionType: TaskScheduleActionType): string {
+  const actionTypeLabelMap: Record<TaskScheduleActionType, string> = {
+    [TaskScheduleActionType.START_TASK]: "start_task",
+    [TaskScheduleActionType.RESUME_TASK]: "resume_task",
+  };
+  return actionTypeLabelMap[actionType];
+}
+
+function formatTaskScheduleTriggerLabel(triggerType: TaskScheduleTriggerType): string {
+  const triggerTypeLabelMap: Record<TaskScheduleTriggerType, string> = {
+    [TaskScheduleTriggerType.ONCE]: "once",
+    [TaskScheduleTriggerType.CRON]: "cron",
+  };
+  return triggerTypeLabelMap[triggerType];
+}
+
+function formatTaskScheduleRunStatusLabel(
+  runStatus: TaskScheduleRunStatus | null
+): string {
+  if (runStatus === null) {
+    return "never";
+  }
+
+  const runStatusLabelMap: Record<TaskScheduleRunStatus, string> = {
+    [TaskScheduleRunStatus.SUCCEEDED]: "succeeded",
+    [TaskScheduleRunStatus.FAILED]: "failed",
+    [TaskScheduleRunStatus.SKIPPED]: "skipped",
+  };
+  return runStatusLabelMap[runStatus];
+}
+
+function formatTaskScheduleRunStatusClassName(
+  runStatus: TaskScheduleRunStatus | null
+): string {
+  if (runStatus === TaskScheduleRunStatus.SUCCEEDED) {
+    return "devflow-task-schedule-panel__status devflow-task-schedule-panel__status--succeeded";
+  }
+  if (runStatus === TaskScheduleRunStatus.FAILED) {
+    return "devflow-task-schedule-panel__status devflow-task-schedule-panel__status--failed";
+  }
+  if (runStatus === TaskScheduleRunStatus.SKIPPED) {
+    return "devflow-task-schedule-panel__status devflow-task-schedule-panel__status--skipped";
+  }
+  return "devflow-task-schedule-panel__status";
 }
 
 function formatFileSize(fileSizeBytes: number): string {

@@ -2,7 +2,7 @@
 
 ## 总览
 
-当前数据库围绕六个核心实体组织：
+当前数据库围绕八个核心实体组织：
 
 - `RunAccount`：谁在当前机器上运行 DSL
 - `Project`：可被任务绑定的本地 Git 仓库
@@ -10,6 +10,8 @@
 - `DevLog`：任务时间线中的文本、附件与 AI 结果
 - `EmailSettings`：SMTP 与提醒阈值的单例配置
 - `TaskNotification`：任务通知的审计记录与去重窗口
+- `TaskSchedule`：任务级自动触发规则（once/cron）
+- `TaskScheduleRun`：每次调度分发执行记录
 
 ## 时间语义契约
 
@@ -26,6 +28,9 @@ erDiagram
     PROJECT ||--o{ TASK : scopes
     TASK ||--o{ DEV_LOG : contains
     TASK ||--o{ TASK_NOTIFICATION : emits
+    TASK ||--o{ TASK_SCHEDULE : owns
+    TASK ||--o{ TASK_SCHEDULE_RUN : tracks
+    TASK_SCHEDULE ||--o{ TASK_SCHEDULE_RUN : generates
 
     RUN_ACCOUNT {
         string id PK
@@ -96,6 +101,37 @@ erDiagram
         string receiver_email_snapshot
         bool send_success
         string failure_message
+        datetime created_at
+    }
+
+    TASK_SCHEDULE {
+        string id PK
+        string task_id FK
+        string run_account_id FK
+        string schedule_name
+        string action_type
+        string trigger_type
+        datetime run_at
+        string cron_expr
+        string timezone_name
+        bool is_enabled
+        datetime next_run_at
+        datetime last_triggered_at
+        string last_result_status
+        datetime created_at
+        datetime updated_at
+    }
+
+    TASK_SCHEDULE_RUN {
+        string id PK
+        string schedule_id FK
+        string task_id FK
+        datetime planned_run_at
+        datetime triggered_at
+        datetime finished_at
+        string run_status
+        string skip_reason
+        string error_message
         datetime created_at
     }
 ```
@@ -193,6 +229,44 @@ erDiagram
 | `receiver_email_snapshot` | 发送时生效的收件人地址 |
 | `send_success` | 实际投递是否成功 |
 | `failure_message` | SMTP 失败或跳过原因 |
+
+### TaskSchedule
+
+`TaskSchedule` 定义任务的自动触发策略，并记录下次触发时间。调度器只读取启用状态且 `next_run_at <= now` 的规则。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `run_account_id` | 规则创建时的运行账户快照 |
+| `schedule_name` | 规则名称 |
+| `action_type` | 动作类型：`start_task` / `resume_task` |
+| `trigger_type` | 触发类型：`once` / `cron` |
+| `run_at` | 一次性触发时间（UTC naive） |
+| `cron_expr` | Cron 表达式（5 段） |
+| `timezone_name` | 规则解释时区（IANA） |
+| `is_enabled` | 规则开关 |
+| `next_run_at` | 下次触发时间（UTC naive） |
+| `last_triggered_at` | 最近一次触发时间 |
+| `last_result_status` | 最近一次执行结果 |
+
+### TaskScheduleRun
+
+`TaskScheduleRun` 是调度器审计表。每次调度分发尝试都会记录一条结果，并通过 `(schedule_id, planned_run_at)` 唯一键确保同一窗口不重复写入。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `schedule_id` | 所属调度规则 |
+| `task_id` | 所属任务（冗余快照） |
+| `planned_run_at` | 计划触发时间 |
+| `triggered_at` | 实际触发时间 |
+| `finished_at` | 处理完成时间 |
+| `run_status` | `succeeded` / `failed` / `skipped` |
+| `skip_reason` | 跳过原因 |
+| `error_message` | 失败原因 |
 
 ### DevLog
 

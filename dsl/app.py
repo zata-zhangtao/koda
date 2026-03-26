@@ -21,6 +21,7 @@ from dsl.api import (
     media_router,
     projects_router,
     run_accounts_router,
+    task_schedules_router,
     tasks_router,
     webdav_settings_router,
 )
@@ -82,6 +83,32 @@ async def _run_stalled_task_notification_loop() -> None:
             )
 
 
+async def _run_task_schedule_dispatch_loop() -> None:
+    """后台周期扫描到期调度规则并分发执行."""
+    from dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
+
+    while True:
+        try:
+            processed_schedule_count_int = await asyncio.to_thread(
+                TaskSchedulerDispatcher.dispatch_due_schedules,
+                config.SCHEDULER_MAX_DISPATCH_PER_TICK,
+            )
+            if processed_schedule_count_int > 0:
+                logger.info(
+                    "Processed %s task schedule dispatch(es)",
+                    processed_schedule_count_int,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as task_schedule_dispatch_error:
+            logger.exception(
+                "Task schedule dispatch loop failed: %s",
+                task_schedule_dispatch_error,
+            )
+
+        await asyncio.sleep(config.SCHEDULER_POLL_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理.
@@ -102,6 +129,11 @@ async def lifespan(app: FastAPI):
     stalled_task_notification_task = asyncio.create_task(
         _run_stalled_task_notification_loop()
     )
+    task_schedule_dispatch_task = (
+        asyncio.create_task(_run_task_schedule_dispatch_loop())
+        if config.SCHEDULER_ENABLE
+        else None
+    )
 
     try:
         yield
@@ -109,6 +141,10 @@ async def lifespan(app: FastAPI):
         stalled_task_notification_task.cancel()
         with suppress(asyncio.CancelledError):
             await stalled_task_notification_task
+        if task_schedule_dispatch_task is not None:
+            task_schedule_dispatch_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task_schedule_dispatch_task
 
         # 关闭时清理
         logger.info("DSL application shutting down")
@@ -141,6 +177,7 @@ def create_application() -> FastAPI:
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)
+    application.include_router(task_schedules_router)
     application.include_router(logs_router)
     application.include_router(media_router)
     application.include_router(chronicle_router)

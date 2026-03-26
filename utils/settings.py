@@ -62,6 +62,37 @@ def _load_float_env(env_var_name: str, default_value: float) -> float:
         return default_value
 
 
+def _load_positive_int_env(env_var_name: str, default_value: int) -> int:
+    """读取正整数环境变量.
+
+    Args:
+        env_var_name (str): 环境变量名
+        default_value (int): 默认值
+
+    Returns:
+        int: 解析后的正整数
+
+    Raises:
+        ValueError: 当环境变量不是合法正整数时抛出
+    """
+    raw_env_value = os.getenv(env_var_name)
+    if raw_env_value is None or raw_env_value.strip() == "":
+        return default_value
+
+    try:
+        parsed_int_value = int(raw_env_value)
+    except ValueError as value_error:
+        raise ValueError(
+            f"{env_var_name} must be an integer, got: {raw_env_value}"
+        ) from value_error
+
+    if parsed_int_value <= 0:
+        raise ValueError(
+            f"{env_var_name} must be a positive integer, got: {raw_env_value}"
+        )
+    return parsed_int_value
+
+
 def _load_app_timezone_name() -> str:
     """加载并验证应用时区配置.
 
@@ -102,6 +133,9 @@ class Config:
         WORKTREE_BRANCH_AI_NAMING_ENABLED (bool): 是否启用 AI worktree 分支命名
         WORKTREE_BRANCH_AI_MODEL (str): 用于 worktree 分支命名的模型名
         WORKTREE_BRANCH_AI_TIMEOUT_SECONDS (float): AI 命名超时时间（秒）
+        SCHEDULER_ENABLE (bool): 是否启用任务调度器
+        SCHEDULER_POLL_INTERVAL_SECONDS (int): 调度轮询间隔（秒）
+        SCHEDULER_MAX_DISPATCH_PER_TICK (int): 每轮最多派发条数
     """
 
     # 目录配置
@@ -168,6 +202,17 @@ class Config:
     WORKTREE_BRANCH_AI_TIMEOUT_SECONDS: ClassVar[float] = _load_float_env(
         "WORKTREE_BRANCH_AI_TIMEOUT_SECONDS",
         8.0,
+    )
+
+    # 任务调度器配置
+    SCHEDULER_ENABLE: ClassVar[bool] = _load_bool_env("SCHEDULER_ENABLE", True)
+    SCHEDULER_POLL_INTERVAL_SECONDS: ClassVar[int] = _load_positive_int_env(
+        "SCHEDULER_POLL_INTERVAL_SECONDS",
+        30,
+    )
+    SCHEDULER_MAX_DISPATCH_PER_TICK: ClassVar[int] = _load_positive_int_env(
+        "SCHEDULER_MAX_DISPATCH_PER_TICK",
+        20,
     )
 
     @classmethod

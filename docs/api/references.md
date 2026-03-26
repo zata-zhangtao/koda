@@ -76,6 +76,17 @@
         - update_task
         - get_task
 
+::: dsl.api.task_schedules
+    handler: python
+    options:
+      members:
+        - list_task_schedules
+        - create_task_schedule
+        - list_task_schedule_runs
+        - run_task_schedule_now
+        - update_task_schedule
+        - delete_task_schedule
+
 ## 响应 Schema
 
 ::: dsl.schemas.task_schema.TaskCreateSchema
@@ -85,6 +96,12 @@
     handler: python
 
 ::: dsl.schemas.task_schema.TaskCardMetadataSchema
+    handler: python
+
+::: dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
+    handler: python
+
+::: dsl.schemas.task_schedule_schema.TaskScheduleRunResponseSchema
     handler: python
 
 ::: dsl.api.logs
@@ -134,6 +151,12 @@
 ::: dsl.models.task_notification.TaskNotification
     handler: python
 
+::: dsl.models.task_schedule.TaskSchedule
+    handler: python
+
+::: dsl.models.task_schedule_run.TaskScheduleRun
+    handler: python
+
 ::: dsl.models.enums
     handler: python
     options:
@@ -143,6 +166,9 @@
         - WorkflowStage
         - AIProcessingStatus
         - TaskNotificationEventType
+        - TaskScheduleActionType
+        - TaskScheduleTriggerType
+        - TaskScheduleRunStatus
 
 ## 服务层
 
@@ -178,6 +204,23 @@
         - send_manual_interruption_notification
         - send_stalled_task_notification
         - scan_and_send_stalled_task_notifications
+
+::: dsl.services.task_schedule_service.TaskScheduleService
+    handler: python
+    options:
+      members:
+        - create_task_schedule
+        - list_task_schedules
+        - update_task_schedule
+        - delete_task_schedule
+        - list_task_schedule_runs
+
+::: dsl.services.task_scheduler_dispatcher.TaskSchedulerDispatcher
+    handler: python
+    options:
+      members:
+        - dispatch_due_schedules
+        - dispatch_schedule_run_now
 
 ::: dsl.services.log_service.LogService
     handler: python
