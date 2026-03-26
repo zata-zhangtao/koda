@@ -45,6 +45,7 @@
         - list_projects
         - create_project
         - get_project
+        - open_project_in_editor
         - open_project_in_trae
         - delete_project
 
@@ -71,6 +72,7 @@
         - resume_task
         - cancel_task
         - get_task_prd_file
+        - open_task_in_editor
         - open_task_in_trae
         - open_task_terminal
         - update_task
@@ -278,6 +280,16 @@
         - list_supported_runner_kind_list
         - get_runner_by_kind
         - resolve_runner_kind
+
+::: dsl.services.path_opener
+    handler: python
+    options:
+      members:
+        - PathOpenError
+        - PathOpenTargetNotFoundError
+        - PathOpenCommandError
+        - build_path_open_command
+        - open_path_in_editor
 
 ::: dsl.services.codex_runner
     handler: python

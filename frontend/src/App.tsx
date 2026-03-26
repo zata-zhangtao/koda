@@ -133,7 +133,7 @@ type MutationName =
   | "update"
   | "complete"
   | "delete"
-  | "open_trae"
+  | "open_editor"
   | "open_terminal"
   | "cancel"
   | null;
@@ -1787,33 +1787,39 @@ function App() {
     }
   }
 
-  async function handleOpenInTrae(taskItem: Task): Promise<void> {
-    setActiveMutationName("open_trae");
+  async function handleOpenInEditor(taskItem: Task): Promise<void> {
+    setActiveMutationName("open_editor");
     setErrorMessage(null);
     setSuccessMessage(null);
 
     try {
-      const result = await taskApi.openInTrae(taskItem.id);
-      setSuccessMessage(`已在 Trae 中打开：${result.opened}`);
+      const result = await taskApi.openInEditor(taskItem.id);
+      setSuccessMessage(`已在编辑器中打开：${result.opened}`);
     } catch (openError) {
       console.error(openError);
-      setErrorMessage("无法打开 Trae，请确认 worktree 目录已创建。");
+      setErrorMessage(
+        openError instanceof Error
+          ? openError.message
+          : "无法打开编辑器，请确认 worktree 目录已创建。"
+      );
     } finally {
       setActiveMutationName(null);
     }
   }
 
-  async function handleOpenProjectInTrae(projectId: string): Promise<void> {
-    setActiveMutationName("open_trae");
+  async function handleOpenProjectInEditor(projectId: string): Promise<void> {
+    setActiveMutationName("open_editor");
     setErrorMessage(null);
     setSuccessMessage(null);
 
     try {
-      const result = await projectApi.openInTrae(projectId);
-      setSuccessMessage(`已在 Trae 中打开：${result.opened}`);
+      const result = await projectApi.openInEditor(projectId);
+      setSuccessMessage(`已在编辑器中打开：${result.opened}`);
     } catch (openError) {
       console.error(openError);
-      setErrorMessage("无法打开 Trae。");
+      setErrorMessage(
+        openError instanceof Error ? openError.message : "无法打开编辑器。"
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -3096,13 +3102,13 @@ function App() {
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
                         <ActionButton
                           variant="outline"
-                          busy={activeMutationName === "open_trae"}
+                          busy={activeMutationName === "open_editor"}
                           onClick={() => {
-                            void handleOpenProjectInTrae(selectedTask.project_id!);
+                            void handleOpenProjectInEditor(selectedTask.project_id!);
                           }}
                         >
                           <CodeIcon className="devflow-icon devflow-icon--small" />
-                          <span>打开项目</span>
+                          <span>打开项目目录</span>
                         </ActionButton>
                       ) : null}
 
@@ -3111,9 +3117,9 @@ function App() {
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
                         <ActionButton
                           variant="outline"
-                          busy={activeMutationName === "open_trae"}
+                          busy={activeMutationName === "open_editor"}
                           onClick={() => {
-                            void handleOpenInTrae(selectedTask);
+                            void handleOpenInEditor(selectedTask);
                           }}
                         >
                           <CodeIcon className="devflow-icon devflow-icon--small" />

@@ -188,9 +188,9 @@ export const taskApi = {
   getPrdFile: (id: string) =>
     fetchApi<{ content: string | null; path: string | null }>(`/tasks/${id}/prd-file`),
 
-  /** 使用 trae-cn 打开 worktree 目录 */
-  openInTrae: (id: string) =>
-    fetchApi<{ opened: string }>(`/tasks/${id}/open-in-trae`, {
+  /** 使用配置的编辑器命令打开 worktree 目录 */
+  openInEditor: (id: string) =>
+    fetchApi<{ opened: string }>(`/tasks/${id}/open-in-editor`, {
       method: "POST",
     }),
 
@@ -316,9 +316,9 @@ export const projectApi = {
     }
   },
 
-  /** 使用 trae-cn 打开项目根目录 */
-  openInTrae: (id: string) =>
-    fetchApi<{ opened: string }>(`/projects/${id}/open-in-trae`, {
+  /** 使用配置的编辑器命令打开项目根目录 */
+  openInEditor: (id: string) =>
+    fetchApi<{ opened: string }>(`/projects/${id}/open-in-editor`, {
       method: "POST",
     }),
 };

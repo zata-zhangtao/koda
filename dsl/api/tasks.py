@@ -35,6 +35,11 @@ from dsl.services.automation_runner import (
     run_task_self_review_resume,
 )
 from dsl.services.log_service import LogService
+from dsl.services.path_opener import (
+    PathOpenCommandError,
+    PathOpenTargetNotFoundError,
+    open_path_in_editor,
+)
 from dsl.services.prd_file_service import find_task_prd_file_path
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
@@ -1213,12 +1218,11 @@ def get_task_prd_file(
         return {"content": None, "path": None}
 
 
-@router.post("/{task_id}/open-in-trae", status_code=status.HTTP_200_OK)
-def open_task_in_trae(
+def _open_task_worktree_in_editor(
     task_id: str,
-    db_session: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """使用 trae-cn 打开任务对应的 git worktree 目录.
+    db_session: Session,
+) -> dict[str, str]:
+    """使用配置的编辑器命令打开任务对应的 git worktree 目录.
 
     需要任务已有 worktree_path（即已触发过执行），且该路径在文件系统中存在。
 
@@ -1230,9 +1234,9 @@ def open_task_in_trae(
         dict: 包含打开路径的确认信息
 
     Raises:
-        HTTPException: 任务不存在（404）、worktree 未设置（422）或路径不存在（422）
+        HTTPException: 任务不存在（404）、worktree 未设置（422）、目标路径不存在（422）
+            或命令模板 / 可执行命令异常（500）
     """
-    import subprocess
     from pathlib import Path as _Path
 
     task_obj = TaskService.get_task_by_id(db_session, task_id)
@@ -1249,6 +1253,7 @@ def open_task_in_trae(
         )
 
     worktree_dir_path = _Path(task_obj.worktree_path)
+
     if not worktree_dir_path.exists():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1256,18 +1261,60 @@ def open_task_in_trae(
         )
 
     try:
-        subprocess.Popen(
-            ["trae-cn", str(worktree_dir_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        open_path_in_editor(
+            target_path=worktree_dir_path,
+            target_kind="worktree",
         )
-    except FileNotFoundError:
+    except PathOpenTargetNotFoundError as path_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(path_error),
+        ) from path_error
+    except PathOpenCommandError as path_error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="trae-cn executable not found in PATH.",
-        )
+            detail=str(path_error),
+        ) from path_error
 
     return {"opened": str(worktree_dir_path)}
+
+
+@router.post("/{task_id}/open-in-editor", status_code=status.HTTP_200_OK)
+def open_task_in_editor(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """使用配置的编辑器命令打开任务对应的 git worktree 目录.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict[str, str]: 包含打开路径的确认信息
+    """
+    return _open_task_worktree_in_editor(task_id=task_id, db_session=db_session)
+
+
+@router.post(
+    "/{task_id}/open-in-trae",
+    status_code=status.HTTP_200_OK,
+    deprecated=True,
+)
+def open_task_in_trae(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """兼容旧客户端的别名路由，内部复用 `open-in-editor` 逻辑.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict[str, str]: 包含打开路径的确认信息
+    """
+    return _open_task_worktree_in_editor(task_id=task_id, db_session=db_session)
 
 
 @router.post("/{task_id}/open-terminal", status_code=status.HTTP_200_OK)

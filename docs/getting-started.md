@@ -35,10 +35,22 @@ just dsl-dev backend_port=8100 frontend_port=5174
 ### 可选工具
 
 - `codex` CLI：用于任务启动后的 PRD 生成与编码执行
-- `trae-cn`：用于从 Web 界面直接打开项目目录或 worktree
+- 可执行的编辑器命令：用于从 Web 界面直接打开项目目录或 worktree；默认模板是 `trae-cn {target_path_shell}`，也可以改成 `code {target_path_shell}`、`cursor {target_path_shell}` 等
 - 终端启动器：`open-terminal` 默认支持 macOS、WSL 和常见 Linux 桌面终端
 
-如果默认终端启动器不适合你的环境，可以在根目录 `.env` 中设置：
+如果你需要修改“打开项目/Worktree”按钮使用的编辑器命令，可以在根目录 `.env` 中设置：
+
+```bash
+KODA_OPEN_PATH_COMMAND_TEMPLATE='code {target_path_shell}'
+```
+
+常用占位符：
+
+- `{target_path}`：原始目录路径
+- `{target_path_shell}`：Shell 转义后的目录路径
+- `{target_kind}`：当前目标类型，取值为 `project` 或 `worktree`
+
+如果默认终端启动器不适合你的环境，也可以在根目录 `.env` 中设置：
 
 ```bash
 KODA_OPEN_TERMINAL_COMMAND='cmd.exe /c start "" wsl.exe bash -lc {tail_command_shell}'
@@ -152,6 +164,10 @@ just docs-build
 ### 点击“打开终端”没有反应或报错
 
 优先确认任务日志文件已经生成。若你在 Linux/WSL 下使用了非常规终端，请设置 `KODA_OPEN_TERMINAL_COMMAND` 指向可用的启动命令。
+
+### 点击“打开项目目录”或“打开 Worktree”失败
+
+优先确认目标目录已经存在，再检查 `KODA_OPEN_PATH_COMMAND_TEMPLATE` 是否指向当前机器可执行的编辑器命令。
 
 ### 图片或附件上传失败
 

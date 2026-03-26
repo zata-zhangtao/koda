@@ -18,6 +18,8 @@ from dsl.api.tasks import (
     get_task_prd_file,
     list_task_card_metadata,
     list_tasks,
+    open_task_in_editor,
+    open_task_in_trae,
     regenerate_task_prd,
     resume_task,
 )
@@ -133,6 +135,103 @@ def test_create_task_exposes_auto_confirm_prd_and_execute_flag(
     )
 
     assert created_task.auto_confirm_prd_and_execute is True
+
+
+def test_open_task_in_editor_uses_shared_path_opener(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The neutral route should delegate to the shared path opener."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_dir_path = tmp_path / "task-worktree"
+    worktree_dir_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Open editor",
+        worktree_path=str(worktree_dir_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    opened_target_path_list: list[tuple[Path, str]] = []
+
+    def _fake_open_path_in_editor(target_path: Path, target_kind: str) -> None:
+        opened_target_path_list.append((target_path, target_kind))
+
+    monkeypatch.setattr(tasks_api, "open_path_in_editor", _fake_open_path_in_editor)
+
+    open_response = open_task_in_editor(task_obj.id, db_session)
+
+    assert open_response == {"opened": str(worktree_dir_path)}
+    assert opened_target_path_list == [(worktree_dir_path, "worktree")]
+
+
+def test_open_task_in_editor_surfaces_path_open_command_errors(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Command-template failures should map to HTTP 500 for the API layer."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_dir_path = tmp_path / "task-worktree"
+    worktree_dir_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Open editor",
+        worktree_path=str(worktree_dir_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    def _raise_path_open_command_error(*_args: object, **_kwargs: object) -> None:
+        raise tasks_api.PathOpenCommandError("bad editor config")
+
+    monkeypatch.setattr(
+        tasks_api,
+        "open_path_in_editor",
+        _raise_path_open_command_error,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_task_in_editor(task_obj.id, db_session)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "bad editor config"
+
+
+def test_open_task_in_trae_alias_reuses_editor_logic(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy alias route should reuse the neutral implementation."""
+    monkeypatch.setattr(
+        tasks_api,
+        "_open_task_worktree_in_editor",
+        lambda task_id, db_session: {"opened": f"/tmp/{task_id}"},
+    )
+
+    open_response = open_task_in_trae("task-123", db_session)
+
+    assert open_response == {"opened": "/tmp/task-123"}
 
 
 def test_list_task_card_metadata_derives_waiting_user_without_changing_workflow_stage(

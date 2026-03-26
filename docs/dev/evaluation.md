@@ -57,7 +57,7 @@
 2. 将任务绑定到该项目
 3. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
 4. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-5. 验证 `open-in-trae` 是否能打开 `worktree_path` 指向的真实目录
+5. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
 
 ### 媒体与导出
 

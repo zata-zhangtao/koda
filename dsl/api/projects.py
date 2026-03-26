@@ -3,6 +3,7 @@
 提供项目的创建、查询、更新和删除功能.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,6 +14,11 @@ from dsl.schemas.project_schema import (
     ProjectCreateSchema,
     ProjectResponseSchema,
     ProjectUpdateSchema,
+)
+from dsl.services.path_opener import (
+    PathOpenCommandError,
+    PathOpenTargetNotFoundError,
+    open_path_in_editor,
 )
 from dsl.services.project_service import ProjectService
 from utils.database import get_db
@@ -164,12 +170,11 @@ def get_project(
     return _to_response(project_obj)
 
 
-@router.post("/{project_id}/open-in-trae", status_code=status.HTTP_200_OK)
-def open_project_in_trae(
+def _open_project_root_in_editor(
     project_id: str,
-    db_session: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """使用 trae-cn 打开项目根目录.
+    db_session: Session,
+) -> dict[str, str]:
+    """使用配置的编辑器命令打开项目根目录.
 
     Args:
         project_id: 项目 ID
@@ -179,10 +184,9 @@ def open_project_in_trae(
         dict: 包含打开路径的确认信息
 
     Raises:
-        HTTPException: 项目不存在（404）或 trae-cn 未找到（500）
+        HTTPException: 项目不存在（404）、仓库路径异常（422）
+            或命令模板 / 可执行命令异常（500）
     """
-    import subprocess
-
     project_obj = ProjectService.get_project_by_id(db_session, project_id)
     if not project_obj:
         raise HTTPException(
@@ -211,18 +215,60 @@ def open_project_in_trae(
         )
 
     try:
-        subprocess.Popen(
-            ["trae-cn", project_obj.repo_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        open_path_in_editor(
+            target_path=Path(project_obj.repo_path),
+            target_kind="project",
         )
-    except FileNotFoundError:
+    except PathOpenTargetNotFoundError as path_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(path_error),
+        ) from path_error
+    except PathOpenCommandError as path_error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="trae-cn executable not found in PATH.",
-        )
+            detail=str(path_error),
+        ) from path_error
 
     return {"opened": project_obj.repo_path}
+
+
+@router.post("/{project_id}/open-in-editor", status_code=status.HTTP_200_OK)
+def open_project_in_editor(
+    project_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """使用配置的编辑器命令打开项目根目录.
+
+    Args:
+        project_id: 项目 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict[str, str]: 包含打开路径的确认信息
+    """
+    return _open_project_root_in_editor(project_id=project_id, db_session=db_session)
+
+
+@router.post(
+    "/{project_id}/open-in-trae",
+    status_code=status.HTTP_200_OK,
+    deprecated=True,
+)
+def open_project_in_trae(
+    project_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """兼容旧客户端的别名路由，内部复用 `open-in-editor` 逻辑.
+
+    Args:
+        project_id: 项目 ID
+        db_session: 数据库会话
+
+    Returns:
+        dict[str, str]: 包含打开路径的确认信息
+    """
+    return _open_project_root_in_editor(project_id=project_id, db_session=db_session)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

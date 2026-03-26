@@ -145,6 +145,7 @@ class Config:
         APP_NAME (str): 应用名称，用于日志记录器命名
         APP_TIMEZONE (str): 应用级展示时区（IANA 名称）
         KODA_AUTOMATION_RUNNER (str): 自动化执行器类型（`codex` 或 `claude`）
+        OPEN_PATH_COMMAND_TEMPLATE (str): 打开项目目录 / worktree 的命令模板
         TERMINAL_OPEN_COMMAND_TEMPLATE (str | None): 终端打开命令模板（可选）
         SERVE_FRONTEND_DIST (bool): 是否由 FastAPI 同源托管 `frontend/dist`
         FRONTEND_DIST_PATH (Path): 前端构建产物目录
@@ -183,6 +184,12 @@ class Config:
     # AI 置信度阈值 (Phase 2)
     AI_CONFIDENCE_THRESHOLD: ClassVar[float] = float(
         os.getenv("AI_CONFIDENCE_THRESHOLD", "0.85")
+    )
+
+    # 目录打开命令模板
+    OPEN_PATH_COMMAND_TEMPLATE: ClassVar[str] = os.getenv(
+        "KODA_OPEN_PATH_COMMAND_TEMPLATE",
+        "trae-cn {target_path_shell}",
     )
 
     # 终端打开命令模板（用于 Linux/WSL 覆盖默认行为）

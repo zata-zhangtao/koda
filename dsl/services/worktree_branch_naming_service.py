@@ -192,14 +192,18 @@ class WorktreeBranchNamingService:
         executor = ThreadPoolExecutor(max_workers=1)
         invoke_future = executor.submit(chat_model_obj.invoke, prompt_text)
         try:
-            model_response_obj = invoke_future.result(timeout=safe_timeout_seconds_float)
+            model_response_obj = invoke_future.result(
+                timeout=safe_timeout_seconds_float
+            )
         except FutureTimeoutError as timeout_error:
             invoke_future.cancel()
             raise TimeoutError("AI branch naming timed out.") from timeout_error
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
-        model_response_content = getattr(model_response_obj, "content", model_response_obj)
+        model_response_content = getattr(
+            model_response_obj, "content", model_response_obj
+        )
         return WorktreeBranchNamingService._coerce_message_content_to_text(
             model_response_content
         ).strip()
@@ -269,7 +273,10 @@ class WorktreeBranchNamingService:
             return ""
 
         recent_context_block_str = (
-            "\n".join(f"- {context_line_str}" for context_line_str in normalized_recent_context_line_list)
+            "\n".join(
+                f"- {context_line_str}"
+                for context_line_str in normalized_recent_context_line_list
+            )
             if normalized_recent_context_line_list
             else "- (none)"
         )
