@@ -314,6 +314,7 @@ def _schedule_prd_generation(
         dev_log_text_list=dev_log_text_snapshot_list,
         work_dir_path=effective_work_dir_path,
         worktree_path_str=task_obj.worktree_path,
+        auto_confirm_prd_and_execute_bool=task_obj.auto_confirm_prd_and_execute,
     )
     return _hydrate_task_response(task_obj, is_task_running_override=True)
 
@@ -926,6 +927,9 @@ def resume_task(
             dev_log_text_list=dev_log_text_snapshot_list,
             work_dir_path=effective_work_dir_path,
             worktree_path_str=resumable_task.worktree_path,
+            auto_confirm_prd_and_execute_bool=(
+                resumable_task.auto_confirm_prd_and_execute
+            ),
         )
     elif resumable_task.workflow_stage == WorkflowStage.IMPLEMENTATION_IN_PROGRESS:
         register_task_background_activity(task_id)

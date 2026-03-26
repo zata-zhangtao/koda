@@ -78,6 +78,12 @@
 
 ## 响应 Schema
 
+::: dsl.schemas.task_schema.TaskCreateSchema
+    handler: python
+
+::: dsl.schemas.task_schema.TaskResponseSchema
+    handler: python
+
 ::: dsl.schemas.task_schema.TaskCardMetadataSchema
     handler: python
 

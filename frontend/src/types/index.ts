@@ -90,6 +90,7 @@ export interface Task {
   last_ai_activity_at: string | null;
   worktree_path: string | null;
   requirement_brief: string | null;
+  auto_confirm_prd_and_execute: boolean;
   created_at: string;
   closed_at: string | null;
   log_count: number;

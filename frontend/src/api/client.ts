@@ -117,7 +117,12 @@ export const taskApi = {
   listCardMetadata: () => fetchApi<TaskCardMetadata[]>("/tasks/card-metadata"),
 
   /** 创建任务 */
-  create: (data: { task_title: string; project_id?: string | null; requirement_brief?: string | null }) =>
+  create: (data: {
+    task_title: string;
+    project_id?: string | null;
+    requirement_brief?: string | null;
+    auto_confirm_prd_and_execute?: boolean;
+  }) =>
     fetchApi<Task>("/tasks", {
       method: "POST",
       body: JSON.stringify(data),

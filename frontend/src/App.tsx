@@ -422,6 +422,10 @@ function App() {
   const [createRequirementAttachmentDraft, setCreateRequirementAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
   const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
+  const [
+    isAutoConfirmPrdAndExecuteEnabled,
+    setIsAutoConfirmPrdAndExecuteEnabled,
+  ] = useState(false);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
   const [editRequirementAttachmentDraft, setEditRequirementAttachmentDraft] =
@@ -469,6 +473,7 @@ function App() {
       createRequirementAttachmentInputRef.current.value = "";
     }
     setNewRequirementProjectId(nextProjectId);
+    setIsAutoConfirmPrdAndExecuteEnabled(false);
   }
 
   function openCreateRequirementPanel(): void {
@@ -1326,6 +1331,7 @@ function App() {
         task_title: nextRequirementTitle,
         project_id: newRequirementProjectId,
         requirement_brief: nextRequirementBrief,
+        auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
       });
 
       if (createRequirementAttachmentDraft) {
@@ -2512,6 +2518,20 @@ function App() {
                     </option>
                   ))}
                 </select>
+
+                <label className="devflow-create-panel__auto-execute">
+                  <input
+                    type="checkbox"
+                    checked={isAutoConfirmPrdAndExecuteEnabled}
+                    disabled={activeMutationName === "create"}
+                    onChange={(changeEvent) =>
+                      setIsAutoConfirmPrdAndExecuteEnabled(
+                        changeEvent.target.checked
+                      )
+                    }
+                  />
+                  <span>PRD 生成后自动确认并直接开始执行</span>
+                </label>
 
                 {errorMessage ? (
                   <div className="devflow-inline-message devflow-inline-message--error">

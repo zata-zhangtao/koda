@@ -1,7 +1,7 @@
 # Progress
 
 ## 2026-03-26
-- Initialized planning session with `bash /home/atahang/.cc-switch/skills/planning-with-files/scripts/init-session.sh`.
+- Initialized planning session with `planning-with-files/scripts/init-session.sh`.
 - Replaced migrated planning files with task-specific entries for the waiting-user card metadata bug.
 - Located likely backend/frontend files relevant to the issue and prepared for code-path inspection.
 - Read the active PRD and confirmed the issue is a display-state consistency bug, not a request to add a real workflow stage.

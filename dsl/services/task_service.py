@@ -169,6 +169,9 @@ class TaskService:
             stage_updated_at=utc_now_naive(),
             project_id=normalized_project_id,
             requirement_brief=task_create_schema.requirement_brief,
+            auto_confirm_prd_and_execute=(
+                task_create_schema.auto_confirm_prd_and_execute
+            ),
         )
 
         db_session.add(new_task)

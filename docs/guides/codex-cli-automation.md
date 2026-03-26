@@ -23,8 +23,11 @@
 5. `run_codex_prd` 组装 PRD Prompt
 6. 后端调用 `codex exec`
 7. 输出被实时写入数据库和 `/tmp/koda-<task短ID>.log`
-8. 成功后任务推进到 `prd_waiting_confirmation`
-9. 默认停在确认阶段，等待用户确认 PRD；不会自动继续执行代码实现，也不会默认提交代码
+8. 成功后按任务策略分流：
+   - 默认策略：推进到 `prd_waiting_confirmation`，等待用户确认 PRD
+   - 自动策略（`auto_confirm_prd_and_execute=true`）：跳过人工确认，直接推进到 `implementation_in_progress` 并启动 `run_codex_task`
+9. 仅默认策略会发送“PRD Ready / 等待确认”通知；自动策略不会发送该通知
+10. 默认策略不会自动继续执行代码实现，也不会默认提交代码
 
 ### 编码执行链路
 

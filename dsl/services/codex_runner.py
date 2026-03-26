@@ -1848,6 +1848,34 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
         db_session.close()
 
 
+def _get_task_auto_confirm_prd_and_execute_bool(task_id_str: str) -> bool:
+    """读取任务级自动确认 PRD 并执行策略.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+
+    Returns:
+        bool: 是否启用自动确认 PRD 并直接执行
+    """
+    from dsl.models.task import Task
+
+    db_session = SessionLocal()
+    try:
+        task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
+        if task_obj is None:
+            return False
+        return bool(task_obj.auto_confirm_prd_and_execute)
+    except Exception as strategy_query_error:
+        logger.warning(
+            "Failed to resolve auto-confirm strategy for task %s...: %s",
+            task_id_str[:8],
+            strategy_query_error,
+        )
+        return False
+    finally:
+        db_session.close()
+
+
 async def _run_codex_phase(
     task_id_str: str,
     run_account_id_str: str,
@@ -2097,8 +2125,9 @@ async def run_codex_prd(
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str | None = None,
+    auto_confirm_prd_and_execute_bool: bool | None = None,
 ) -> None:
-    """调用 codex 生成 PRD，完成后自动推进至 prd_waiting_confirmation.
+    """调用 codex 生成 PRD，完成后按任务策略推进阶段.
 
     fire-and-forget，不向调用方抛出异常。
 
@@ -2109,6 +2138,7 @@ async def run_codex_prd(
         dev_log_text_list: 历史日志文本列表
         work_dir_path: codex 工作目录
         worktree_path_str: git worktree 路径（可选）
+        auto_confirm_prd_and_execute_bool: 是否自动确认 PRD 并直接执行（None 表示从数据库读取）
     """
     register_task_background_activity(task_id_str)
     try:
@@ -2158,6 +2188,41 @@ async def run_codex_prd(
                     "任务已进入：待修改（changes_requested），需要人工介入。"
                 ),
                 failure_reason_str="PRD 生成阶段执行失败，未能自动产出可确认的 PRD。",
+            )
+            return
+
+        resolved_auto_confirm_prd_and_execute_bool = auto_confirm_prd_and_execute_bool
+        if resolved_auto_confirm_prd_and_execute_bool is None:
+            resolved_auto_confirm_prd_and_execute_bool = await asyncio.to_thread(
+                _get_task_auto_confirm_prd_and_execute_bool,
+                task_id_str,
+            )
+
+        if resolved_auto_confirm_prd_and_execute_bool:
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                (
+                    "✅ PRD 已生成，且任务已启用“自动确认并执行”。\n"
+                    "系统将跳过人工确认，直接进入实现阶段。"
+                ),
+                "FIXED",
+            )
+            await asyncio.to_thread(
+                _advance_stage_in_db, task_id_str, "implementation_in_progress"
+            )
+            logger.info(
+                "Task %s... PRD generated → implementation_in_progress (auto-confirm enabled)",
+                task_id_str[:8],
+            )
+            await run_codex_task(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                dev_log_text_list=dev_log_text_list + prd_phase_result.output_lines,
+                work_dir_path=work_dir_path,
+                worktree_path_str=worktree_path_str,
             )
             return
 

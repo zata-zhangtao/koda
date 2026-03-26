@@ -75,7 +75,7 @@
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
-| Planning session reset | `/home/atahang/.cc-switch/skills/planning-with-files/scripts/init-session.sh --force koda-dsl-dev-port-config` | Fresh planning workspace for this task | Passed; previous session archived and new `.claude/planning/current/` files created | passed |
+| Planning session reset | `planning-with-files/scripts/init-session.sh --force koda-dsl-dev-port-config` | Fresh planning workspace for this task | Passed; previous session archived and new `.claude/planning/current/` files created | passed |
 | Named port override parsing | `just --dry-run dsl-dev backend_port=8100 frontend_port=5174` | Backend `8100`, frontend `5174`, matching env propagation | Passed; dry-run showed correct parsed values and propagated env vars | passed |
 | Positional port override parsing | `just --dry-run dsl-dev 8100 5174` | Backend `8100`, frontend `5174` | Passed; dry-run showed the same effective values | passed |
 | Frontend-only override parsing | `just --dry-run dsl-dev frontend_port=5174` | Frontend `5174`, backend remains auto-selected | Passed; dry-run kept backend auto-selection and set frontend to `5174` | passed |

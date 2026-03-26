@@ -19,6 +19,7 @@ class TaskCreateSchema(BaseModel):
         task_title: 任务标题
         project_id: 关联的 Project ID（可选）
         requirement_brief: 需求描述文本（可选）
+        auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -26,6 +27,10 @@ class TaskCreateSchema(BaseModel):
     task_title: str = Field(..., min_length=1, max_length=200, description="任务标题")
     project_id: str | None = Field(None, description="关联的 Project ID")
     requirement_brief: str | None = Field(None, description="需求描述文本")
+    auto_confirm_prd_and_execute: bool = Field(
+        default=False,
+        description="PRD 生成后是否自动确认并直接进入执行",
+    )
 
 
 class TaskStatusUpdateSchema(BaseModel):
@@ -78,6 +83,7 @@ class TaskResponseSchema(DSLResponseSchema):
         lifecycle_status: 任务生命周期状态（向后兼容）
         workflow_stage: 工作流业务阶段；后台运行态由 is_codex_task_running 补充
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
+        auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
         created_at: 创建时间
         closed_at: 关闭时间
         log_count: 日志条目数量（计算字段）
@@ -101,6 +107,10 @@ class TaskResponseSchema(DSLResponseSchema):
     )
     worktree_path: str | None = Field(None, description="git worktree 绝对路径")
     requirement_brief: str | None = Field(None, description="需求描述文本")
+    auto_confirm_prd_and_execute: bool = Field(
+        default=False,
+        description="PRD 生成后是否自动确认并直接进入执行",
+    )
     created_at: datetime = Field(..., description="创建时间")
     closed_at: datetime | None = Field(None, description="关闭时间")
     log_count: int = Field(default=0, description="日志条目数量")

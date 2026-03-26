@@ -52,6 +52,7 @@ def test_database_session_bootstraps_empty_sqlite_file(tmp_path: Path) -> None:
         project_column_name_set
     )
     assert "requirement_brief" in task_column_name_set
+    assert "auto_confirm_prd_and_execute" in task_column_name_set
 
 
 def test_create_database_engine_enables_sqlite_wal_and_busy_timeout(

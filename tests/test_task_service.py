@@ -180,6 +180,33 @@ def test_create_task_allows_unlinked_tasks(db_session: Session) -> None:
     assert created_task.project_id is None
     assert created_task.lifecycle_status.value == "PENDING"
     assert created_task.stage_updated_at is not None
+    assert created_task.auto_confirm_prd_and_execute is False
+
+
+def test_create_task_persists_auto_confirm_prd_and_execute_flag(
+    db_session: Session,
+) -> None:
+    """Task creation should persist the auto-confirm-and-execute flag."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(
+            task_title="Auto execute after PRD",
+            auto_confirm_prd_and_execute=True,
+        ),
+        run_account_id=run_account_obj.id,
+    )
+
+    assert created_task.auto_confirm_prd_and_execute is True
 
 
 def test_update_workflow_stage_refreshes_stage_updated_at_only_on_stage_change(

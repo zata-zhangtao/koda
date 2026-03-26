@@ -17,58 +17,62 @@
 exclude: '^docs/|/migrations/'
 
 repos:
+  # ==========================================
+  # 1. 基础文件卫生 (本地执行，避免远程仓库拉取失败)
+  # ==========================================
   - repo: local
     hooks:
-      # ==========================================
-      # 1. 基础文件卫生 (本地执行，避免远程仓库拉取失败)
-      # ==========================================
       - id: trailing-whitespace
         name: trailing-whitespace
-        entry: uv run --with pre-commit-hooks trailing-whitespace-fixer
+        entry: uv run --with pre-commit-hooks==4.6.0 trailing-whitespace-fixer
         language: system
       - id: end-of-file-fixer
         name: end-of-file-fixer
-        entry: uv run --with pre-commit-hooks end-of-file-fixer
+        entry: uv run --with pre-commit-hooks==4.6.0 end-of-file-fixer
         language: system
       - id: check-yaml
         name: check-yaml
-        entry: uv run --with pre-commit-hooks check-yaml
+        entry: uv run --with pre-commit-hooks==4.6.0 check-yaml
         language: system
         args: ['--unsafe']
         files: \.(yaml|yml)$
       - id: check-toml
         name: check-toml
-        entry: uv run --with pre-commit-hooks check-toml
+        entry: uv run --with pre-commit-hooks==4.6.0 check-toml
         language: system
         files: \.toml$
       - id: check-added-large-files
         name: check-added-large-files
-        entry: uv run --with pre-commit-hooks check-added-large-files
+        entry: uv run --with pre-commit-hooks==4.6.0 check-added-large-files
         language: system
         args: ['--maxkb=50000']
       - id: debug-statements
         name: debug-statements
-        entry: uv run --with pre-commit-hooks debug-statement-hook
+        entry: uv run --with pre-commit-hooks==4.6.0 debug-statement-hook
         language: system
         types: [python]
 
-      # ==========================================
-      # 2. Python 代码质量 (Ruff 本地执行)
-      # ==========================================
+  # ==========================================
+  # 2. Python 代码质量 (本地执行 Ruff)
+  # ==========================================
+  - repo: local
+    hooks:
       - id: ruff
         name: ruff
-        entry: uv run --with ruff ruff check --fix
+        entry: uv run --with ruff==0.4.8 ruff check --fix
         language: system
         types: [python]
       - id: ruff-format
         name: ruff-format
-        entry: uv run --with ruff ruff format
+        entry: uv run --with ruff==0.4.8 ruff format
         language: system
         types: [python]
 
-      # ==========================================
-      # 3. 项目文档一致性检查
-      # ==========================================
+  # ==========================================
+  # 3. 项目文档一致性检查
+  # ==========================================
+  - repo: local
+    hooks:
       - id: check-guidelines-consistency
         name: Check guidelines consistency
         entry: uv run python hooks/check_guidelines_consistency.py

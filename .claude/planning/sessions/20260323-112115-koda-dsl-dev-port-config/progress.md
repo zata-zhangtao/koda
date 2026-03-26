@@ -62,7 +62,7 @@
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
-| Planning session reset | `/home/atahang/.cc-switch/skills/planning-with-files/scripts/init-session.sh --force` | Fresh planning workspace available | Passed; old session archived to `.claude/planning/sessions/20260323-104420-koda` | passed |
+| Planning session reset | `planning-with-files/scripts/init-session.sh --force` | Fresh planning workspace available | Passed; old session archived to `.claude/planning/sessions/20260323-104420-koda` | passed |
 | Runtime surface scan | `rg -n "FastAPI|APIRouter|uvicorn|create_app|...|setInterval|...|subprocess"` | Identify likely hot paths and blocking patterns | Found repeated polling, SQLite paths, and many subprocess-heavy services | passed |
 | Frontend/backend hot path inspection | `sed -n` reads across `frontend/src/App.tsx`, `frontend/src/api/client.ts`, `dsl/api/tasks.py`, `dsl/api/logs.py`, `dsl/services/log_service.py`, `dsl/services/codex_runner.py`, `utils/database.py` | Determine whether the UI generates sustained backend pressure | Confirmed 1-second full-dashboard polling during execution, 2-second selected-task log/PRD polling, and batched SQLite writes from Codex output | passed |
 | Local data-size snapshot | `uv run python -c '...count()...'` and `du -sh data` | Determine whether the current dataset is large enough to matter | Found 145153 `dev_logs`, 8 tasks, 2 projects, and an 89 MB SQLite DB | passed |

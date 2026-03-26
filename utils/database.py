@@ -31,6 +31,11 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added last_ai_activity_at column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN auto_confirm_prd_and_execute "
+        "BOOLEAN NOT NULL DEFAULT 0",
+        "Migration: added auto_confirm_prd_and_execute column to tasks",
+    ),
+    (
         "ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)",
         "Migration: added repo_remote_url column to projects",
     ),

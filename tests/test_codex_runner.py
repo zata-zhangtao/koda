@@ -327,6 +327,7 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
                 dev_log_text_list=["Need a refreshed PRD."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=False,
             )
         )
     finally:
@@ -340,6 +341,144 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
 
     assert not legacy_prd_file_path.exists()
     assert not semantic_prd_file_path.exists()
+
+
+def test_run_codex_prd_sends_prd_ready_notification_in_manual_mode(
+    tmp_path: Path,
+) -> None:
+    """Manual PRD mode should stop at confirmation and send ready notification."""
+    recorded_stage_value_list: list[str] = []
+    recorded_ready_notification_list: list[tuple[str, str]] = []
+
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated"],
+        )
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_prd_ready_notification(task_id_str: str, task_title_str: str) -> bool:
+        recorded_ready_notification_list.append((task_id_str, task_title_str))
+        return True
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = lambda *args, **kwargs: None
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_prd_ready_notification = fake_send_prd_ready_notification
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="manual-prd-task-id",
+                run_account_id_str="run-account-1",
+                task_title_str="Manual PRD",
+                dev_log_text_list=["Need manual confirmation."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=False,
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == ["prd_waiting_confirmation"]
+    assert recorded_ready_notification_list == [("manual-prd-task-id", "Manual PRD")]
+
+
+def test_run_codex_prd_auto_mode_skips_confirmation_and_starts_execution(
+    tmp_path: Path,
+) -> None:
+    """Auto PRD mode should skip confirmation and directly start implementation."""
+    recorded_stage_value_list: list[str] = []
+    recorded_log_entry_list: list[str] = []
+    recorded_run_codex_task_kwargs_list: list[dict[str, object]] = []
+
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated output line"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        del task_id_str, run_account_id_str, state_tag_value
+        recorded_log_entry_list.append(text_content_str)
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        del task_id_str
+        recorded_stage_value_list.append(next_stage_value)
+
+    async def fake_run_codex_task(**kwargs: object) -> None:
+        recorded_run_codex_task_kwargs_list.append(kwargs)
+
+    def fail_send_prd_ready_notification(*_: object, **__: object) -> bool:
+        raise AssertionError("Auto mode should not send PRD ready notification.")
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_run_codex_task = codex_runner.run_codex_task
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        codex_runner.run_codex_task = fake_run_codex_task
+        email_service.send_prd_ready_notification = fail_send_prd_ready_notification
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="auto-prd-task-id",
+                run_account_id_str="run-account-1",
+                task_title_str="Auto PRD",
+                dev_log_text_list=["Need auto execution."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=True,
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        codex_runner.run_codex_task = original_run_codex_task
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert recorded_stage_value_list == ["implementation_in_progress"]
+    assert any(
+        "自动确认并执行" in log_entry_text for log_entry_text in recorded_log_entry_list
+    )
+    assert len(recorded_run_codex_task_kwargs_list) == 1
+    assert recorded_run_codex_task_kwargs_list[0]["task_id_str"] == "auto-prd-task-id"
+    assert recorded_run_codex_task_kwargs_list[0]["dev_log_text_list"] == [
+        "Need auto execution.",
+        "PRD generated output line",
+    ]
 
 
 def test_build_codex_review_fix_prompt_preserves_full_latest_blocker_list() -> None:

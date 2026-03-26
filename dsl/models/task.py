@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
@@ -37,6 +37,7 @@ class Task(Base):
         stage_updated_at (datetime): 最近一次进入当前工作流阶段的时间
         last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
+        auto_confirm_prd_and_execute (bool): PRD 生成后是否自动确认并直接进入执行
         created_at (datetime): 创建时间
         closed_at (datetime | None): 关闭时间
     """
@@ -82,6 +83,12 @@ class Task(Base):
     requirement_brief: Mapped[str | None] = mapped_column(
         String(5000),
         nullable=True,
+    )
+    auto_confirm_prd_and_execute: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

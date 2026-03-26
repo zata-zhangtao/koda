@@ -67,7 +67,9 @@
 
 1. 创建任务，默认进入 `backlog`
 2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
-3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后推进到 `prd_waiting_confirmation`，等待用户确认
+3. `run_codex_prd` 调起 `codex exec` 生成 PRD，成功后按任务策略分流：
+   - 默认：推进到 `prd_waiting_confirmation`，等待用户确认
+   - 自动模式（`auto_confirm_prd_and_execute=true`）：直接推进到 `implementation_in_progress` 并启动实现链路
 4. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
 5. 点击“开始执行”，后端进入 `implementation_in_progress`
 6. `run_codex_task` 调起 `codex exec` 完成实现，成功后推进到 `self_review_in_progress`

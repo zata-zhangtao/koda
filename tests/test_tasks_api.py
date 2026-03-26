@@ -13,6 +13,7 @@ import dsl.models  # noqa: F401
 import dsl.api.tasks as tasks_api
 from dsl.api.tasks import (
     complete_task,
+    create_task,
     get_task,
     get_task_prd_file,
     list_task_card_metadata,
@@ -106,6 +107,32 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+
+
+def test_create_task_exposes_auto_confirm_prd_and_execute_flag(
+    db_session: Session,
+) -> None:
+    """Task API create should persist and return the auto-execute strategy flag."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    created_task = create_task(
+        tasks_api.TaskCreateSchema(
+            task_title="Auto mode",
+            requirement_brief="brief",
+            auto_confirm_prd_and_execute=True,
+        ),
+        db_session,
+    )
+
+    assert created_task.auto_confirm_prd_and_execute is True
 
 
 def test_list_task_card_metadata_derives_waiting_user_without_changing_workflow_stage(
