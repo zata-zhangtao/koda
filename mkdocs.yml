@@ -54,6 +54,9 @@ nav:
       - 部署说明: guides/deployment.md
       - 公网暴露: guides/public-exposure.md
       - 多执行器自动化: guides/codex-cli-automation.md
+  - 原型:
+      - 需求工作流示意: prototypes/requirement-workflow-demo.html
+      - 独立问答侧通道: prototypes/task-sidecar-qa-demo.html
   - 核心:
       - AI 资产: core/ai-assets.md
       - Prompt 管理: core/prompt-management.md

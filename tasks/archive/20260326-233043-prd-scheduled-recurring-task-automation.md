@@ -2,7 +2,7 @@
 
 **原始需求标题**：增加定时任务
 **需求名称（AI 归纳）**：任务定时触发与周期性自动化执行
-**文件路径**：`tasks/prd-c3e023d8.md`
+**文件路径**：`tasks/20260326-233043-prd-scheduled-recurring-task-automation.md`
 **创建时间**：2026-03-26 23:30:43 CST
 **需求背景/上下文**：用户希望把需求先放置在待办状态，配置到特定时间自动启动；同时支持可重复执行的自动化任务（例如夜间自动代码审查）。
 **参考上下文**：`dsl/models/task.py`, `dsl/services/task_service.py`, `dsl/api/tasks.py`, `dsl/services/codex_runner.py`, `dsl/app.py`, `frontend/src/types/index.ts`, `frontend/src/api/client.ts`, `utils/database.py`, `utils/settings.py`

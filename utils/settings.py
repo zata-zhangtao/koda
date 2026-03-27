@@ -134,6 +134,25 @@ def _load_automation_runner_kind() -> str:
     )
 
 
+def _load_task_qa_backend() -> str:
+    """加载任务独立问答后端类型.
+
+    Returns:
+        str: 合法的 sidecar Q&A 后端类型
+
+    Raises:
+        ValueError: 当 `TASK_QA_BACKEND` 不是支持的后端类型时抛出
+    """
+
+    raw_task_qa_backend = os.getenv("TASK_QA_BACKEND", "chat_model")
+    normalized_task_qa_backend = raw_task_qa_backend.strip().lower()
+    if normalized_task_qa_backend == "chat_model":
+        return normalized_task_qa_backend
+    raise ValueError(
+        f"Invalid TASK_QA_BACKEND value: {raw_task_qa_backend}. Expected: chat_model"
+    )
+
+
 class Config:
     """配置类 - 集中管理所有配置项
 
@@ -154,6 +173,9 @@ class Config:
         KODA_TUNNEL_ID (str): 单租户隧道标识
         KODA_TUNNEL_SHARED_TOKEN (str): agent 与 gateway 共用鉴权令牌
         KODA_TUNNEL_UPSTREAM_URL (str): 本地 agent 转发的上游地址
+        TASK_QA_BACKEND (str): 任务内独立问答使用的后端类型
+        TASK_QA_MODEL_NAME (str): 当问答后端切换到聊天模型时使用的模型名
+        TASK_QA_MODEL_TEMPERATURE (float): 问答聊天模型温度
         WORKTREE_BRANCH_AI_NAMING_ENABLED (bool): 是否启用 AI worktree 分支命名
         WORKTREE_BRANCH_AI_MODEL (str): 用于 worktree 分支命名的模型名
         WORKTREE_BRANCH_AI_TIMEOUT_SECONDS (float): AI 命名超时时间（秒）
@@ -184,6 +206,17 @@ class Config:
     # AI 置信度阈值 (Phase 2)
     AI_CONFIDENCE_THRESHOLD: ClassVar[float] = float(
         os.getenv("AI_CONFIDENCE_THRESHOLD", "0.85")
+    )
+
+    # 任务内独立问答配置
+    TASK_QA_BACKEND: ClassVar[str] = _load_task_qa_backend()
+    TASK_QA_MODEL_NAME: ClassVar[str] = os.getenv(
+        "TASK_QA_MODEL_NAME",
+        "qwen-plus",
+    )
+    TASK_QA_MODEL_TEMPERATURE: ClassVar[float] = _load_float_env(
+        "TASK_QA_MODEL_TEMPERATURE",
+        0.0,
     )
 
     # 目录打开命令模板

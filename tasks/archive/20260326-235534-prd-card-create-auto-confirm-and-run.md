@@ -2,7 +2,7 @@
 
 **原始需求标题**：增加允许直接按照推荐prd执行的功能
 **需求名称（AI 归纳）**：创建卡片时支持 PRD 自动确认并直接执行
-**文件路径**：`tasks/prd-3abebe7f.md`
+**文件路径**：`tasks/20260326-235534-prd-card-create-auto-confirm-and-run.md`
 **创建时间**：2026-03-26 23:55:34 CST
 **参考上下文**：`frontend/src/App.tsx`, `frontend/src/api/client.ts`, `dsl/api/tasks.py`, `dsl/services/task_service.py`, `dsl/services/codex_runner.py`, `dsl/schemas/task_schema.py`, `dsl/models/task.py`, `utils/database.py`, `docs/guides/codex-cli-automation.md`
 **附件上下文检查**：本次输入未出现 `Attached local files:` 段落，未提供可检查的本地图片/附件/视频文件。

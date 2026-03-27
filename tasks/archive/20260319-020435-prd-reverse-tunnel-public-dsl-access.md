@@ -2,7 +2,7 @@
 
 **原始需求标题**：Can a forwarding service be deployed on the server to expose this local application to the public internet, including the service code, Docker Compose, and any additional code and settings required?
 **需求名称（AI 归纳）**：服务器反向隧道转发与本地 DSL 公网访问方案
-**文件路径**：`tasks/prd-cfd7faaa.md`
+**文件路径**：`tasks/20260319-020435-prd-reverse-tunnel-public-dsl-access.md`
 **创建时间**：2026-03-19 02:04:35 CST
 **参考上下文**：`docs/guides/deployment.md`, `docs/guides/configuration.md`, `dsl/app.py`, `dsl/services/codex_runner.py`, `dsl/services/project_service.py`, `dsl/services/terminal_launcher.py`, `frontend/vite.config.ts`
 

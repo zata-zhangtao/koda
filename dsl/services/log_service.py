@@ -11,12 +11,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from dsl.models.dev_log import DevLog
-from dsl.models.enums import AIProcessingStatus, DevLogStateTag
+from dsl.models.enums import AIProcessingStatus, DevLogStateTag, TaskLifecycleStatus
 from dsl.schemas.dev_log_schema import CommandParseResultSchema, DevLogCreateSchema
 from utils.logger import logger
 
 if TYPE_CHECKING:
-    pass
+    from dsl.models.task import Task
 
 
 class LogService:
@@ -32,6 +32,63 @@ class LogService:
         "opt": DevLogStateTag.OPTIMIZATION,
         "transfer": DevLogStateTag.TRANSFERRED,
     }
+
+    @staticmethod
+    def _resolve_target_task_for_log_creation(
+        db_session: Session,
+        task_id: str | None,
+        run_account_id: str,
+        *,
+        allow_archived_task_write: bool = False,
+    ) -> "Task":
+        """Resolve the task that should receive a new formal feedback log.
+
+        Args:
+            db_session: Database session.
+            task_id: Explicit task ID from the request, if any.
+            run_account_id: Active run account ID.
+            allow_archived_task_write: Whether internal callers may write after
+                archival.
+
+        Returns:
+            Task: Target task that accepts formal feedback.
+
+        Raises:
+            ValueError: If no accessible writable task exists.
+        """
+
+        from dsl.models.task import Task
+
+        if not task_id:
+            latest_open_task: Task | None = (
+                db_session.query(Task)
+                .filter(
+                    Task.run_account_id == run_account_id,
+                    Task.lifecycle_status == TaskLifecycleStatus.OPEN,
+                )
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            if latest_open_task is None:
+                raise ValueError("No active task found. Please create a task first.")
+            return latest_open_task
+
+        task_obj = (
+            db_session.query(Task)
+            .filter(
+                Task.id == task_id,
+                Task.run_account_id == run_account_id,
+            )
+            .first()
+        )
+        if task_obj is None:
+            raise ValueError(f"Task with id {task_id} not found")
+        if not allow_archived_task_write and task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError("Closed or deleted tasks do not accept formal feedback.")
+        return task_obj
 
     @staticmethod
     def parse_command(input_text: str) -> CommandParseResultSchema:
@@ -111,6 +168,8 @@ class LogService:
         db_session: Session,
         log_create_schema: DevLogCreateSchema,
         run_account_id: str,
+        *,
+        allow_archived_task_write: bool = False,
     ) -> DevLog:
         """创建新的开发日志.
 
@@ -118,41 +177,24 @@ class LogService:
             db_session: 数据库会话
             log_create_schema: 日志创建数据
             run_account_id: 当前运行账户 ID
+            allow_archived_task_write: Whether internal callers may bypass the
+                archived-task formal-feedback guard.
 
         Returns:
             DevLog: 新创建的日志对象
 
         Raises:
-            ValueError: 当任务不存在时
+            ValueError: 当目标任务不存在、不可访问或不接受正式反馈时
         """
-        from dsl.models.task import Task
-
-        # 如果未指定 task_id，使用当前活跃账户的最新活跃任务
-        task_id = log_create_schema.task_id
-        if not task_id:
-            latest_open_task: Task | None = (
-                db_session.query(Task)
-                .filter(
-                    Task.run_account_id == run_account_id,
-                    Task.lifecycle_status == "OPEN",
-                )
-                .order_by(Task.created_at.desc())
-                .first()
-            )
-            if latest_open_task:
-                task_id = latest_open_task.id
-            else:
-                raise ValueError("No active task found. Please create a task first.")
-
-        # 验证任务存在
-        task_exists = (
-            db_session.query(Task).filter(Task.id == task_id).first() is not None
+        target_task_obj = LogService._resolve_target_task_for_log_creation(
+            db_session,
+            log_create_schema.task_id,
+            run_account_id,
+            allow_archived_task_write=allow_archived_task_write,
         )
-        if not task_exists:
-            raise ValueError(f"Task with id {task_id} not found")
 
         new_dev_log = DevLog(
-            task_id=task_id,
+            task_id=target_task_obj.id,
             run_account_id=run_account_id,
             text_content=log_create_schema.text_content,
             state_tag=log_create_schema.state_tag,
@@ -168,6 +210,29 @@ class LogService:
             f"Created DevLog: {new_dev_log.id[:8]}... with state {new_dev_log.state_tag.value}"
         )
         return new_dev_log
+
+    @staticmethod
+    def create_internal_log(
+        db_session: Session,
+        log_create_schema: DevLogCreateSchema,
+        run_account_id: str,
+    ) -> DevLog:
+        """Create a system/internal log that may target archived tasks.
+
+        Args:
+            db_session: 数据库会话
+            log_create_schema: 日志创建数据
+            run_account_id: 当前运行账户 ID
+
+        Returns:
+            DevLog: 新创建的内部日志对象
+        """
+        return LogService.create_log(
+            db_session,
+            log_create_schema,
+            run_account_id,
+            allow_archived_task_write=True,
+        )
 
     @staticmethod
     def get_logs(

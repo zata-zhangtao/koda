@@ -17,8 +17,8 @@ Koda 现在有三类关键配置：
 | --- | --- | --- |
 | `pyproject.toml` | Python 依赖定义 | FastAPI、SQLAlchemy、httpx、websockets、MkDocs、Pytest |
 | `justfile` | 命令入口 | `dsl-dev`、`public-build`、`public-run`、`public-agent` |
-| `utils/settings.py` | DSL 运行配置 | 日志、数据库、应用时区、媒体目录、目录/终端启动器模板、`SERVE_FRONTEND_DIST`、`KODA_TUNNEL_*` |
-| `.env.example` | 本机 DSL / agent 样例 | 开发安全默认值，保留可选 public 参数 |
+| `utils/settings.py` | DSL 运行配置 | 日志、数据库、应用时区、媒体目录、目录/终端启动器模板、`SERVE_FRONTEND_DIST`、`KODA_TUNNEL_*`、`TASK_QA_*` |
+| `.env.example` | 本机 DSL / agent 样例 | 开发安全默认值，保留可选 public 参数与 sidecar Q&A 默认策略 |
 | `deploy/public-forward/.env.example` | 服务器样例 | 域名、Basic Auth、gateway 参数 |
 | `deploy/public-forward/agent.env.example` | 本机公网模式样例 | 便于单独复制到开发机 |
 | `frontend/vite.config.ts` | 前端开发服务器配置 | 默认端口 `5173`、`/api` 与 `/media` 代理 |
@@ -40,6 +40,9 @@ Koda 现在有三类关键配置：
 | `MEDIA_STORAGE_PATH` | `<repo>/data/media` | 图片与附件目录 |
 | `AI_CONFIDENCE_THRESHOLD` | `0.85` | AI 解析置信度阈值预留值 |
 | `KODA_OPEN_PATH_COMMAND_TEMPLATE` | `trae-cn {target_path_shell}` | 覆盖“打开项目目录 / Worktree”按钮命令模板 |
+| `TASK_QA_BACKEND` | `chat_model` | 任务内独立问答后端；首版固定走 `model_loader` 聊天模型工具层 |
+| `TASK_QA_MODEL_NAME` | `qwen-plus` | 任务内独立问答使用的聊天模型名 |
+| `TASK_QA_MODEL_TEMPERATURE` | `0.0` | 任务内独立问答聊天模型温度 |
 | `KODA_OPEN_TERMINAL_COMMAND` | 未设置 | 覆盖“打开终端”按钮命令模板 |
 | `SERVE_FRONTEND_DIST` | `false` | 是否由 FastAPI 同源托管 `frontend/dist` |
 | `FRONTEND_DIST_PATH` | `<repo>/frontend/dist` | 打包前端目录 |
@@ -96,6 +99,7 @@ KODA_OPEN_PATH_COMMAND_TEMPLATE='trae-cn {target_path_shell}'
 - 调度器是单实例轮询模型；若暂不需要自动触发，可把 `SCHEDULER_ENABLE` 设为 `false`。
 - 根目录 `.env.example` 故意保持 `SERVE_FRONTEND_DIST=false`；如果要直接套用公网打包模式，请复制 `deploy/public-forward/agent.env.example`。
 - 根目录 `.env.example` 也保留了 `KODA_OPEN_PATH_COMMAND_TEMPLATE=trae-cn {target_path_shell}` 的本地默认值；如果你使用其他编辑器，请按本机命令覆盖。
+- sidecar Q&A 首版固定走 `TASK_QA_BACKEND=chat_model`，以复用 `ai_agent/utils/model_loader.py` 的模型与凭据管理能力，同时保持它与主 Codex 执行链路解耦。
 - 前端启动时会请求只读接口 `/api/app-config`，继续用它同步 `APP_TIMEZONE`。
 - 根目录 `.env.example` 适合本机 DSL / agent；服务器不要直接复用这个文件。
 - `KODA_AUTOMATION_RUNNER` 若配置为非法值，后端会在启动时直接失败并提示可用值。

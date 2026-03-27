@@ -2035,8 +2035,41 @@ img {
   border-top: 1px solid var(--devflow-line);
 }
 
+.devflow-feedback__channel-tabs {
+  display: inline-flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 4px;
+  border: 1px solid var(--devflow-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.devflow-feedback__channel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--devflow-text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.devflow-feedback__channel-tab--active {
+  background: var(--devflow-black);
+  color: #ffffff;
+}
+
 .devflow-feedback__composer {
   position: relative;
+}
+
+.devflow-feedback__composer--qa {
+  margin-top: 14px;
 }
 
 .devflow-feedback__attachment {
@@ -2103,6 +2136,160 @@ img {
   color: var(--devflow-text);
 }
 
+.devflow-feedback__qa-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.devflow-feedback__scope-tabs {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.devflow-feedback__scope-tab,
+.devflow-feedback__draft-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--devflow-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--devflow-text);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.devflow-feedback__scope-tab--active {
+  border-color: rgba(17, 17, 17, 0.18);
+  background: rgba(17, 17, 17, 0.92);
+  color: #ffffff;
+}
+
+.devflow-feedback__draft-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.devflow-feedback__qa-note {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+
+.devflow-feedback__qa-note-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.devflow-feedback__qa-note-pill--active {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+}
+
+.devflow-feedback__qa-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.devflow-feedback__qa-empty,
+.devflow-feedback__qa-message {
+  border: 1px solid var(--devflow-line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--devflow-shadow-soft);
+}
+
+.devflow-feedback__qa-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  color: var(--devflow-text-muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.devflow-feedback__qa-message {
+  padding: 14px 16px;
+}
+
+.devflow-feedback__qa-message--assistant {
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.92), #ffffff);
+}
+
+.devflow-feedback__qa-message--user {
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.92), #ffffff);
+}
+
+.devflow-feedback__qa-message--failed {
+  border-color: rgba(220, 38, 38, 0.18);
+}
+
+.devflow-feedback__qa-message-header,
+.devflow-feedback__qa-message-author,
+.devflow-feedback__qa-message-meta,
+.devflow-feedback__qa-pending {
+  display: flex;
+  align-items: center;
+}
+
+.devflow-feedback__qa-message-header {
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.devflow-feedback__qa-message-author {
+  gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.devflow-feedback__qa-message-meta {
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--devflow-text-muted);
+  font-size: 0.7rem;
+}
+
+.devflow-feedback__qa-pending {
+  gap: 10px;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.devflow-feedback__qa-error {
+  margin: 10px 0 0;
+  color: #b91c1c;
+  font-size: 0.76rem;
+}
+
+.devflow-markdown--task-qa {
+  color: var(--devflow-text);
+  font-size: 0.86rem;
+  line-height: 1.62;
+}
+
 .devflow-feedback__attach {
   position: absolute;
   bottom: 12px;
@@ -2143,6 +2330,10 @@ img {
     border-color 160ms ease,
     box-shadow 160ms ease,
     transform 160ms ease;
+}
+
+.devflow-feedback__textarea--qa {
+  padding-left: 18px;
 }
 
 .devflow-feedback__textarea:focus {

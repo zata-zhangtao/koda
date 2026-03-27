@@ -69,26 +69,31 @@ async def upload_image(
         HTTPException: 当上传失败时返回错误
     """
     run_account_id = _get_current_run_account_id(db_session)
+    saved_original_image_path: str | None = None
+    saved_thumbnail_image_path: str | None = None
+    did_create_log = False
 
     try:
         # 保存图片并生成缩略图
-        original_path, thumbnail_path = await MediaService.save_image(
-            uploaded_image_file
-        )
+        (
+            saved_original_image_path,
+            saved_thumbnail_image_path,
+        ) = await MediaService.save_image(uploaded_image_file)
 
         # 创建日志（Phase 1: AI 处理状态设为 PENDING，Phase 2 实现异步处理）
         from dsl.schemas.dev_log_schema import DevLogCreateSchema
 
         log_create = DevLogCreateSchema(
             text_content=text_content,
-            media_original_image_path=original_path,
-            media_thumbnail_path=thumbnail_path,
+            media_original_image_path=saved_original_image_path,
+            media_thumbnail_path=saved_thumbnail_image_path,
             task_id=task_id,
             # Phase 2: 启用 AI 处理
             # ai_processing_status=AIProcessingStatus.PENDING,
         )
 
         new_log = LogService.create_log(db_session, log_create, run_account_id)
+        did_create_log = True
 
         # Phase 2: 触发 AI 异步解析
         # await trigger_ai_analysis(new_log.id, original_path)
@@ -99,11 +104,19 @@ async def upload_image(
         return new_log
 
     except ValueError as error:
+        if not did_create_log:
+            MediaService.delete_stored_media_files(
+                [saved_original_image_path, saved_thumbnail_image_path]
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(error),
         ) from error
     except Exception as error:
+        if not did_create_log:
+            MediaService.delete_stored_media_files(
+                [saved_original_image_path, saved_thumbnail_image_path]
+            )
         logger.error(f"Failed to upload image: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -133,10 +146,12 @@ async def upload_attachment(
         HTTPException: 当上传失败时返回错误
     """
     run_account_id = _get_current_run_account_id(db_session)
+    saved_attachment_path: str | None = None
+    did_create_log = False
 
     try:
-        attachment_path = await MediaService.save_attachment(uploaded_file)
-        attachment_filename = Path(attachment_path).name
+        saved_attachment_path = await MediaService.save_attachment(uploaded_file)
+        attachment_filename = Path(saved_attachment_path).name
         attachment_markdown_line = (
             f"[Attachment: {uploaded_file.filename or attachment_filename}]"
             f"(/api/media/{attachment_filename})"
@@ -153,15 +168,20 @@ async def upload_attachment(
         )
 
         new_log = LogService.create_log(db_session, log_create, run_account_id)
+        did_create_log = True
         new_log.task_title = new_log.task.task_title if new_log.task else ""
         logger.info(f"Created attachment log: {new_log.id[:8]}...")
         return new_log
     except ValueError as error:
+        if not did_create_log:
+            MediaService.delete_stored_media_files([saved_attachment_path])
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(error),
         ) from error
     except Exception as error:
+        if not did_create_log:
+            MediaService.delete_stored_media_files([saved_attachment_path])
         logger.error(f"Failed to upload attachment: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

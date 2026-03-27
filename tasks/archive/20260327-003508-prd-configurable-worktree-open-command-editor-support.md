@@ -2,7 +2,7 @@
 
 **原始需求标题**：修改打开worktree的命令工具
 **需求名称（AI 归纳）**：Worktree/项目目录打开命令去 Trae 写死并支持用户自定义编辑器命令模板
-**文件路径**：`tasks/prd-e84b5309.md`
+**文件路径**：`tasks/20260327-003508-prd-configurable-worktree-open-command-editor-support.md`
 **创建时间**：2026-03-27 00:35:08 CST
 **需求背景/上下文**：当前“打开 worktree/项目目录”能力写死为 `trae-cn`，但实际编辑器可能是 VS Code、Trae、Kiro、Cursor 或其他工具；不能依赖固定枚举，需允许用户自定义命令。
 **参考上下文**：`dsl/api/tasks.py`, `dsl/api/projects.py`, `frontend/src/api/client.ts`, `frontend/src/App.tsx`, `utils/settings.py`, `docs/getting-started.md`, `docs/api/references.md`

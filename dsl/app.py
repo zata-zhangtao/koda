@@ -21,6 +21,7 @@ from dsl.api import (
     media_router,
     projects_router,
     run_accounts_router,
+    task_qa_router,
     task_schedules_router,
     tasks_router,
     webdav_settings_router,
@@ -177,6 +178,7 @@ def create_application() -> FastAPI:
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)
+    application.include_router(task_qa_router)
     application.include_router(task_schedules_router)
     application.include_router(logs_router)
     application.include_router(media_router)

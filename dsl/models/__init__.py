@@ -6,6 +6,9 @@
 from dsl.models.enums import (
     AIProcessingStatus,
     DevLogStateTag,
+    TaskQaContextScope,
+    TaskQaGenerationStatus,
+    TaskQaMessageRole,
     TaskScheduleActionType,
     TaskScheduleRunStatus,
     TaskScheduleTriggerType,
@@ -21,11 +24,15 @@ from dsl.models.email_settings import EmailSettings
 from dsl.models.task_schedule import TaskSchedule
 from dsl.models.task_schedule_run import TaskScheduleRun
 from dsl.models.task_notification import TaskNotification
+from dsl.models.task_qa_message import TaskQaMessage
 from dsl.models.webdav_settings import WebDAVSettings
 
 __all__ = [
     "AIProcessingStatus",
     "DevLogStateTag",
+    "TaskQaContextScope",
+    "TaskQaGenerationStatus",
+    "TaskQaMessageRole",
     "TaskScheduleActionType",
     "TaskScheduleRunStatus",
     "TaskScheduleTriggerType",
@@ -40,5 +47,6 @@ __all__ = [
     "TaskSchedule",
     "TaskScheduleRun",
     "TaskNotification",
+    "TaskQaMessage",
     "WebDAVSettings",
 ]

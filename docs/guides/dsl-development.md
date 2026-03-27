@@ -8,6 +8,7 @@
 - `dsl/` 提供 FastAPI 路由、服务层与 ORM 模型
 - `utils/` 提供配置、数据库和日志底座
 - `ai_agent/` 提供与主业务链路松耦合的模型配置工具
+- `dsl/services/task_qa_service.py` 则把这层工具能力用于任务内独立问答，而不是复用 `DevLog`
 
 ## 后端结构
 
@@ -19,7 +20,7 @@
 4. `lifespan` 同时启动停滞任务提醒扫描器与任务调度分发循环
 5. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
 6. 文件型 SQLite 连接会在创建时统一设置 `busy_timeout`、`foreign_keys=ON` 与 `journal_mode=WAL`，降低后台写日志和前台读接口并发时的锁冲突
-7. 应用注册 `run_accounts`、`projects`、`tasks`、`task_schedules`、`logs`、`media`、`chronicle`、`email_settings` 路由
+7. 应用注册 `run_accounts`、`projects`、`tasks`、`task_qa`、`task_schedules`、`logs`、`media`、`chronicle`、`email_settings` 路由
 8. `/media/original` 与 `/media/thumbnail` 通过 `StaticFiles` 暴露
 
 ### 路由与服务分工
@@ -30,7 +31,7 @@
 - `dsl/schemas/`：定义请求与响应模型
 - 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` 路由逻辑，不额外定义并行执行语义
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
-- 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
+- sidecar Q&A 约定：问答消息必须落到独立表，默认不写 `DevLog`，并且不得隐式改动 `workflow_stage`
 
 新增后端功能时，推荐保持下面的修改顺序：
 
@@ -39,6 +40,13 @@
 3. 在 `dsl/api/` 暴露路由
 4. 在前端 `api/client.ts` 对接接口
 5. 更新文档并执行验证
+
+如果新功能属于“只读 sidecar”而不是主执行链路，额外要确认：
+
+1. 是否引入了独立存储，而不是复用 `DevLog`
+2. 是否会被错误地拼进 Codex Prompt 上下文
+3. 是否错误复用了 `is_codex_task_running` 作为 sidecar 运行态
+4. 是否提供了从 sidecar 结论到正式反馈的显式转换入口
 
 ### 时间处理约定
 
@@ -113,6 +121,7 @@
 - 缩略图：`data/media/thumbnail`
 - 应用日志：`logs/app.log`
 - 任务实时输出：`/tmp/koda-<task短ID>.log`
+- 任务内独立问答：`task_qa_messages` 表（由 `utils.database.ensure_database_schema_ready()` 自动创建）
 
 如果出现“数据库有记录但界面没刷新”的情况，优先检查：
 

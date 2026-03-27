@@ -22,12 +22,15 @@ from dsl.api.tasks import (
     open_task_in_trae,
     regenerate_task_prd,
     resume_task,
+    update_task_stage,
+    update_task_status,
 )
 from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
+from dsl.schemas.task_schema import TaskStageUpdateSchema, TaskStatusUpdateSchema
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 
@@ -135,6 +138,136 @@ def test_create_task_exposes_auto_confirm_prd_and_execute_flag(
     )
 
     assert created_task.auto_confirm_prd_and_execute is True
+
+
+def test_update_task_stage_records_acceptance_audit_log(db_session: Session) -> None:
+    """Accepting a task should leave an internal audit log after archiving."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Acceptance flow",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    updated_task = update_task_stage(
+        task_obj.id,
+        TaskStageUpdateSchema(workflow_stage=WorkflowStage.DONE),
+        db_session,
+    )
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.workflow_stage == WorkflowStage.DONE
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.CLOSED
+    assert recorded_log_list[-1].text_content == "需求验收通过，已标记为完成。"
+    assert recorded_log_list[-1].state_tag == DevLogStateTag.FIXED
+
+
+def test_update_task_status_records_completed_archive_audit_log(
+    db_session: Session,
+) -> None:
+    """Closing a non-worktree task should keep its archive audit log."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Archive without worktree",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    updated_task = update_task_status(
+        task_obj.id,
+        TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.CLOSED),
+        db_session,
+    )
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.CLOSED
+    assert updated_task.workflow_stage == WorkflowStage.DONE
+    assert (
+        recorded_log_list[-1].text_content
+        == "Requirement completed and moved into the completed archive."
+    )
+    assert recorded_log_list[-1].state_tag == DevLogStateTag.FIXED
+
+
+def test_update_task_status_records_deleted_archive_audit_log(
+    db_session: Session,
+) -> None:
+    """Deleting a requirement should keep the structured deletion audit log."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Delete requirement",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+        requirement_brief="Final requirement summary",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    updated_task = update_task_status(
+        task_obj.id,
+        TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.DELETED),
+        db_session,
+    )
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+    latest_log_obj = recorded_log_list[-1]
+
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.DELETED
+    assert "<!-- requirement-change:delete -->" in latest_log_obj.text_content
+    assert "Title: Delete requirement" in latest_log_obj.text_content
+    assert "Final requirement summary" in latest_log_obj.text_content
+    assert latest_log_obj.state_tag == DevLogStateTag.NONE
 
 
 def test_open_task_in_editor_uses_shared_path_opener(

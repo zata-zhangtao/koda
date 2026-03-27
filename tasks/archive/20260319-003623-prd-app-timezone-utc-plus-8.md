@@ -2,7 +2,7 @@
 
 | 文档属性 | 内容 |
 | --- | --- |
-| 文件路径 | `tasks/prd-6c3896dc.md` |
+| 文件路径 | `tasks/20260319-003623-prd-app-timezone-utc-plus-8.md` |
 | 创建时间 | `2026-03-19 00:36:23 +0800` |
 | 需求标题 | `i hope modify timezone to UTC+8` |
 | 需求背景 | `i hope modify timezone to UTC+8` |

@@ -34,6 +34,7 @@ import {
   runAccountApi,
   taskScheduleApi,
   taskApi,
+  taskQaApi,
 } from "./api/client";
 import { SettingsModal } from "./components/SettingsModal";
 import {
@@ -50,6 +51,10 @@ import {
   TaskScheduleTriggerType,
   type TaskCardMetadata,
   type TaskDisplayStageKey,
+  TaskQaContextScope,
+  TaskQaGenerationStatus,
+  type TaskQaMessage,
+  TaskQaMessageRole,
   TaskLifecycleStatus,
   WorkflowStage,
   type DevLog,
@@ -75,6 +80,7 @@ type CompactTimelineCategory =
   | "changes";
 type WorkspaceView = "active" | "completed" | "changes";
 type AttachmentKind = "image" | "video" | "file";
+type ComposerMode = "feedback" | "sidecar_qa";
 
 interface RequirementViewModel {
   task: Task;
@@ -130,6 +136,8 @@ type MutationName =
   | "accept"
   | "request_changes"
   | "feedback"
+  | "qa"
+  | "qa_to_feedback"
   | "update"
   | "complete"
   | "delete"
@@ -179,6 +187,7 @@ const RESUMABLE_AUTOMATION_STAGE_SET = new Set<WorkflowStage>([
 const ACTIVE_DASHBOARD_POLL_INTERVAL_MS = 3000;
 const TASK_CARD_METADATA_POLL_INTERVAL_MS = 60_000;
 const SELECTED_TASK_LOG_POLL_INTERVAL_MS = 2000;
+const SELECTED_TASK_QA_POLL_INTERVAL_MS = 2000;
 const SELECTED_TASK_LOG_INITIAL_LIMIT = 300;
 const SELECTED_TASK_LOG_OLDER_BATCH_LIMIT = 300;
 const SELECTED_TASK_LOG_INCREMENTAL_LIMIT = 200;
@@ -441,9 +450,14 @@ function App() {
   >({});
   const [allDevLogList, setAllDevLogList] = useState<DevLog[]>([]);
   const [selectedTaskLogList, setSelectedTaskLogList] = useState<DevLog[]>([]);
+  const [selectedTaskQaMessageList, setSelectedTaskQaMessageList] = useState<
+    TaskQaMessage[]
+  >([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
+  const [activeComposerMode, setActiveComposerMode] =
+    useState<ComposerMode>("feedback");
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
   const [isEditPanelOpen, setIsEditPanelOpen] = useState(false);
   const [newRequirementTitle, setNewRequirementTitle] = useState("");
@@ -462,6 +476,9 @@ function App() {
   const [feedbackInputText, setFeedbackInputText] = useState("");
   const [feedbackAttachmentDraft, setFeedbackAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
+  const [taskQaInputText, setTaskQaInputText] = useState("");
+  const [selectedTaskQaContextScope, setSelectedTaskQaContextScope] =
+    useState<TaskQaContextScope>(TaskQaContextScope.PRD_CONFIRMATION);
   const [activeMutationName, setActiveMutationName] = useState<MutationName>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -879,12 +896,35 @@ function App() {
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
     : false;
+  const canRenderComposer = selectedTask !== null;
   const canSendFeedback = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
     : false;
+  const canSendTaskQa = canSendFeedback;
   const hasFeedbackPayload =
     Boolean(feedbackInputText.trim()) || feedbackAttachmentDraft !== null;
+  const hasTaskQaPayload = Boolean(taskQaInputText.trim());
+  const hasPendingTaskQaReply = useMemo(
+    () =>
+      selectedTaskQaMessageList.some(
+        (taskQaMessage) =>
+          taskQaMessage.role === TaskQaMessageRole.ASSISTANT &&
+          taskQaMessage.generation_status === TaskQaGenerationStatus.PENDING
+      ),
+    [selectedTaskQaMessageList]
+  );
+  const latestCompletedAssistantTaskQaMessage = useMemo(
+    () =>
+      [...selectedTaskQaMessageList]
+        .reverse()
+        .find(
+          (taskQaMessage) =>
+            taskQaMessage.role === TaskQaMessageRole.ASSISTANT &&
+            taskQaMessage.generation_status === TaskQaGenerationStatus.COMPLETED
+        ) ?? null,
+    [selectedTaskQaMessageList]
+  );
 
   const isSelectedTaskInActiveExecution =
     selectedTask?.is_codex_task_running ?? false;
@@ -1001,8 +1041,11 @@ function App() {
     setIsCreatePanelOpen(false);
     resetCreateRequirementDraft();
     setIsEditPanelOpen(false);
+    setActiveComposerMode("feedback");
     setFeedbackInputText("");
     setFeedbackAttachmentDraft(null);
+    setTaskQaInputText("");
+    setSelectedTaskQaMessageList([]);
     setSuccessMessage(null);
     setErrorMessage(null);
     setPrdFileContent(null);
@@ -1028,6 +1071,10 @@ function App() {
     setIsRequirementSummaryExpanded(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
+  }, [detailTaskId]);
+
+  useEffect(() => {
+    setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
   }, [detailTaskId]);
 
   useEffect(() => {
@@ -1210,6 +1257,35 @@ function App() {
       window.clearInterval(pollTaskScheduleId);
     };
   }, [detailTaskId]);
+
+  useEffect(() => {
+    if (!detailTaskId || !canRenderComposer) {
+      setSelectedTaskQaMessageList([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadTaskQaMessages = async () => {
+      try {
+        const taskQaMessageList = await taskQaApi.list(detailTaskId);
+        if (cancelled) {
+          return;
+        }
+        setSelectedTaskQaMessageList(sortTaskQaMessageListByCreatedAt(taskQaMessageList));
+      } catch {
+        // Ignore transient polling failures and let the next interval retry.
+      }
+    };
+
+    void loadTaskQaMessages();
+    const pollId = window.setInterval(() => {
+      void loadTaskQaMessages();
+    }, SELECTED_TASK_QA_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
+  }, [canRenderComposer, detailTaskId]);
 
   // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
   const _prdPollTask = useMemo(
@@ -1754,12 +1830,6 @@ function App() {
 
     try {
       await taskApi.updateStage(taskItem.id, WorkflowStage.DONE);
-      await logApi.create({
-        task_id: taskItem.id,
-        text_content:
-          "需求验收通过，已标记为完成。",
-        state_tag: DevLogStateTag.FIXED,
-      });
       setWorkspaceView("completed");
       await loadDashboardData(true);
     } catch (acceptError) {
@@ -1999,12 +2069,6 @@ function App() {
       }
 
       await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.CLOSED);
-      await logApi.create({
-        task_id: taskItem.id,
-        text_content:
-          "Requirement completed and moved into the completed archive.",
-        state_tag: DevLogStateTag.FIXED,
-      });
       setWorkspaceView("completed");
       setSuccessMessage("Requirement moved to completed.");
       await loadDashboardData(true);
@@ -2017,11 +2081,6 @@ function App() {
   }
 
   async function handleDeleteRequirement(taskItem: Task): Promise<void> {
-    const taskSnapshot = deriveRequirementSnapshot(
-      taskItem,
-      devLogsByTaskId[taskItem.id] ?? []
-    );
-
     const isDeletionConfirmed = window.confirm(
       "Move this requirement into deleted history?"
     );
@@ -2035,14 +2094,6 @@ function App() {
 
     try {
       await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.DELETED);
-      await logApi.create({
-        task_id: taskItem.id,
-        text_content: buildRequirementDeleteLog(
-          taskItem.task_title,
-          taskSnapshot.summary
-        ),
-        state_tag: DevLogStateTag.NONE,
-      });
       setWorkspaceView("changes");
       setSuccessMessage("Requirement moved to deleted history.");
       await loadDashboardData(true);
@@ -2055,7 +2106,7 @@ function App() {
   }
 
   async function handleFeedbackSubmit(): Promise<void> {
-    if (!selectedTask) {
+    if (!selectedTask || !canSendFeedback) {
       return;
     }
 
@@ -2183,12 +2234,96 @@ function App() {
     }
   }
 
+  async function handleTaskQaSubmit(): Promise<void> {
+    if (!selectedTask || !canSendTaskQa) {
+      return;
+    }
+
+    const nextTaskQaInputText = taskQaInputText.trim();
+    if (!nextTaskQaInputText) {
+      return;
+    }
+
+    setActiveMutationName("qa");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const taskQaCreateResponse = await taskQaApi.create(selectedTask.id, {
+        question_markdown: nextTaskQaInputText,
+        context_scope: selectedTaskQaContextScope,
+      });
+      setTaskQaInputText("");
+      setSelectedTaskQaMessageList((previousTaskQaMessageList) =>
+        sortTaskQaMessageListByCreatedAt([
+          ...previousTaskQaMessageList,
+          taskQaCreateResponse.user_message,
+          taskQaCreateResponse.assistant_message,
+        ])
+      );
+      setSuccessMessage(
+        selectedTask.is_codex_task_running
+          ? "Question sent. Sidecar Q&A is answering without interrupting the current execution."
+          : "Question sent. Sidecar Q&A is preparing a reply."
+      );
+    } catch (taskQaError) {
+      console.error(taskQaError);
+      setErrorMessage(
+        taskQaError instanceof Error
+          ? taskQaError.message
+          : "Failed to submit sidecar Q&A."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleConvertLatestTaskQaToFeedbackDraft(): Promise<void> {
+    if (!selectedTask || !latestCompletedAssistantTaskQaMessage) {
+      return;
+    }
+
+    setActiveMutationName("qa_to_feedback");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const feedbackDraftResponse = await taskQaApi.convertToFeedbackDraft(
+        selectedTask.id,
+        latestCompletedAssistantTaskQaMessage.id
+      );
+      setFeedbackInputText(feedbackDraftResponse.draft_markdown);
+      setActiveComposerMode("feedback");
+      setSuccessMessage(
+        "The latest sidecar Q&A conclusion was organized into a feedback draft."
+      );
+    } catch (taskQaDraftError) {
+      console.error(taskQaDraftError);
+      setErrorMessage(
+        taskQaDraftError instanceof Error
+          ? taskQaDraftError.message
+          : "Failed to convert sidecar Q&A into a feedback draft."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   function handleFeedbackKeyDown(
     keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
   ): void {
     if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
       keyboardEvent.preventDefault();
       void handleFeedbackSubmit();
+    }
+  }
+
+  function handleTaskQaKeyDown(
+    keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
+  ): void {
+    if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
+      keyboardEvent.preventDefault();
+      void handleTaskQaSubmit();
     }
   }
 
@@ -3744,78 +3879,302 @@ function App() {
                   </div>
                 </div>
 
-                {canSendFeedback ? (
+                {canRenderComposer ? (
                   <div className="devflow-feedback">
-                    {feedbackAttachmentDraft ? (
-                      <div className="devflow-feedback__attachment">
-                        {renderAttachmentPreview(feedbackAttachmentDraft)}
-
-                        <div className="devflow-feedback__attachment-copy">
-                          <span className="devflow-feedback__attachment-name">
-                            {feedbackAttachmentDraft.file.name}
-                          </span>
-                          <span className="devflow-feedback__attachment-meta">
-                            {getAttachmentLabel(feedbackAttachmentDraft.kind)}
-                            {" · "}
-                            {formatFileSize(feedbackAttachmentDraft.file.size)}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          className="devflow-feedback__attachment-remove"
-                          onClick={clearAttachmentDraft}
-                        >
-                          <XIcon className="devflow-icon devflow-icon--small" />
-                        </button>
-                      </div>
-                    ) : null}
-
-                    <div className="devflow-feedback__composer">
+                    <div className="devflow-feedback__channel-tabs">
                       <button
                         type="button"
-                        className="devflow-feedback__attach"
-                        onClick={() => feedbackAttachmentInputRef.current?.click()}
-                        disabled={activeMutationName === "feedback"}
+                        className={joinClassNames(
+                          "devflow-feedback__channel-tab",
+                          activeComposerMode === "feedback" &&
+                            "devflow-feedback__channel-tab--active"
+                        )}
+                        onClick={() => setActiveComposerMode("feedback")}
                       >
                         <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                        <span>反馈给执行链路</span>
                       </button>
-
-                      <textarea
-                        className="devflow-feedback__textarea"
-                        placeholder="Ask AI to refine the PRD, or paste an image/video/file directly..."
-                        value={feedbackInputText}
-                        onChange={(changeEvent) =>
-                          setFeedbackInputText(changeEvent.target.value)
-                        }
-                        onKeyDown={handleFeedbackKeyDown}
-                        onPaste={handleFeedbackPaste}
-                      />
-
                       <button
                         type="button"
-                        className="devflow-feedback__send"
-                        onClick={() => {
-                          void handleFeedbackSubmit();
-                        }}
-                        disabled={
-                          activeMutationName === "feedback" || !hasFeedbackPayload
-                        }
+                        className={joinClassNames(
+                          "devflow-feedback__channel-tab",
+                          activeComposerMode === "sidecar_qa" &&
+                            "devflow-feedback__channel-tab--active"
+                        )}
+                        onClick={() => setActiveComposerMode("sidecar_qa")}
                       >
-                        <SendIcon className="devflow-icon devflow-icon--small" />
+                        <RobotIcon className="devflow-icon devflow-icon--small" />
+                        <span>问 AI</span>
                       </button>
-
-                      <input
-                        ref={feedbackAttachmentInputRef}
-                        className="devflow-feedback__file-input"
-                        type="file"
-                        onChange={handleAttachmentInputChange}
-                      />
                     </div>
-                    <p className="devflow-feedback__hint">
-                      Tip: Press Enter to send, Shift + Enter for new line, or paste an
-                      image/video/file directly into the composer.
-                    </p>
+
+                    {activeComposerMode === "feedback" ? (
+                      <>
+                        {feedbackAttachmentDraft ? (
+                          <div className="devflow-feedback__attachment">
+                            {renderAttachmentPreview(feedbackAttachmentDraft)}
+
+                            <div className="devflow-feedback__attachment-copy">
+                              <span className="devflow-feedback__attachment-name">
+                                {feedbackAttachmentDraft.file.name}
+                              </span>
+                              <span className="devflow-feedback__attachment-meta">
+                                {getAttachmentLabel(feedbackAttachmentDraft.kind)}
+                                {" · "}
+                                {formatFileSize(feedbackAttachmentDraft.file.size)}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              className="devflow-feedback__attachment-remove"
+                              onClick={clearAttachmentDraft}
+                            >
+                              <XIcon className="devflow-icon devflow-icon--small" />
+                            </button>
+                          </div>
+                        ) : null}
+
+                        <div className="devflow-feedback__composer">
+                          <button
+                            type="button"
+                            className="devflow-feedback__attach"
+                            onClick={() => feedbackAttachmentInputRef.current?.click()}
+                            disabled={
+                              activeMutationName === "feedback" || !canSendFeedback
+                            }
+                          >
+                            <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                          </button>
+
+                          <textarea
+                            className="devflow-feedback__textarea"
+                            placeholder={
+                              canSendFeedback
+                                ? "Send formal feedback for PRD regeneration, execution changes, or implementation follow-up..."
+                                : "This task is archived. Existing feedback drafts remain visible here, but formal feedback can no longer be sent."
+                            }
+                            value={feedbackInputText}
+                            readOnly={!canSendFeedback}
+                            onChange={(changeEvent) =>
+                              setFeedbackInputText(changeEvent.target.value)
+                            }
+                            onKeyDown={handleFeedbackKeyDown}
+                            onPaste={handleFeedbackPaste}
+                          />
+
+                          <button
+                            type="button"
+                            className="devflow-feedback__send"
+                            onClick={() => {
+                              void handleFeedbackSubmit();
+                            }}
+                            disabled={
+                              activeMutationName === "feedback" ||
+                              !hasFeedbackPayload ||
+                              !canSendFeedback
+                            }
+                          >
+                            <SendIcon className="devflow-icon devflow-icon--small" />
+                          </button>
+
+                          <input
+                            ref={feedbackAttachmentInputRef}
+                            className="devflow-feedback__file-input"
+                            type="file"
+                            onChange={handleAttachmentInputChange}
+                          />
+                        </div>
+                        <p className="devflow-feedback__hint">
+                          {canSendFeedback
+                            ? "Formal feedback can regenerate the PRD, resume execution, or influence the main automation history. Press Enter to send, Shift + Enter for new line, or paste an image/video/file directly into the composer."
+                            : "This task has already been completed. Draft text stays visible for reference, but the formal feedback channel is now read-only."}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="devflow-feedback__qa-toolbar">
+                          <div className="devflow-feedback__scope-tabs">
+                            <button
+                              type="button"
+                              className={joinClassNames(
+                                "devflow-feedback__scope-tab",
+                                selectedTaskQaContextScope ===
+                                  TaskQaContextScope.PRD_CONFIRMATION &&
+                                  "devflow-feedback__scope-tab--active"
+                              )}
+                              onClick={() =>
+                                setSelectedTaskQaContextScope(
+                                  TaskQaContextScope.PRD_CONFIRMATION
+                                )
+                              }
+                              disabled={!canSendTaskQa}
+                            >
+                              PRD 确认
+                            </button>
+                            <button
+                              type="button"
+                              className={joinClassNames(
+                                "devflow-feedback__scope-tab",
+                                selectedTaskQaContextScope ===
+                                  TaskQaContextScope.IMPLEMENTATION &&
+                                  "devflow-feedback__scope-tab--active"
+                              )}
+                              onClick={() =>
+                                setSelectedTaskQaContextScope(
+                                  TaskQaContextScope.IMPLEMENTATION
+                                )
+                              }
+                              disabled={!canSendTaskQa}
+                            >
+                              实现陪跑
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="devflow-feedback__draft-action"
+                            disabled={
+                              activeMutationName === "qa_to_feedback" ||
+                              latestCompletedAssistantTaskQaMessage === null
+                            }
+                            onClick={() => {
+                              void handleConvertLatestTaskQaToFeedbackDraft();
+                            }}
+                          >
+                            整理最近一次结论为反馈草稿
+                          </button>
+                        </div>
+
+                        <div className="devflow-feedback__qa-note">
+                          <span className="devflow-feedback__qa-note-pill">
+                            独立问答不会写入 DevLog，也不会触发主执行链路动作
+                          </span>
+                          {selectedTask.is_codex_task_running ? (
+                            <span className="devflow-feedback__qa-note-pill devflow-feedback__qa-note-pill--active">
+                              当前 coding 正在继续，此问答不会打断执行
+                            </span>
+                          ) : null}
+                          {!canSendTaskQa ? (
+                            <span className="devflow-feedback__qa-note-pill">
+                              任务已归档，历史问答仍可查看，但不会再发送新问题
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="devflow-feedback__qa-thread">
+                          {selectedTaskQaMessageList.length === 0 ? (
+                            <div className="devflow-feedback__qa-empty">
+                              <RobotIcon className="devflow-icon devflow-icon--small" />
+                              <span>
+                                这里的问答默认只是澄清问题，不会隐式改 PRD、恢复执行或
+                                中断 coding。
+                              </span>
+                            </div>
+                          ) : (
+                            selectedTaskQaMessageList.map((taskQaMessage) => (
+                              <article
+                                key={taskQaMessage.id}
+                                className={joinClassNames(
+                                  "devflow-feedback__qa-message",
+                                  taskQaMessage.role === TaskQaMessageRole.USER
+                                    ? "devflow-feedback__qa-message--user"
+                                    : "devflow-feedback__qa-message--assistant",
+                                  taskQaMessage.generation_status ===
+                                    TaskQaGenerationStatus.FAILED &&
+                                    "devflow-feedback__qa-message--failed"
+                                )}
+                              >
+                                <header className="devflow-feedback__qa-message-header">
+                                  <div className="devflow-feedback__qa-message-author">
+                                    {taskQaMessage.role === TaskQaMessageRole.USER ? (
+                                      <UserIcon className="devflow-icon devflow-icon--small" />
+                                    ) : (
+                                      <RobotIcon className="devflow-icon devflow-icon--small" />
+                                    )}
+                                    <span>
+                                      {taskQaMessage.role === TaskQaMessageRole.USER
+                                        ? currentUserLabel
+                                        : "Koda Sidecar AI"}
+                                    </span>
+                                  </div>
+                                  <div className="devflow-feedback__qa-message-meta">
+                                    <span>
+                                      {buildTaskQaContextScopeLabel(
+                                        taskQaMessage.context_scope
+                                      )}
+                                    </span>
+                                    <span>{buildTaskQaStatusLabel(taskQaMessage)}</span>
+                                    <span>{formatHourMinute(taskQaMessage.created_at)}</span>
+                                  </div>
+                                </header>
+
+                                {taskQaMessage.generation_status ===
+                                  TaskQaGenerationStatus.PENDING &&
+                                !taskQaMessage.content_markdown ? (
+                                  <div className="devflow-feedback__qa-pending">
+                                    <span className="devflow-footer__pulse" />
+                                    <span>正在整理当前任务上下文并生成回答...</span>
+                                  </div>
+                                ) : (
+                                  <MarkdownBlock
+                                    className="devflow-markdown devflow-markdown--task-qa"
+                                    markdownText={
+                                      taskQaMessage.content_markdown ||
+                                      "_No answer content available yet._"
+                                    }
+                                  />
+                                )}
+
+                                {taskQaMessage.error_text ? (
+                                  <p className="devflow-feedback__qa-error">
+                                    {taskQaMessage.error_text}
+                                  </p>
+                                ) : null}
+                              </article>
+                            ))
+                          )}
+                        </div>
+
+                        <div className="devflow-feedback__composer devflow-feedback__composer--qa">
+                          <textarea
+                            className="devflow-feedback__textarea devflow-feedback__textarea--qa"
+                            placeholder={
+                              canSendTaskQa
+                                ? "Ask a sidecar question about the current PRD, implementation approach, risks, or tradeoffs..."
+                                : "This task is archived. Sidecar Q&A history remains available, but new questions are disabled."
+                            }
+                            value={taskQaInputText}
+                            readOnly={!canSendTaskQa}
+                            onChange={(changeEvent) =>
+                              setTaskQaInputText(changeEvent.target.value)
+                            }
+                            onKeyDown={handleTaskQaKeyDown}
+                          />
+
+                          <button
+                            type="button"
+                            className="devflow-feedback__send"
+                            onClick={() => {
+                              void handleTaskQaSubmit();
+                            }}
+                            disabled={
+                              activeMutationName === "qa" ||
+                              !hasTaskQaPayload ||
+                              hasPendingTaskQaReply ||
+                              !canSendTaskQa
+                            }
+                          >
+                            <SendIcon className="devflow-icon devflow-icon--small" />
+                          </button>
+                        </div>
+                        <p className="devflow-feedback__hint">
+                          {canSendTaskQa
+                            ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Press Enter to ask, Shift + Enter for new line."
+                            : "Archived sidecar history stays readable here. You can still review past answers and convert the latest completed conclusion into a feedback draft."}
+                        </p>
+                      </>
+                    )}
                   </div>
                 ) : null}
               </div>
@@ -5210,6 +5569,51 @@ function buildDevLogsByTaskId(devLogList: DevLog[]): Record<string, DevLog[]> {
   }, {});
 }
 
+function sortTaskQaMessageListByCreatedAt(
+  taskQaMessageList: TaskQaMessage[]
+): TaskQaMessage[] {
+  return [...taskQaMessageList].sort((leftTaskQaMessage, rightTaskQaMessage) => {
+    const timestampDifference =
+      toTimestampValue(leftTaskQaMessage.created_at) -
+      toTimestampValue(rightTaskQaMessage.created_at);
+    if (timestampDifference !== 0) {
+      return timestampDifference;
+    }
+    return leftTaskQaMessage.id.localeCompare(rightTaskQaMessage.id);
+  });
+}
+
+function getDefaultTaskQaContextScope(
+  workflowStage: WorkflowStage | null
+): TaskQaContextScope {
+  if (
+    workflowStage === WorkflowStage.PRD_GENERATING ||
+    workflowStage === WorkflowStage.PRD_WAITING_CONFIRMATION
+  ) {
+    return TaskQaContextScope.PRD_CONFIRMATION;
+  }
+  return TaskQaContextScope.IMPLEMENTATION;
+}
+
+function buildTaskQaContextScopeLabel(
+  taskQaContextScope: TaskQaContextScope
+): string {
+  if (taskQaContextScope === TaskQaContextScope.PRD_CONFIRMATION) {
+    return "PRD 确认";
+  }
+  return "实现陪跑";
+}
+
+function buildTaskQaStatusLabel(taskQaMessage: TaskQaMessage): string {
+  if (taskQaMessage.generation_status === TaskQaGenerationStatus.PENDING) {
+    return "回答生成中";
+  }
+  if (taskQaMessage.generation_status === TaskQaGenerationStatus.FAILED) {
+    return "回答失败";
+  }
+  return taskQaMessage.role === TaskQaMessageRole.USER ? "问题已发送" : "回答完成";
+}
+
 function buildRequirementDescription(taskItem: Task, taskDevLogList: DevLog[]): string {
   return truncateText(
     deriveRequirementSnapshot(taskItem, taskDevLogList).summary,
@@ -5637,21 +6041,6 @@ function buildRequirementUpdateLog(
     "",
     "Summary:",
     nextSummary,
-  ].join("\n");
-}
-
-function buildRequirementDeleteLog(
-  taskTitle: string,
-  finalSummary: string
-): string {
-  return [
-    REQUIREMENT_DELETE_MARKER,
-    "## Requirement Deleted",
-    "",
-    `Title: ${taskTitle}`,
-    "",
-    "Final Summary:",
-    finalSummary || "No requirement summary was captured before deletion.",
   ].join("\n");
 }
 

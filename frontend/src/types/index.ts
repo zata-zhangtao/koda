@@ -64,6 +64,25 @@ export enum AIProcessingStatus {
   CONFIRMED = "CONFIRMED",
 }
 
+/** 任务内独立问答消息角色 */
+export enum TaskQaMessageRole {
+  USER = "user",
+  ASSISTANT = "assistant",
+}
+
+/** 任务内独立问答上下文作用域 */
+export enum TaskQaContextScope {
+  PRD_CONFIRMATION = "prd_confirmation",
+  IMPLEMENTATION = "implementation",
+}
+
+/** 任务内独立问答生成状态 */
+export enum TaskQaGenerationStatus {
+  PENDING = "pending",
+  COMPLETED = "completed",
+  FAILED = "failed",
+}
+
 /** RunAccount 类型 */
 export interface RunAccount {
   id: string;
@@ -135,6 +154,22 @@ export interface TaskSchedule {
   updated_at: string;
 }
 
+/** 任务内独立问答消息 */
+export interface TaskQaMessage {
+  id: string;
+  task_id: string;
+  run_account_id: string;
+  role: TaskQaMessageRole;
+  context_scope: TaskQaContextScope;
+  generation_status: TaskQaGenerationStatus;
+  reply_to_message_id: string | null;
+  model_name: string | null;
+  content_markdown: string;
+  error_text: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** TaskScheduleRun 类型 */
 export interface TaskScheduleRun {
   id: string;
@@ -156,6 +191,18 @@ export interface TaskCardMetadata {
   display_stage_label: string;
   is_waiting_for_user: boolean;
   last_ai_activity_at: string | null;
+}
+
+/** 提问接口返回值 */
+export interface TaskQaCreateResponse {
+  user_message: TaskQaMessage;
+  assistant_message: TaskQaMessage;
+}
+
+/** 问答转反馈草稿返回值 */
+export interface TaskQaFeedbackDraftResponse {
+  source_message_id: string;
+  draft_markdown: string;
 }
 
 /** DevLog 类型 */

@@ -73,10 +73,24 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "WHERE stage_updated_at IS NULL",
         "Migration: backfilled missing stage_updated_at values on tasks",
     ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_task_qa_messages_task_created_at "
+        "ON task_qa_messages (task_id, created_at)",
+        "Migration: ensured idx_task_qa_messages_task_created_at",
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_task_qa_messages_task_status_role "
+        "ON task_qa_messages (task_id, generation_status, role)",
+        "Migration: ensured idx_task_qa_messages_task_status_role",
+    ),
 )
 _database_initialization_lock = Lock()
 _initialized_database_keys: set[tuple[int, int]] = set()
 _SQLITE_BUSY_TIMEOUT_MS = 30_000
+_TASK_QA_DUPLICATE_PENDING_REPAIR_ERROR_TEXT = (
+    "This sidecar Q&A reply was released during schema repair because another "
+    "pending reply already existed for the same task."
+)
 
 # 从配置中获取数据库URL
 DATABASE_URL = config.DATABASE_URL
@@ -194,6 +208,79 @@ def _run_incremental_schema_patches(database_engine: Engine) -> None:
             except Exception:
                 # 列已存在或目标表尚未创建时安全忽略
                 pass
+
+    _ensure_task_qa_single_pending_reply_index(database_engine)
+
+
+def _ensure_task_qa_single_pending_reply_index(database_engine: Engine) -> None:
+    """Repair duplicate pending sidecar replies and enforce the SQLite invariant.
+
+    Args:
+        database_engine: Database engine that may need the SQLite-only index.
+    """
+
+    if database_engine.dialect.name != "sqlite":
+        return
+
+    with database_engine.begin() as database_connection:
+        try:
+            pending_row_mapping_list = (
+                database_connection.execute(
+                    text(
+                        "SELECT id, task_id "
+                        "FROM task_qa_messages "
+                        "WHERE role = 'assistant' "
+                        "AND generation_status = 'pending' "
+                        "ORDER BY task_id ASC, created_at DESC, id DESC"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        except Exception:
+            return
+
+        seen_task_id_set: set[str] = set()
+        duplicate_pending_message_id_list: list[str] = []
+        for pending_row_mapping in pending_row_mapping_list:
+            task_id_str = str(pending_row_mapping["task_id"])
+            if task_id_str in seen_task_id_set:
+                duplicate_pending_message_id_list.append(str(pending_row_mapping["id"]))
+                continue
+            seen_task_id_set.add(task_id_str)
+
+        if duplicate_pending_message_id_list:
+            database_connection.execute(
+                text(
+                    "UPDATE task_qa_messages "
+                    "SET generation_status = :failed_status, "
+                    "error_text = :error_text, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = :message_id"
+                ),
+                [
+                    {
+                        "failed_status": "failed",
+                        "error_text": _TASK_QA_DUPLICATE_PENDING_REPAIR_ERROR_TEXT,
+                        "message_id": duplicate_pending_message_id,
+                    }
+                    for duplicate_pending_message_id in duplicate_pending_message_id_list
+                ],
+            )
+            logger.warning(
+                "Released %s duplicate pending sidecar Q&A replies during schema repair",
+                len(duplicate_pending_message_id_list),
+            )
+
+        database_connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_task_qa_messages_single_pending_assistant "
+                "ON task_qa_messages (task_id) "
+                "WHERE role = 'assistant' AND generation_status = 'pending'"
+            )
+        )
+        logger.info("Migration: ensured uq_task_qa_messages_single_pending_assistant")
 
 
 def create_tables(base: Any = None, database_engine: Engine | None = None) -> None:

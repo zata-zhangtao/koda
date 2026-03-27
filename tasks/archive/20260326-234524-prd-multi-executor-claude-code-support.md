@@ -2,7 +2,7 @@
 
 **原始需求标题**：增加claude code的支持
 **需求名称（AI 归纳）**：任务自动化多执行器扩展：新增 Claude Code 并对齐 Codex 行为
-**文件路径**：`tasks/prd-3f0bc724.md`
+**文件路径**：`tasks/20260326-234524-prd-multi-executor-claude-code-support.md`
 **创建时间**：2026-03-26 23:45:24 CST
 **需求背景/上下文**：除了 codex 之外，还需要支持 claude code；行为保持和 codex 一致；同时预留未来接入其他工具的扩展能力。
 **附件信息**：未检测到 `Attached local files:` 段落，无需附件解析。

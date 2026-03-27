@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from dsl.models.dev_log import DevLog
     from dsl.models.project import Project
     from dsl.models.run_account import RunAccount
+    from dsl.models.task_qa_message import TaskQaMessage
     from dsl.models.task_schedule import TaskSchedule
     from dsl.models.task_schedule_run import TaskScheduleRun
     from dsl.models.task_notification import TaskNotification
@@ -127,6 +128,11 @@ class Task(Base):
     )
     task_schedule_runs: Mapped[list["TaskScheduleRun"]] = relationship(
         "TaskScheduleRun",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+    task_qa_messages: Mapped[list["TaskQaMessage"]] = relationship(
+        "TaskQaMessage",
         back_populates="task",
         cascade="all, delete-orphan",
     )

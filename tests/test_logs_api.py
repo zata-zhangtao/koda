@@ -9,11 +9,12 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.logs import list_logs
+from dsl.api.logs import create_log, list_logs
 from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag
+from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
+from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 
@@ -189,3 +190,46 @@ def test_list_logs_fetches_task_titles_without_extra_selects(
 
     assert len(select_statement_list) == 2
     assert all(log_item.task_title == task_title_str for log_item in returned_log_list)
+
+
+@pytest.mark.parametrize(
+    "task_lifecycle_status",
+    [TaskLifecycleStatus.CLOSED, TaskLifecycleStatus.DELETED],
+)
+def test_create_log_rejects_archived_task_feedback(
+    db_session: Session,
+    task_lifecycle_status: TaskLifecycleStatus,
+) -> None:
+    """Archived tasks should reject formal feedback writes at the backend."""
+
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Archived task",
+        lifecycle_status=task_lifecycle_status,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_log(
+            DevLogCreateSchema(
+                task_id=task_obj.id,
+                text_content="This should be rejected.",
+                state_tag=DevLogStateTag.NONE,
+            ),
+            db_session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "formal feedback" in str(exc_info.value.detail).lower()
+    assert db_session.query(DevLog).count() == 0

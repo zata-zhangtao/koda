@@ -88,23 +88,13 @@
         - run_task_schedule_now
         - update_task_schedule
         - delete_task_schedule
-
-## 响应 Schema
-
-::: dsl.schemas.task_schema.TaskCreateSchema
+::: dsl.api.task_qa
     handler: python
-
-::: dsl.schemas.task_schema.TaskResponseSchema
-    handler: python
-
-::: dsl.schemas.task_schema.TaskCardMetadataSchema
-    handler: python
-
-::: dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
-    handler: python
-
-::: dsl.schemas.task_schedule_schema.TaskScheduleRunResponseSchema
-    handler: python
+    options:
+      members:
+        - list_task_qa_messages
+        - create_task_qa_message
+        - convert_task_qa_message_to_feedback_draft
 
 ::: dsl.api.logs
     handler: python
@@ -133,6 +123,32 @@
         - get_task_chronicle
         - export_chronicle
 
+## 响应 Schema
+
+::: dsl.schemas.task_schema.TaskCreateSchema
+    handler: python
+
+::: dsl.schemas.task_schema.TaskResponseSchema
+    handler: python
+
+::: dsl.schemas.task_schema.TaskCardMetadataSchema
+    handler: python
+
+::: dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
+    handler: python
+
+::: dsl.schemas.task_schedule_schema.TaskScheduleRunResponseSchema
+    handler: python
+
+::: dsl.schemas.task_qa_schema.TaskQaMessageResponseSchema
+    handler: python
+
+::: dsl.schemas.task_qa_schema.TaskQaCreateResponseSchema
+    handler: python
+
+::: dsl.schemas.task_qa_schema.TaskQaFeedbackDraftResponseSchema
+    handler: python
+
 ## 数据模型
 
 ::: dsl.models.run_account.RunAccount
@@ -145,6 +161,9 @@
     handler: python
 
 ::: dsl.models.dev_log.DevLog
+    handler: python
+
+::: dsl.models.task_qa_message.TaskQaMessage
     handler: python
 
 ::: dsl.models.email_settings.EmailSettings
@@ -167,6 +186,9 @@
         - TaskLifecycleStatus
         - WorkflowStage
         - AIProcessingStatus
+        - TaskQaMessageRole
+        - TaskQaContextScope
+        - TaskQaGenerationStatus
         - TaskNotificationEventType
         - TaskScheduleActionType
         - TaskScheduleTriggerType
@@ -235,6 +257,16 @@
         - get_review_queue
         - update_ai_review
         - count_logs_by_state
+
+::: dsl.services.task_qa_service.TaskQaService
+    handler: python
+    options:
+      members:
+        - list_messages
+        - create_question
+        - process_pending_reply
+        - build_task_context_markdown
+        - build_feedback_draft_from_message
 
 ::: dsl.services.media_service.MediaService
     handler: python

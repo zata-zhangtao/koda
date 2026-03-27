@@ -3,7 +3,7 @@
 **原始需求标题**：`Self-censorship changed to review completed by oneself, no longer requiring manual confirmation`
 **需求名称（AI 归纳）**：`AI 自检改为自主完成 Review 闭环，无需人工确认`
 **需求背景/上下文**：`Self-censorship changed to review completed by oneself, no longer requiring manual confirmation`
-**文件路径**：`tasks/prd-1749fc55.md`
+**文件路径**：`tasks/20260319-020538-prd-ai-self-review-no-manual-confirmation.md`
 **创建时间**：`2026-03-19 02:05:38 +0800`
 **适用链路**：`dsl/services/codex_runner.py::run_codex_task`、`dsl/services/codex_runner.py::run_codex_review`
 

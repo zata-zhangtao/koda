@@ -84,6 +84,44 @@ class AIProcessingStatus(str, Enum):
     CONFIRMED = "CONFIRMED"
 
 
+class TaskQaMessageRole(str, Enum):
+    """任务内独立问答消息角色.
+
+    Attributes:
+        USER: 用户提问消息
+        ASSISTANT: AI 回答消息
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class TaskQaContextScope(str, Enum):
+    """任务内独立问答的上下文作用域.
+
+    Attributes:
+        PRD_CONFIRMATION: 面向 PRD 确认阶段的澄清问答
+        IMPLEMENTATION: 面向实现阶段的陪跑问答
+    """
+
+    PRD_CONFIRMATION = "prd_confirmation"
+    IMPLEMENTATION = "implementation"
+
+
+class TaskQaGenerationStatus(str, Enum):
+    """任务内独立问答消息生成状态.
+
+    Attributes:
+        PENDING: AI 回复生成中
+        COMPLETED: 消息已完成
+        FAILED: 消息生成失败
+    """
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class TaskNotificationEventType(str, Enum):
     """任务通知事件类型.
 

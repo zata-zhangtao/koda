@@ -19,6 +19,12 @@ from dsl.schemas.task_schedule_schema import (
     TaskScheduleRunResponseSchema,
     TaskScheduleUpdateSchema,
 )
+from dsl.schemas.task_qa_schema import (
+    TaskQaCreateResponseSchema,
+    TaskQaFeedbackDraftResponseSchema,
+    TaskQaMessageCreateSchema,
+    TaskQaMessageResponseSchema,
+)
 from dsl.schemas.dev_log_schema import (
     AIReviewUpdateSchema,
     CommandParseResultSchema,
@@ -39,6 +45,10 @@ __all__ = [
     "TaskScheduleResponseSchema",
     "TaskScheduleRunResponseSchema",
     "TaskScheduleUpdateSchema",
+    "TaskQaCreateResponseSchema",
+    "TaskQaFeedbackDraftResponseSchema",
+    "TaskQaMessageCreateSchema",
+    "TaskQaMessageResponseSchema",
     "DevLogCreateSchema",
     "DevLogResponseSchema",
     "DevLogWithAIRSchema",

@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Koda - Task Sidecar Q&amp;A Prototype</title>
+  <style>
+    :root {
+      --bg: #f3efe6;
+      --panel: rgba(255, 252, 247, 0.92);
+      --panel-strong: #fffaf2;
+      --ink: #1e2430;
+      --muted: #6f7788;
+      --line: rgba(30, 36, 48, 0.12);
+      --teal: #0f766e;
+      --teal-soft: rgba(15, 118, 110, 0.12);
+      --orange: #c2410c;
+      --orange-soft: rgba(194, 65, 12, 0.12);
+      --blue: #1d4ed8;
+      --blue-soft: rgba(29, 78, 216, 0.12);
+      --rose: #be123c;
+      --shadow: 0 20px 60px rgba(30, 36, 48, 0.12);
+      --radius: 24px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 34%),
+        radial-gradient(circle at bottom right, rgba(194, 65, 12, 0.14), transparent 32%),
+        linear-gradient(160deg, #f7f2e8 0%, #f1ede6 52%, #ece8df 100%);
+    }
+
+    .shell {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    .hero {
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(255, 250, 242, 0.72);
+      border: 1px solid rgba(30, 36, 48, 0.08);
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--teal);
+      box-shadow: 0 0 0 6px rgba(15, 118, 110, 0.12);
+    }
+
+    h1 {
+      margin: 18px 0 10px;
+      font-size: clamp(32px, 5vw, 58px);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+      max-width: 11ch;
+    }
+
+    .hero-copy {
+      max-width: 860px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.7;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.15fr) minmax(320px, 0.95fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(30, 36, 48, 0.08);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .main-panel {
+      padding: 26px;
+    }
+
+    .sidecar-panel {
+      padding: 24px;
+      position: sticky;
+      top: 20px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 18px;
+    }
+
+    .section-kicker {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: -0.04em;
+    }
+
+    .section-subtitle {
+      margin: 8px 0 0;
+      max-width: 44ch;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 22px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.76);
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .chip strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .stage-controls,
+    .preset-grid,
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 16px;
+      padding: 12px 16px;
+      font: inherit;
+      color: var(--ink);
+      background: #fff;
+      cursor: pointer;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(30, 36, 48, 0.16);
+    }
+
+    .button.is-active {
+      background: var(--teal-soft);
+      border-color: rgba(15, 118, 110, 0.28);
+      color: var(--teal);
+      font-weight: 600;
+    }
+
+    .button--ghost {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    .button--accent {
+      background: var(--orange);
+      color: #fff;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 20px;
+    }
+
+    .mini-card {
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .mini-card__label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .mini-card__value {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .mini-card__meta {
+      margin-top: 8px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .rail {
+      margin-top: 20px;
+      padding: 18px;
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(255,255,255,0.72));
+      border: 1px solid var(--line);
+    }
+
+    .rail-item {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 14px;
+      padding: 14px 0;
+      border-bottom: 1px dashed rgba(30, 36, 48, 0.12);
+    }
+
+    .rail-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .dot {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .rail-item[data-kind="human"] .dot {
+      background: var(--orange-soft);
+      color: var(--orange);
+    }
+
+    .rail-item[data-kind="system"] .dot {
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
+    .rail-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .rail-copy {
+      line-height: 1.7;
+    }
+
+    .sidecar-state {
+      display: grid;
+      gap: 12px;
+      padding: 18px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(29, 78, 216, 0.06));
+      border: 1px solid rgba(15, 118, 110, 0.16);
+      margin-bottom: 18px;
+    }
+
+    .sidecar-state__row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(30, 36, 48, 0.08);
+      color: var(--ink);
+    }
+
+    .badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--teal);
+    }
+
+    .composer {
+      padding: 16px;
+      border-radius: 22px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid var(--line);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 112px;
+      resize: vertical;
+      border: none;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      line-height: 1.7;
+      outline: none;
+    }
+
+    .hint {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .message-stack {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+      max-height: 440px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .message {
+      padding: 16px 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.84);
+    }
+
+    .message--assistant {
+      background: rgba(15, 118, 110, 0.08);
+      border-color: rgba(15, 118, 110, 0.18);
+    }
+
+    .message__meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .message__copy {
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .caption {
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px dashed rgba(30, 36, 48, 0.14);
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidecar-panel {
+        position: static;
+      }
+
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div class="eyebrow">Interactive Prototype</div>
+      <h1>任务执行继续跑，问答单独开一条侧路。</h1>
+      <p class="hero-copy">
+        这个原型把“主执行轨”和“独立问答轨”拆开：左侧继续展示 PRD 确认或无打扰编码的主状态，
+        右侧只负责回答用户的临时疑问。发送问题不会自动改写 PRD、不会触发 regenerate、也不会中断当前 coding。
+      </p>
+    </div>
+
+    <div class="layout">
+      <section class="panel main-panel">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Main Workflow Rail</p>
+            <h2 class="section-title">主执行轨</h2>
+            <p class="section-subtitle">
+              这里保留现有任务阶段语义。侧边问答只读取上下文，不直接推动 `workflow_stage`。
+            </p>
+          </div>
+          <span class="badge" id="executionBadge">PRD 确认期</span>
+        </div>
+
+        <div class="stage-controls" id="stageControls">
+          <button class="button is-active" data-stage="prd">PRD 确认中</button>
+          <button class="button" data-stage="implementation">编码进行中</button>
+          <button class="button button--ghost" id="advanceExecutionButton">模拟主执行输出</button>
+        </div>
+
+        <div class="chip-row">
+          <span class="chip"><strong>独立性</strong> 右侧提问不改这里的阶段</span>
+          <span class="chip"><strong>来源</strong> 读取任务摘要、PRD 和最近日志</span>
+          <span class="chip"><strong>默认行为</strong> 不写入执行时间线</span>
+        </div>
+
+        <div class="card-grid">
+          <article class="mini-card">
+            <span class="mini-card__label">当前阶段</span>
+            <div class="mini-card__value" id="stageTitle">PRD 待确认</div>
+            <div class="mini-card__meta" id="stageSummary">
+              用户正在确认 PRD。可以先问 AI，但不会自动重生成 PRD。
+            </div>
+          </article>
+          <article class="mini-card">
+            <span class="mini-card__label">主执行事件数</span>
+            <div class="mini-card__value" id="eventCount">2</div>
+            <div class="mini-card__meta" id="eventSummary">
+              只有点击“模拟主执行输出”才会继续推进左侧时间线。
+            </div>
+          </article>
+        </div>
+
+        <div class="rail" id="executionRail"></div>
+      </section>
+
+      <aside class="panel sidecar-panel">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Independent Q&amp;A Sidecar</p>
+            <h2 class="section-title">独立问答轨</h2>
+            <p class="section-subtitle">
+              用于“先问一问再决定”的场景。问答结果默认停留在侧边轨道里，不直接变成反馈或变更请求。
+            </p>
+          </div>
+        </div>
+
+        <div class="sidecar-state">
+          <div class="sidecar-state__row">
+            <span>当前上下文范围</span>
+            <strong id="sidecarScope">PRD Clarification</strong>
+          </div>
+          <div class="sidecar-state__row">
+            <span>问答状态</span>
+            <span class="badge" id="qaStatusBadge">空闲，可随时提问</span>
+          </div>
+          <div class="sidecar-state__row">
+            <span>主执行影响</span>
+            <strong>无，保持独立</strong>
+          </div>
+        </div>
+
+        <div class="preset-grid">
+          <button class="button" data-preset="这个点如果我不确定，先问你但不要改 PRD。">不改 PRD，先问</button>
+          <button class="button" data-preset="现在正在 coding 吗？我提问会不会打断当前执行？">会不会打断 coding</button>
+          <button class="button" data-preset="如果这个答案确认无误，我下一步应该把它转成反馈还是继续观察？">下一步怎么落地</button>
+        </div>
+
+        <div class="composer">
+          <textarea id="questionInput" placeholder="输入一个不会立刻影响主执行的问题，例如：这个接口一定要改吗？如果 PRD 这条我还不确定怎么办？"></textarea>
+          <div class="action-row">
+            <button class="button button--accent" id="askButton">发送独立提问</button>
+            <button class="button button--ghost" id="convertButton">转成反馈草稿</button>
+          </div>
+          <p class="hint" id="composerHint">
+            当前处于 PRD 确认期。默认只返回解释和建议，不自动触发 PRD regenerate。
+          </p>
+        </div>
+
+        <div class="message-stack" id="messageStack"></div>
+
+        <p class="caption" id="captionText">
+          设计重点：侧边问答是“先理解再决定”，而不是把所有疑问都写进执行时间线。真正要变更 PRD 或代码时，再由用户显式转入反馈通道。
+        </p>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const STAGE_CONFIG = {
+      prd: {
+        badge: "PRD 确认期",
+        title: "PRD 待确认",
+        scope: "PRD Clarification",
+        summary: "用户正在确认 PRD。可以先问 AI，但不会自动重生成 PRD。",
+        hint: "当前处于 PRD 确认期。默认只返回解释和建议，不自动触发 PRD regenerate。",
+        caption: "这个阶段的问题通常是“我还不确定这条要不要这样写”。答案先留在侧边问答里，等用户确认后再决定要不要转成 PRD 反馈。",
+        convertCopy: "已生成 PRD 反馈草稿。注意：这里只是准备草稿，主 PRD 还没有被改写。",
+        initialLogs: [
+          {
+            kind: "system",
+            meta: "17:02 · system",
+            copy: "PRD 已生成，等待用户确认。主流程暂停在 `prd_waiting_confirmation`。"
+          },
+          {
+            kind: "ai",
+            meta: "17:03 · ai",
+            copy: "当前可以阅读 PRD、提补充问题、或决定是否转成正式反馈。"
+          }
+        ]
+      },
+      implementation: {
+        badge: "Coding 进行中",
+        title: "无打扰编码",
+        scope: "Implementation Companion",
+        summary: "主执行已经进入 `implementation_in_progress`。侧边问答继续可用，但不会暂停 coding。",
+        hint: "当前处于 coding 期。发送问题不会触发 cancel / resume，也不会把主执行改成 `changes_requested`。",
+        caption: "这个阶段的问题通常是“我想问清楚背景，但不想干扰正在跑的实现”。侧边答案是旁路解释，不会打断左侧执行。",
+        convertCopy: "已生成变更请求草稿。注意：这里只是把结论整理出来，主执行仍保持原状态。",
+        initialLogs: [
+          {
+            kind: "system",
+            meta: "17:12 · system",
+            copy: "用户已确认 PRD，主流程进入 `implementation_in_progress`。"
+          },
+          {
+            kind: "ai",
+            meta: "17:13 · ai",
+            copy: "Codex 正在 worktree 中修改相关文件；当前执行不接受侧边问答的隐式干预。"
+          }
+        ]
+      }
+    };
+
+    const ANSWER_BY_STAGE = {
+      prd: [
+        "可以先问，不会自动改 PRD。\n\n建议把这次问答当成确认辅助：如果答案让你更确定，再手动转成 PRD 反馈或重新生成请求。",
+        "当前不在 coding 阶段，所以不会打断执行。\n\n主流程依旧停在 `prd_waiting_confirmation`，直到你显式点击下一步。",
+        "推荐先保留为独立问答结论。\n\n只有当你希望改变 PRD 文本、范围或验收标准时，再显式转成反馈草稿。"
+      ],
+      implementation: [
+        "不会打断当前 coding。\n\n这条问答走的是独立侧路，只读取任务上下文，不会把主执行改成暂停或变更请求。",
+        "如果只是想确认背景、取舍或接口意图，保持在侧边问答即可。\n\n只有明确要改变实现方向时，再转成变更请求草稿。",
+        "此时主执行仍在 worktree 中继续。\n\n侧边问答应返回解释、风险提醒和建议，但不能偷偷写入执行日志。"
+      ]
+    };
+
+    let currentStage = "prd";
+    let executionLogs = [...STAGE_CONFIG[currentStage].initialLogs];
+    let qaMessages = [
+      {
+        role: "assistant",
+        meta: "sidecar · assistant",
+        copy: "这里是独立问答轨。你可以在 PRD 确认或 coding 过程中先问一个问题，我只回答，不直接影响主执行。"
+      }
+    ];
+
+    const stageControls = document.getElementById("stageControls");
+    const executionBadge = document.getElementById("executionBadge");
+    const stageTitle = document.getElementById("stageTitle");
+    const stageSummary = document.getElementById("stageSummary");
+    const eventCount = document.getElementById("eventCount");
+    const eventSummary = document.getElementById("eventSummary");
+    const executionRail = document.getElementById("executionRail");
+    const sidecarScope = document.getElementById("sidecarScope");
+    const qaStatusBadge = document.getElementById("qaStatusBadge");
+    const questionInput = document.getElementById("questionInput");
+    const askButton = document.getElementById("askButton");
+    const convertButton = document.getElementById("convertButton");
+    const composerHint = document.getElementById("composerHint");
+    const messageStack = document.getElementById("messageStack");
+    const captionText = document.getElementById("captionText");
+    const advanceExecutionButton = document.getElementById("advanceExecutionButton");
+
+    function renderExecutionRail() {
+      executionRail.innerHTML = executionLogs.map((entry) => `
+        <article class="rail-item" data-kind="${entry.kind}">
+          <div class="dot">${entry.kind === "system" ? "主" : entry.kind === "ai" ? "AI" : "人"}</div>
+          <div>
+            <div class="rail-meta">${entry.meta}</div>
+            <div class="rail-copy">${entry.copy}</div>
+          </div>
+        </article>
+      `).join("");
+      eventCount.textContent = String(executionLogs.length);
+      eventSummary.textContent = "侧边问答不会自动给左侧追加事件。只有显式主执行动作才会增长。";
+    }
+
+    function renderMessages() {
+      messageStack.innerHTML = qaMessages.map((message) => `
+        <article class="message ${message.role === "assistant" ? "message--assistant" : ""}">
+          <div class="message__meta">${message.meta}</div>
+          <div class="message__copy">${message.copy}</div>
+        </article>
+      `).join("");
+      messageStack.scrollTop = messageStack.scrollHeight;
+    }
+
+    function syncStageUi() {
+      const stage = STAGE_CONFIG[currentStage];
+      executionBadge.textContent = stage.badge;
+      stageTitle.textContent = stage.title;
+      stageSummary.textContent = stage.summary;
+      sidecarScope.textContent = stage.scope;
+      composerHint.textContent = stage.hint;
+      captionText.textContent = stage.caption;
+      qaStatusBadge.textContent = "空闲，可随时提问";
+      executionLogs = [...stage.initialLogs];
+      renderExecutionRail();
+      Array.from(stageControls.querySelectorAll("[data-stage]")).forEach((button) => {
+        button.classList.toggle("is-active", button.dataset.stage === currentStage);
+      });
+    }
+
+    function pickAnswer() {
+      const pool = ANSWER_BY_STAGE[currentStage];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    function askQuestion() {
+      const rawQuestion = questionInput.value.trim();
+      if (!rawQuestion) {
+        return;
+      }
+
+      qaMessages.push({
+        role: "user",
+        meta: "sidecar · user",
+        copy: rawQuestion
+      });
+      renderMessages();
+      questionInput.value = "";
+      qaStatusBadge.textContent = "处理中，不影响主执行";
+
+      window.setTimeout(() => {
+        qaMessages.push({
+          role: "assistant",
+          meta: "sidecar · assistant",
+          copy: pickAnswer()
+        });
+        qaStatusBadge.textContent = "已回复，主执行未受影响";
+        renderMessages();
+      }, 700);
+    }
+
+    stageControls.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-stage]");
+      if (!button) {
+        return;
+      }
+      currentStage = button.dataset.stage;
+      syncStageUi();
+    });
+
+    document.querySelectorAll("[data-preset]").forEach((button) => {
+      button.addEventListener("click", () => {
+        questionInput.value = button.dataset.preset;
+        questionInput.focus();
+      });
+    });
+
+    askButton.addEventListener("click", askQuestion);
+
+    convertButton.addEventListener("click", () => {
+      qaStatusBadge.textContent = currentStage === "prd"
+        ? "已整理为 PRD 反馈草稿"
+        : "已整理为变更请求草稿";
+      qaMessages.push({
+        role: "assistant",
+        meta: "sidecar · system",
+        copy: STAGE_CONFIG[currentStage].convertCopy
+      });
+      renderMessages();
+    });
+
+    questionInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        askQuestion();
+      }
+    });
+
+    advanceExecutionButton.addEventListener("click", () => {
+      const nextIndex = executionLogs.length + 1;
+      executionLogs.push(
+        currentStage === "prd"
+          ? {
+              kind: "human",
+              meta: `17:${10 + nextIndex} · human`,
+              copy: "用户继续阅读 PRD，并准备决定是否进入正式执行。"
+            }
+          : {
+              kind: "ai",
+              meta: `17:${10 + nextIndex} · ai`,
+              copy: "主执行继续输出新进展：已分析目标文件，准备提交下一组改动。"
+            }
+      );
+      renderExecutionRail();
+      qaStatusBadge.textContent = "主执行已推进，侧边问答仍独立";
+    });
+
+    syncStageUi();
+    renderMessages();
+  </script>
+</body>
+</html>

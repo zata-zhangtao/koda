@@ -19,6 +19,7 @@ load_dotenv(PACKAGE_DIR / ".env", override=False)
 
 
 DEFAULT_MODELS_CONFIG = Path(__file__).resolve().parent / "models.json"
+DEFAULT_TASK_QA_CHAT_MODEL_NAME = "qwen-plus"
 
 DEFAULT_API_KEY_ENVS = {
     "openai": "OPENAI_API_KEY",
@@ -411,3 +412,66 @@ def create_chat_model(
             f"API key missing for provider '{selected_provider}' and model '{model_name}'."
         )
     return llm_class(**llm_kwargs)
+
+
+def resolve_task_qa_chat_model_name(configured_model_name: str | None = None) -> str:
+    """解析 sidecar Q&A 的聊天模型名称。
+
+    该解析逻辑只服务于任务内独立问答的聊天模型分支。
+    sidecar Q&A 首版默认即走 ``chat_model`` 路径，因此这里返回的模型名
+    不会影响主业务链路的 Codex 执行默认策略。
+
+    Args:
+        configured_model_name (str | None): 显式传入的模型名称覆盖。
+
+    Returns:
+        str: 已解析的聊天模型名称。
+    """
+
+    explicit_task_qa_model_name = configured_model_name
+    if explicit_task_qa_model_name and explicit_task_qa_model_name.strip():
+        return explicit_task_qa_model_name.strip()
+
+    configured_task_qa_model_name = os.getenv("TASK_QA_MODEL_NAME")
+    if configured_task_qa_model_name and configured_task_qa_model_name.strip():
+        return configured_task_qa_model_name.strip()
+
+    return DEFAULT_TASK_QA_CHAT_MODEL_NAME
+
+
+def create_task_qa_chat_model(
+    *,
+    model_name: str | None = None,
+    temperature: float = 0.0,
+    config_path: str | Path | None = None,
+    api_key: str | None = None,
+    dashscope_region: str | None = None,
+    client_kwargs: Mapping[str, Any] | None = None,
+) -> BaseLanguageModel:
+    """创建任务内独立问答的聊天模型实例。
+
+    这个辅助函数只覆盖独立问答的聊天模型分支，不改变系统默认策略：
+    任务主链路仍继续使用 Codex，而任务内独立问答默认通过
+    ``TASK_QA_BACKEND=chat_model`` 走该入口。
+
+    Args:
+        model_name (str | None): 可选的问答模型名称覆盖。
+        temperature (float): 底层客户端温度。
+        config_path (str | Path | None): 模型配置文件路径覆盖。
+        api_key (str | None): 显式传入的 API 密钥。
+        dashscope_region (str | None): DashScope 区域选择器。
+        client_kwargs (Mapping[str, Any] | None): 透传给客户端的附加参数。
+
+    Returns:
+        BaseLanguageModel: 可直接调用的 LangChain 聊天模型实例。
+    """
+
+    resolved_task_qa_model_name = resolve_task_qa_chat_model_name(model_name)
+    return create_chat_model(
+        resolved_task_qa_model_name,
+        temperature=temperature,
+        config_path=config_path,
+        api_key=api_key,
+        dashscope_region=dashscope_region,
+        client_kwargs=client_kwargs,
+    )

@@ -1,6 +1,6 @@
 # PRD：更新 README 与项目文档
 
-**文件路径**：`tasks/prd-e2a926f5.md`
+**文件路径**：`tasks/20260319-012419-prd-update-readme-and-docs.md`
 **创建时间**：`2026-03-19 01:24:19 +0800`
 **需求标题**：`update docs and readme`
 **需求上下文**：`update docs and readme`

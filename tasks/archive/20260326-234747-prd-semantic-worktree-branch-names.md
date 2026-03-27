@@ -2,7 +2,7 @@
 
 **原始需求标题**：修改worktree的命名
 **需求名称（AI 归纳）**：开始任务时基于 AI 快速模型生成可辨识的 Worktree 分支名
-**文件路径**：`tasks/prd-dd8796cb.md`
+**文件路径**：`tasks/20260326-234747-prd-semantic-worktree-branch-names.md`
 **创建时间**：2026-03-26 23:47:47 CST
 **需求背景/上下文**：当前任务 worktree 分支名主要由随机短 ID 构成（如 `task/1234abcd`），辨识度低；期望在点击“开始任务”时调用 `ai_agent` 能力，使用快速模型生成更可读的命名。
 **附件输入检查**：本次上下文未出现 `Attached local files:` 段落。

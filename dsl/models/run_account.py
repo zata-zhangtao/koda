@@ -16,6 +16,7 @@ from utils.helpers import utc_now_naive
 if TYPE_CHECKING:
     from dsl.models.dev_log import DevLog
     from dsl.models.task import Task
+    from dsl.models.task_qa_message import TaskQaMessage
 
 
 class RunAccount(Base):
@@ -61,6 +62,11 @@ class RunAccount(Base):
     )
     dev_logs: Mapped[list["DevLog"]] = relationship(
         "DevLog",
+        back_populates="run_account",
+        cascade="all, delete-orphan",
+    )
+    task_qa_messages: Mapped[list["TaskQaMessage"]] = relationship(
+        "TaskQaMessage",
         back_populates="run_account",
         cascade="all, delete-orphan",
     )

@@ -203,6 +203,35 @@ class MediaService:
             raise ValueError(f"Failed to save attachment: {error}") from error
 
     @staticmethod
+    def delete_stored_media_files(relative_media_path_list: list[str | None]) -> None:
+        """Delete stored media files for a failed log-creation path.
+
+        Args:
+            relative_media_path_list: 需要清理的相对或绝对路径列表
+        """
+        for relative_media_path in relative_media_path_list:
+            if not relative_media_path:
+                continue
+
+            candidate_media_path = Path(relative_media_path)
+            absolute_media_path = (
+                candidate_media_path
+                if candidate_media_path.is_absolute()
+                else (config.BASE_DIR / candidate_media_path)
+            )
+
+            try:
+                if absolute_media_path.exists():
+                    absolute_media_path.unlink()
+                    logger.info(f"Deleted orphaned media file: {absolute_media_path}")
+            except OSError as error:
+                logger.warning(
+                    "Failed to delete orphaned media file %s: %s",
+                    absolute_media_path,
+                    error,
+                )
+
+    @staticmethod
     def get_image_path(filename: str, is_thumbnail: bool = False) -> Path | None:
         """获取图片文件路径.
 

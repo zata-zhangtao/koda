@@ -13,6 +13,10 @@ import type {
   RunAccount,
   Task,
   TaskCardMetadata,
+  TaskQaContextScope,
+  TaskQaCreateResponse,
+  TaskQaFeedbackDraftResponse,
+  TaskQaMessage,
   TaskChronicle,
   TaskSchedule,
   TaskScheduleRun,
@@ -271,6 +275,35 @@ export const taskScheduleApi = {
   listRuns: (taskId: string, limit = 50) =>
     fetchApi<TaskScheduleRun[]>(
       `/tasks/${taskId}/schedules/runs?limit=${encodeURIComponent(String(limit))}`
+    ),
+};
+
+/** Task sidecar Q&A API */
+export const taskQaApi = {
+  /** 获取任务独立问答消息列表 */
+  list: (taskId: string) =>
+    fetchApi<TaskQaMessage[]>(`/tasks/${taskId}/qa/messages`),
+
+  /** 发送任务独立问答 */
+  create: (
+    taskId: string,
+    data: {
+      question_markdown: string;
+      context_scope: TaskQaContextScope;
+    }
+  ) =>
+    fetchApi<TaskQaCreateResponse>(`/tasks/${taskId}/qa/messages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** 将独立问答结论整理成反馈草稿 */
+  convertToFeedbackDraft: (taskId: string, messageId: string) =>
+    fetchApi<TaskQaFeedbackDraftResponse>(
+      `/tasks/${taskId}/qa/messages/${messageId}/feedback-draft`,
+      {
+        method: "POST",
+      }
     ),
 };
 

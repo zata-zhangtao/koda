@@ -2,7 +2,7 @@
 
 **原始需求标题**：都已经显示等待用户了,左侧卡片还是显示testing ,这是一个issue
 **需求名称（AI 归纳）**：需求卡片等待用户展示一致化与最近 AI 活动时间
-**文件路径**：`tasks/prd-ac901b14.md`
+**文件路径**：`tasks/20260326-153108-prd-requirement-card-waiting-ai-activity.md`
 **创建时间**：2026-03-26 15:31:08 CST
 **附件检查**：`/home/atahang/codes/koda/data/media/original/f51e2d04-64af-4d51-8ff0-01d51816ea85.png`（文件存在，PNG，1912 x 948；截图可确认右侧 System Detail 已提示“等待用户点击 Complete”，但左侧同任务卡片仍显示 `TESTING`）
 **参考上下文**：`frontend/src/App.tsx`, `frontend/src/types/index.ts`, `frontend/src/api/client.ts`, `dsl/api/tasks.py`, `dsl/services/task_service.py`, `dsl/services/codex_runner.py`, `utils/database.py`, `docs/database/schema.md`, `docs/prototypes/requirement-workflow-demo.html`

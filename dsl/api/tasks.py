@@ -12,7 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag, WorkflowStage
+from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.task import Task
 from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
@@ -91,6 +91,7 @@ _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.CHANGES_REQUESTED: "Changes Requested",
     WorkflowStage.DONE: "Done",
 }
+_REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->"
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -383,6 +384,58 @@ def _build_task_context_snapshot_list(task_dev_log_list: list[DevLog]) -> list[s
         if serialized_context_entry:
             task_context_snapshot_list.append(serialized_context_entry)
     return task_context_snapshot_list
+
+
+def _create_internal_archive_audit_log(
+    db_session: Session,
+    task_obj: Task,
+    *,
+    log_text_content: str,
+    log_state_tag: DevLogStateTag,
+) -> None:
+    """Persist an internal archive-transition audit log for a task.
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 已完成状态迁移的任务
+        log_text_content: 留痕日志正文
+        log_state_tag: 留痕状态标签
+    """
+    LogService.create_internal_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_obj.id,
+            text_content=log_text_content,
+            state_tag=log_state_tag,
+        ),
+        task_obj.run_account_id,
+    )
+
+
+def _build_requirement_delete_audit_log(task_obj: Task) -> str:
+    """Build the system log body used when a requirement is archived as deleted.
+
+    Args:
+        task_obj: 已删除归档的任务对象
+
+    Returns:
+        str: 删除留痕日志正文
+    """
+    final_requirement_summary = (
+        task_obj.requirement_brief
+        or "No requirement summary was captured before deletion."
+    )
+    return "\n".join(
+        [
+            _REQUIREMENT_DELETE_MARKER,
+            "## Requirement Deleted",
+            "",
+            f"Title: {task_obj.task_title}",
+            "",
+            "Final Summary:",
+            final_requirement_summary,
+        ]
+    )
 
 
 def _schedule_prd_generation(
@@ -754,11 +807,40 @@ def update_task_status(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
+    existing_task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not existing_task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    previous_lifecycle_status = existing_task_obj.lifecycle_status
     updated_task = TaskService.update_task_status(db_session, task_id, status_update)
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
+        )
+
+    if (
+        status_update.lifecycle_status == TaskLifecycleStatus.CLOSED
+        and previous_lifecycle_status != TaskLifecycleStatus.CLOSED
+    ):
+        _create_internal_archive_audit_log(
+            db_session,
+            updated_task,
+            log_text_content="Requirement completed and moved into the completed archive.",
+            log_state_tag=DevLogStateTag.FIXED,
+        )
+    elif (
+        status_update.lifecycle_status == TaskLifecycleStatus.DELETED
+        and previous_lifecycle_status != TaskLifecycleStatus.DELETED
+    ):
+        _create_internal_archive_audit_log(
+            db_session,
+            updated_task,
+            log_text_content=_build_requirement_delete_audit_log(updated_task),
+            log_state_tag=DevLogStateTag.NONE,
         )
     return _hydrate_task_response(updated_task)
 
@@ -785,11 +867,30 @@ def update_task_stage(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
+    existing_task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not existing_task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    previous_workflow_stage = existing_task_obj.workflow_stage
     updated_task = TaskService.update_workflow_stage(db_session, task_id, stage_update)
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
+        )
+
+    if (
+        stage_update.workflow_stage == WorkflowStage.DONE
+        and previous_workflow_stage != WorkflowStage.DONE
+    ):
+        _create_internal_archive_audit_log(
+            db_session,
+            updated_task,
+            log_text_content="需求验收通过，已标记为完成。",
+            log_state_tag=DevLogStateTag.FIXED,
         )
     return _hydrate_task_response(updated_task)
 

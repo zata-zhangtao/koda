@@ -1,6 +1,6 @@
 # PRD：将所有 Git Worktree 统一放入 `../task/` 目录
 
-**文件路径**：`tasks/prd-7e932cad.md`
+**文件路径**：`tasks/20260319-003316-prd-worktrees-under-task-dir.md`
 **创建时间**：`2026-03-19 00:33:16 +0800`
 **需求标题**：`put all worktree into ../task folder`
 **需求上下文**：`put all worktree put into ../task folder`

@@ -10,6 +10,7 @@
 - path_opener: 可配置编辑器命令解析与目录打开
 - terminal_launcher: 终端启动命令解析与打开
 - ai_vision_service: (Phase 2) AI 图片分析
+- task_qa_service: 任务内独立问答 sidecar 逻辑
 """
 
 from dsl.services.log_service import LogService
@@ -24,6 +25,7 @@ from dsl.services.path_opener import (
     PathOpenTargetNotFoundError,
     open_path_in_editor,
 )
+from dsl.services.task_qa_service import TaskQaService
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "PathOpenError",
     "PathOpenTargetNotFoundError",
     "open_path_in_editor",
+    "TaskQaService",
     "TerminalLaunchError",
     "open_log_tail_terminal",
 ]
