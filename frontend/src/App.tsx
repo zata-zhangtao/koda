@@ -1408,7 +1408,12 @@ function App() {
 
   async function initializeDashboard(): Promise<void> {
     await loadAppConfig();
-    await Promise.all([loadDashboardData(), loadProjectList()]);
+    await Promise.all([
+      loadDashboardData(false, {
+        includeTaskCardMetadata: false,
+      }),
+      loadProjectList(),
+    ]);
   }
 
   async function loadProjectList(): Promise<void> {

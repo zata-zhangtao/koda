@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from dsl.models.dev_log import DevLog
@@ -160,6 +161,94 @@ def _get_ordered_task_dev_logs_by_task_id(
             dev_log_item
         )
     return ordered_task_dev_logs_by_task_id
+
+
+def _get_latest_waiting_user_signal_map_by_task_id(
+    db_session: Session,
+    task_id_list: list[str],
+) -> dict[str, dict[str, bool | None]]:
+    """批量返回任务最近一轮 review/lint 的通过信号.
+
+    该接口只为任务卡片元数据服务，因此不需要把整条任务日志历史全部载入内存。
+    我们只查询与“等待用户点击 Complete”判断有关的少量标记日志，并按时间倒序
+    为每个任务提取最近一次相关结论。
+
+    Args:
+        db_session: 数据库会话
+        task_id_list: 任务 ID 列表
+
+    Returns:
+        dict[str, dict[str, bool | None]]: `task_id -> signal map`
+    """
+    latest_signal_map_by_task_id: dict[str, dict[str, bool | None]] = {
+        task_id_str: {
+            "self_review_passed": None,
+            "post_review_lint_passed": None,
+        }
+        for task_id_str in task_id_list
+    }
+    if not task_id_list:
+        return latest_signal_map_by_task_id
+
+    relevant_marker_text_list = [
+        *_SELF_REVIEW_PASSED_LOG_MARKER_LIST,
+        *_SELF_REVIEW_STARTED_LOG_MARKER_LIST,
+        *_POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST,
+        *_POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST,
+    ]
+    relevant_marker_filter = or_(
+        *(
+            DevLog.text_content.contains(marker_text)
+            for marker_text in relevant_marker_text_list
+        )
+    )
+    relevant_log_row_list = (
+        db_session.query(
+            DevLog.task_id,
+            DevLog.text_content,
+        )
+        .filter(
+            DevLog.task_id.in_(task_id_list),
+            relevant_marker_filter,
+        )
+        .order_by(DevLog.task_id.asc(), DevLog.created_at.desc(), DevLog.id.desc())
+        .all()
+    )
+
+    for task_id_str, log_text in relevant_log_row_list:
+        task_signal_map = latest_signal_map_by_task_id.setdefault(
+            task_id_str,
+            {
+                "self_review_passed": None,
+                "post_review_lint_passed": None,
+            },
+        )
+
+        if task_signal_map["self_review_passed"] is None:
+            if any(
+                marker_text in log_text
+                for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST
+            ):
+                task_signal_map["self_review_passed"] = True
+            elif any(
+                marker_text in log_text
+                for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
+            ):
+                task_signal_map["self_review_passed"] = False
+
+        if task_signal_map["post_review_lint_passed"] is None:
+            if any(
+                marker_text in log_text
+                for marker_text in _POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST
+            ):
+                task_signal_map["post_review_lint_passed"] = True
+            elif any(
+                marker_text in log_text
+                for marker_text in _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST
+            ):
+                task_signal_map["post_review_lint_passed"] = False
+
+    return latest_signal_map_by_task_id
 
 
 def _resolve_task_effective_work_dir_path(
@@ -446,6 +535,8 @@ def _build_task_card_metadata(
     ordered_task_dev_log_list: list[DevLog],
     *,
     is_task_running: bool,
+    self_review_passed_override: bool | None = None,
+    post_review_lint_passed_override: bool | None = None,
 ) -> TaskCardMetadataSchema:
     """构建单个任务的卡片展示元数据.
 
@@ -457,15 +548,25 @@ def _build_task_card_metadata(
     Returns:
         TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
     """
+    latest_self_review_passed = (
+        self_review_passed_override
+        if self_review_passed_override is not None
+        else _has_latest_self_review_cycle_passed(ordered_task_dev_log_list)
+    )
+    latest_post_review_lint_passed = (
+        post_review_lint_passed_override
+        if post_review_lint_passed_override is not None
+        else _has_latest_post_review_lint_cycle_passed(ordered_task_dev_log_list)
+    )
     waiting_for_user_after_self_review = (
         task_obj.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS
         and not is_task_running
-        and _has_latest_self_review_cycle_passed(ordered_task_dev_log_list)
+        and latest_self_review_passed
     )
     waiting_for_user_after_post_review_lint = (
         task_obj.workflow_stage == WorkflowStage.TEST_IN_PROGRESS
         and not is_task_running
-        and _has_latest_post_review_lint_cycle_passed(ordered_task_dev_log_list)
+        and latest_post_review_lint_passed
     )
     is_waiting_for_user = (
         waiting_for_user_after_self_review or waiting_for_user_after_post_review_lint
@@ -569,18 +670,33 @@ def list_task_card_metadata(
     run_account_id = _get_current_run_account_id(db_session)
     task_list = TaskService.get_tasks(db_session, run_account_id)
     task_id_list = [task_item.id for task_item in task_list]
-    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
-        db_session,
-        task_id_list,
+    latest_waiting_user_signal_map_by_task_id = (
+        _get_latest_waiting_user_signal_map_by_task_id(
+            db_session,
+            task_id_list,
+        )
     )
 
     task_card_metadata_list: list[TaskCardMetadataSchema] = []
     for task_item in task_list:
+        waiting_user_signal_map = latest_waiting_user_signal_map_by_task_id.get(
+            task_item.id,
+            {
+                "self_review_passed": None,
+                "post_review_lint_passed": None,
+            },
+        )
         task_card_metadata_list.append(
             _build_task_card_metadata(
                 task_item,
-                ordered_task_dev_logs_by_task_id.get(task_item.id, []),
+                [],
                 is_task_running=is_codex_task_running(task_item.id),
+                self_review_passed_override=(
+                    waiting_user_signal_map["self_review_passed"] is True
+                ),
+                post_review_lint_passed_override=(
+                    waiting_user_signal_map["post_review_lint_passed"] is True
+                ),
             )
         )
 

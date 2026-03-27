@@ -332,6 +332,152 @@ def test_list_task_card_metadata_derives_waiting_user_without_changing_workflow_
     assert still_running_metadata.is_waiting_for_user is False
 
 
+def test_latest_waiting_user_signal_map_uses_latest_relevant_marker_only(
+    db_session: Session,
+) -> None:
+    """Waiting-user signal extraction should ignore irrelevant logs and use the latest relevant marker."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    self_review_waiting_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Review waiting",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    )
+    self_review_restarted_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Review restarted",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    )
+    lint_waiting_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint waiting",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    lint_restarted_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint restarted",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    db_session.add_all(
+        [
+            self_review_waiting_task,
+            self_review_restarted_task,
+            lint_waiting_task,
+            lint_restarted_task,
+        ]
+    )
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=self_review_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="开始第 1 轮代码评审",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            DevLog(
+                task_id=self_review_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="AI 自检闭环完成",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=self_review_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="普通日志，不应影响 waiting_user 判断",
+                state_tag=DevLogStateTag.NONE,
+            ),
+            DevLog(
+                task_id=self_review_restarted_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="AI 自检闭环完成",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=self_review_restarted_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="开始执行代码评审",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            DevLog(
+                task_id=lint_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="已进入自动化验证阶段，开始执行 post-review lint：",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            DevLog(
+                task_id=lint_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="post-review lint 闭环完成：pre-commit 已通过",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=lint_waiting_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="普通日志，不应影响 lint waiting_user 判断",
+                state_tag=DevLogStateTag.NONE,
+            ),
+            DevLog(
+                task_id=lint_restarted_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="post-review lint 闭环完成：pre-commit 已通过",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=lint_restarted_task.id,
+                run_account_id=run_account_obj.id,
+                text_content="轮 AI lint 定向修复完成，开始重新执行 pre-commit lint。",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    latest_signal_map_by_task_id = (
+        tasks_api._get_latest_waiting_user_signal_map_by_task_id(
+            db_session,
+            [
+                self_review_waiting_task.id,
+                self_review_restarted_task.id,
+                lint_waiting_task.id,
+                lint_restarted_task.id,
+            ],
+        )
+    )
+
+    assert (
+        latest_signal_map_by_task_id[self_review_waiting_task.id]["self_review_passed"]
+        is True
+    )
+    assert (
+        latest_signal_map_by_task_id[self_review_restarted_task.id][
+            "self_review_passed"
+        ]
+        is False
+    )
+    assert (
+        latest_signal_map_by_task_id[lint_waiting_task.id]["post_review_lint_passed"]
+        is True
+    )
+    assert (
+        latest_signal_map_by_task_id[lint_restarted_task.id]["post_review_lint_passed"]
+        is False
+    )
+
+
 def test_regenerate_task_prd_schedules_background_job_with_media_context(
     db_session: Session,
     tmp_path: Path,
