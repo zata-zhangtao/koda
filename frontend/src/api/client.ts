@@ -9,6 +9,9 @@ import type {
   DevLog,
   EmailSettings,
   EmailSettingsUpdate,
+  ProjectTimelineEntry,
+  ProjectTimelineSummary,
+  ProjectTimelineTaskDetail,
   Project,
   RunAccount,
   Task,
@@ -20,12 +23,14 @@ import type {
   TaskChronicle,
   TaskSchedule,
   TaskScheduleRun,
+  TaskReferenceCreateRequest,
+  TaskReferenceCreateResponse,
   TimelineEntry,
   WebDAVSettings,
   WebDAVSettingsUpdate,
   WebDAVSyncResult,
 } from "../types";
-import { type WorkflowStage } from "../types";
+import { TaskLifecycleStatus, type WorkflowStage } from "../types";
 
 const API_BASE = "/api";
 
@@ -255,6 +260,13 @@ export const taskApi = {
     fetchApi<Task>(`/tasks/${id}/cancel`, {
       method: "POST",
     }),
+
+  /** 把历史需求引用到目标任务卡片 */
+  createReference: (targetTaskId: string, data: TaskReferenceCreateRequest) =>
+    fetchApi<TaskReferenceCreateResponse>(`/tasks/${targetTaskId}/references`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 /** Task Schedule API */
@@ -361,6 +373,7 @@ export const projectApi = {
   /** 创建项目 */
   create: (data: {
     display_name: string;
+    project_category?: string | null;
     repo_path: string;
     description?: string | null;
   }) =>
@@ -374,6 +387,7 @@ export const projectApi = {
     id: string,
     data: {
       display_name: string;
+      project_category?: string | null;
       repo_path: string;
       description?: string | null;
     }
@@ -560,4 +574,55 @@ export const chronicleApi = {
   /** 导出 Markdown */
   exportMarkdown: (params?: { task_id?: string }) =>
     fetch(`/api/chronicle/export?format=markdown${params?.task_id ? `&task_id=${params.task_id}` : ""}`),
+
+  /** 获取项目维度时间线 */
+  getProjectTimeline: (params: {
+    project_id?: string | null;
+    project_category?: string | null;
+    lifecycle_status?: TaskLifecycleStatus[];
+    start_date?: string | null;
+    end_date?: string | null;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const searchParams = new URLSearchParams();
+    if (params.project_id) {
+      searchParams.set("project_id", params.project_id);
+    }
+    if (params.project_category) {
+      searchParams.set("project_category", params.project_category);
+    }
+    for (const lifecycleStatus of params.lifecycle_status ?? []) {
+      searchParams.append("lifecycle_status", lifecycleStatus);
+    }
+    if (params.start_date) {
+      searchParams.set("start_date", params.start_date);
+    }
+    if (params.end_date) {
+      searchParams.set("end_date", params.end_date);
+    }
+    searchParams.set("limit", String(params.limit ?? 100));
+    searchParams.set("offset", String(params.offset ?? 0));
+    return fetchApi<ProjectTimelineEntry[]>(
+      `/chronicle/project-timeline?${searchParams.toString()}`
+    );
+  },
+
+  /** 获取项目时间线中的任务详情 */
+  getProjectTimelineTaskDetail: (taskId: string) =>
+    fetchApi<ProjectTimelineTaskDetail>(`/chronicle/project-timeline/${taskId}`),
+
+  /** 生成项目时间线摘要 */
+  summarizeProjectTimeline: (data: {
+    project_id?: string | null;
+    project_category?: string | null;
+    lifecycle_status_list?: TaskLifecycleStatus[] | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    summary_focus?: "progress" | "risk" | "decision";
+  }) =>
+    fetchApi<ProjectTimelineSummary>("/chronicle/project-timeline/summary", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };

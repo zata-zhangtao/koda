@@ -623,6 +623,8 @@ class TaskService:
             task_obj.destroy_reason = None
             if task_obj.destroyed_at is None:
                 task_obj.destroyed_at = utc_now_naive()
+        elif status_update.lifecycle_status == TaskLifecycleStatus.ABANDONED:
+            task_obj.closed_at = utc_now_naive()
         else:
             task_obj.closed_at = None
 
@@ -748,6 +750,7 @@ class TaskService:
         if task_obj.lifecycle_status in {
             TaskLifecycleStatus.CLOSED,
             TaskLifecycleStatus.DELETED,
+            TaskLifecycleStatus.ABANDONED,
         }:
             raise ValueError(
                 f"Task {task_id[:8]}... cannot regenerate PRD from lifecycle "
@@ -851,6 +854,7 @@ class TaskService:
         if task_obj.lifecycle_status in {
             TaskLifecycleStatus.CLOSED,
             TaskLifecycleStatus.DELETED,
+            TaskLifecycleStatus.ABANDONED,
         }:
             raise ValueError(
                 f"Task {task_id[:8]}... cannot resume from lifecycle "
@@ -1019,6 +1023,7 @@ class TaskService:
         if task_obj.lifecycle_status in {
             TaskLifecycleStatus.CLOSED,
             TaskLifecycleStatus.DELETED,
+            TaskLifecycleStatus.ABANDONED,
         }:
             raise ValueError(
                 f"Task {task_id[:8]}... cannot complete from lifecycle "

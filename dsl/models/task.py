@@ -22,7 +22,10 @@ if TYPE_CHECKING:
     from dsl.models.task_qa_message import TaskQaMessage
     from dsl.models.task_schedule import TaskSchedule
     from dsl.models.task_schedule_run import TaskScheduleRun
+    from dsl.models.task_artifact import TaskArtifact
     from dsl.models.task_notification import TaskNotification
+
+TASK_REQUIREMENT_BRIEF_MAX_LENGTH = 5000
 
 
 class Task(Base):
@@ -86,7 +89,7 @@ class Task(Base):
         nullable=True,
     )
     requirement_brief: Mapped[str | None] = mapped_column(
-        String(5000),
+        String(TASK_REQUIREMENT_BRIEF_MAX_LENGTH),
         nullable=True,
     )
     auto_confirm_prd_and_execute: Mapped[bool] = mapped_column(
@@ -143,6 +146,11 @@ class Task(Base):
     )
     task_qa_messages: Mapped[list["TaskQaMessage"]] = relationship(
         "TaskQaMessage",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+    task_artifacts: Mapped[list["TaskArtifact"]] = relationship(
+        "TaskArtifact",
         back_populates="task",
         cascade="all, delete-orphan",
     )

@@ -16,6 +16,7 @@ class ProjectCreateSchema(BaseModel):
 
     Attributes:
         display_name: 项目展示名称
+        project_category: 项目类别（可选）
         repo_path: 本地 Git 仓库绝对路径
         description: 项目描述（可选）
     """
@@ -24,6 +25,11 @@ class ProjectCreateSchema(BaseModel):
 
     display_name: str = Field(
         ..., min_length=1, max_length=100, description="项目展示名称"
+    )
+    project_category: str | None = Field(
+        None,
+        max_length=100,
+        description="项目类别（可选）",
     )
     repo_path: str = Field(
         ..., min_length=1, max_length=500, description="本地 Git 仓库绝对路径"
@@ -36,6 +42,7 @@ class ProjectUpdateSchema(BaseModel):
 
     Attributes:
         display_name: 项目展示名称
+        project_category: 项目类别（可选）
         repo_path: 当前机器上的本地 Git 仓库绝对路径
         description: 项目描述（可选）
     """
@@ -44,6 +51,11 @@ class ProjectUpdateSchema(BaseModel):
 
     display_name: str = Field(
         ..., min_length=1, max_length=100, description="项目展示名称"
+    )
+    project_category: str | None = Field(
+        None,
+        max_length=100,
+        description="项目类别（可选）",
     )
     repo_path: str = Field(
         ...,
@@ -60,6 +72,7 @@ class ProjectResponseSchema(DSLResponseSchema):
     Attributes:
         id: UUID 主键
         display_name: 项目展示名称
+        project_category: 项目类别
         repo_path: 本地 Git 仓库绝对路径
         description: 项目描述
         repo_remote_url: 项目记录中保存的归一化 origin remote URL
@@ -77,6 +90,7 @@ class ProjectResponseSchema(DSLResponseSchema):
 
     id: str = Field(..., description="UUID 主键")
     display_name: str = Field(..., description="项目展示名称")
+    project_category: str | None = Field(None, description="项目类别")
     repo_path: str = Field(..., description="本地 Git 仓库绝对路径")
     repo_remote_url: str | None = Field(
         None, description="项目记录中保存的归一化 origin remote URL"

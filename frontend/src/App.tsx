@@ -185,6 +185,7 @@ type MutationName =
   | "update"
   | "complete"
   | "manual_complete"
+  | "abandon"
   | "delete"
   | "destroy"
   | "open_editor"
@@ -195,6 +196,7 @@ type MutationName =
 
 const GUEST_USER_LABEL = "Guest User";
 const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
+const REQUIREMENT_ABANDON_MARKER = "<!-- requirement-change:abandon -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
 const DESTROY_REASON_MIN_LENGTH = 5;
 
@@ -564,10 +566,12 @@ function App() {
   const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectCategory, setNewProjectCategory] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
+  const [editingProjectCategory, setEditingProjectCategory] = useState("");
   const [editingProjectPath, setEditingProjectPath] = useState("");
   const [editingProjectDescription, setEditingProjectDescription] = useState("");
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
@@ -1186,7 +1190,8 @@ function App() {
     : false;
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED
     : false;
   const canRenderComposer = selectedTask !== null;
   const canRebindSelectedTaskProject = selectedTask
@@ -1197,7 +1202,8 @@ function App() {
     : false;
   const canSendFeedback = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED
     : false;
   const canSendTaskQa = canSendFeedback;
   const hasFeedbackPayload =
@@ -2782,6 +2788,44 @@ function App() {
     }
   }
 
+  async function handleAbandonRequirement(taskItem: Task): Promise<void> {
+    const taskSnapshot = deriveRequirementSnapshot(
+      taskItem,
+      devLogsByTaskId[taskItem.id] ?? []
+    );
+
+    const isAbandonConfirmed = window.confirm(
+      "Move this requirement into abandoned history?"
+    );
+    if (!isAbandonConfirmed) {
+      return;
+    }
+
+    setActiveMutationName("abandon");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.ABANDONED);
+      await logApi.create({
+        task_id: taskItem.id,
+        text_content: buildRequirementAbandonLog(
+          taskItem.task_title,
+          taskSnapshot.summary
+        ),
+        state_tag: DevLogStateTag.NONE,
+      });
+      setWorkspaceView("changes");
+      setSuccessMessage("Requirement moved to abandoned history.");
+      await loadDashboardData(true);
+    } catch (abandonError) {
+      console.error(abandonError);
+      setErrorMessage("Failed to abandon requirement.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   async function handleFeedbackSubmit(): Promise<void> {
     if (!selectedTask || !canSendFeedback) {
       return;
@@ -3148,10 +3192,12 @@ function App() {
     try {
       const createdProject = await projectApi.create({
         display_name: trimmedName,
+        project_category: newProjectCategory.trim() || null,
         repo_path: trimmedPath,
         description: newProjectDescription.trim() || null,
       });
       setNewProjectName("");
+      setNewProjectCategory("");
       setNewProjectPath("");
       setNewProjectDescription("");
       setSuccessMessage(`项目「${trimmedName}」已创建。`);
@@ -3178,6 +3224,7 @@ function App() {
   function resetProjectEditDraft(): void {
     setEditingProjectId(null);
     setEditingProjectName("");
+    setEditingProjectCategory("");
     setEditingProjectPath("");
     setEditingProjectDescription("");
   }
@@ -3185,6 +3232,7 @@ function App() {
   function openProjectEdit(projectItem: Project): void {
     setEditingProjectId(projectItem.id);
     setEditingProjectName(projectItem.display_name);
+    setEditingProjectCategory(projectItem.project_category ?? "");
     setEditingProjectPath(projectItem.repo_path);
     setEditingProjectDescription(projectItem.description ?? "");
     setErrorMessage(null);
@@ -3210,6 +3258,7 @@ function App() {
     try {
       const updatedProject = await projectApi.update(editingProjectId, {
         display_name: trimmedName,
+        project_category: editingProjectCategory.trim() || null,
         repo_path: trimmedPath,
         description: editingProjectDescription.trim() || null,
       });
@@ -3331,6 +3380,10 @@ function App() {
               <span>项目 {projectList.length > 0 ? `(${projectList.length})` : ""}</span>
             </button>
 
+            <a className="devflow-projects-btn" href="/project-timeline">
+              项目时间线
+            </a>
+
             <div className="devflow-user-chip">
               <span className="devflow-user-chip__avatar">
                 <UserIcon className="devflow-icon devflow-icon--tiny" />
@@ -3420,6 +3473,14 @@ function App() {
                             />
                             <input
                               className="devflow-input devflow-input--title"
+                              placeholder="项目类别（可选）"
+                              value={editingProjectCategory}
+                              onChange={(changeEvent) =>
+                                setEditingProjectCategory(changeEvent.target.value)
+                              }
+                            />
+                            <input
+                              className="devflow-input devflow-input--title"
                               placeholder="描述（可选）"
                               value={editingProjectDescription}
                               onChange={(changeEvent) =>
@@ -3464,6 +3525,11 @@ function App() {
                               </span>
                             </div>
                             <span className="devflow-project-item__path">{projectItem.repo_path}</span>
+                            {projectItem.project_category ? (
+                              <span className="devflow-project-item__description">
+                                类别：{projectItem.project_category}
+                              </span>
+                            ) : null}
                             {projectItem.description ? (
                               <span className="devflow-project-item__description">
                                 {projectItem.description}
@@ -3519,6 +3585,12 @@ function App() {
                 placeholder="本地 Git 仓库绝对路径，如 /Users/me/myrepo"
                 value={newProjectPath}
                 onChange={(e) => setNewProjectPath(e.target.value)}
+              />
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="项目类别（可选）"
+                value={newProjectCategory}
+                onChange={(e) => setNewProjectCategory(e.target.value)}
               />
               <input
                 className="devflow-input devflow-input--title"
@@ -3897,7 +3969,8 @@ function App() {
                     <div className="devflow-detail__actions">
                       {/* ── Backlog: 开始任务 ── */}
                       {selectedTaskStage === WorkflowStage.BACKLOG &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <ActionButton
                           variant="primary"
                           busy={activeMutationName === "start"}
@@ -3912,7 +3985,8 @@ function App() {
 
                       {/* ── PRD 撰写中: 重新生成 + 确认 PRD ── */}
                       {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <>
                           <ActionButton
                             variant="primary"
@@ -3939,7 +4013,8 @@ function App() {
 
                       {/* ── PRD 待确认: 确认 PRD + 开始执行 ── */}
                       {selectedTaskStage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <>
                           <ActionButton
                             variant="secondary"
@@ -3968,7 +4043,8 @@ function App() {
 
                       {/* ── Changes Requested: 重新执行 ── */}
                       {selectedTaskStage === WorkflowStage.CHANGES_REQUESTED &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <ActionButton
                           variant="execute"
                           busy={activeMutationName === "execute"}
@@ -3983,7 +4059,8 @@ function App() {
 
                       {/* ── 验收阶段: 验收通过 + 请求修改 ── */}
                       {selectedTaskStage === WorkflowStage.ACCEPTANCE_IN_PROGRESS &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <>
                           <ActionButton
                             variant="secondary"
@@ -4010,7 +4087,8 @@ function App() {
 
                       {/* ── 打开项目根目录（有关联项目时始终显示） ── */}
                       {selectedTask.project_id &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <ActionButton
                           variant="outline"
                           busy={activeMutationName === "open_editor"}
@@ -4025,7 +4103,8 @@ function App() {
 
                       {/* ── 打开 Worktree（执行后才显示） ── */}
                       {selectedTask.worktree_path &&
-                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED ? (
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <ActionButton
                           variant="outline"
                           busy={activeMutationName === "open_editor"}
@@ -4089,6 +4168,16 @@ function App() {
                               <span>Complete</span>
                             </ActionButton>
                           ) : null}
+                          <ActionButton
+                            variant="ghost"
+                            busy={activeMutationName === "abandon"}
+                            onClick={() => {
+                              void handleAbandonRequirement(selectedTask);
+                            }}
+                          >
+                            <AlertTriangleIcon className="devflow-icon devflow-icon--small" />
+                            <span>Abandon</span>
+                          </ActionButton>
                           <ActionButton
                             variant="ghost"
                             busy={
@@ -7143,7 +7232,8 @@ function canCompleteTask(
 ): boolean {
   if (
     taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
-    taskItem.lifecycle_status === TaskLifecycleStatus.DELETED
+    taskItem.lifecycle_status === TaskLifecycleStatus.DELETED ||
+    taskItem.lifecycle_status === TaskLifecycleStatus.ABANDONED
   ) {
     return false;
   }
@@ -7316,6 +7406,20 @@ function buildRequirementUpdateLog(
   ].join("\n");
 }
 
+function buildRequirementAbandonLog(
+  taskTitle: string,
+  finalSummary: string
+): string {
+  return [
+    REQUIREMENT_ABANDON_MARKER,
+    "## Requirement Abandoned",
+    "",
+    `Title: ${taskTitle}`,
+    "",
+    "Final Summary:",
+    finalSummary || "No requirement summary was captured before abandonment.",
+  ].join("\n");
+}
 function deriveTimelineKind(devLogItem: DevLog): TimelineKind {
   if (
     Boolean(devLogItem.automation_session_id) ||
@@ -7341,6 +7445,7 @@ function deriveTimelineKind(devLogItem: DevLog): TimelineKind {
 
   if (
     devLogItem.state_tag === DevLogStateTag.TRANSFERRED ||
+    devLogItem.text_content.includes(REQUIREMENT_ABANDON_MARKER) ||
     devLogItem.text_content.includes(REQUIREMENT_DELETE_MARKER)
   ) {
     return "system_event";

@@ -32,12 +32,26 @@ class TaskLifecycleStatus(str, Enum):
         CLOSED: 任务已关闭
         PENDING: 任务暂停/等待中
         DELETED: 任务已删除（保留历史）
+        ABANDONED: 任务已废弃（保留历史）
     """
 
     OPEN = "OPEN"
     CLOSED = "CLOSED"
     PENDING = "PENDING"
     DELETED = "DELETED"
+    ABANDONED = "ABANDONED"
+
+
+class TaskArtifactType(str, Enum):
+    """任务工件类型.
+
+    Attributes:
+        PRD: PRD 文档快照
+        PLANNING_WITH_FILES: Planning with files 快照
+    """
+
+    PRD = "PRD"
+    PLANNING_WITH_FILES = "PLANNING_WITH_FILES"
 
 
 class WorkflowStage(str, Enum):

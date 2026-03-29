@@ -77,6 +77,7 @@
         - open_task_in_trae
         - open_task_terminal
         - update_task
+        - create_task_reference
         - get_task
 
 ::: dsl.api.task_schedules
@@ -97,10 +98,25 @@
         - create_task_qa_message
         - convert_task_qa_message_to_feedback_draft
 
-::: dsl.schemas.task_schema.TaskResponseSchema
+::: dsl.schemas.task_schema.TaskDestroySchema
     handler: python
 
-::: dsl.schemas.task_schema.TaskDestroySchema
+::: dsl.schemas.task_schema.TaskReferenceCreateSchema
+    handler: python
+
+::: dsl.schemas.task_schema.TaskReferenceResponseSchema
+    handler: python
+
+::: dsl.schemas.chronicle_schema.ProjectTimelineEntrySchema
+    handler: python
+
+::: dsl.schemas.chronicle_schema.ProjectTimelineTaskDetailSchema
+    handler: python
+
+::: dsl.schemas.chronicle_schema.ProjectTimelineSummaryRequestSchema
+    handler: python
+
+::: dsl.schemas.chronicle_schema.ProjectTimelineSummaryResponseSchema
     handler: python
 
 ::: dsl.api.logs
@@ -128,6 +144,9 @@
       members:
         - get_timeline
         - get_task_chronicle
+        - get_project_timeline
+        - get_project_timeline_task_detail
+        - summarize_project_timeline
         - export_chronicle
 
 ## 连续 Transcript 合同
@@ -189,6 +208,10 @@
     handler: python
 
 ::: dsl.models.task_schedule_run.TaskScheduleRun
+::: dsl.models.task_artifact.TaskArtifact
+    handler: python
+
+::: dsl.models.task_reference_link.TaskReferenceLink
     handler: python
 
 ::: dsl.models.enums
@@ -197,6 +220,7 @@
       members:
         - DevLogStateTag
         - TaskLifecycleStatus
+        - TaskArtifactType
         - WorkflowStage
         - AIProcessingStatus
         - TaskQaMessageRole
@@ -297,6 +321,9 @@
       members:
         - get_timeline
         - get_task_chronicle
+        - get_project_timeline
+        - get_project_timeline_task_detail
+        - summarize_project_timeline
         - export_markdown
 
 ::: dsl.services.terminal_launcher

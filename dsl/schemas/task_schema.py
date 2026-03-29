@@ -254,3 +254,44 @@ class TaskCardMetadataSchema(DSLResponseSchema):
         None,
         description="任务关联 Git 分支的派生健康状态",
     )
+
+
+class TaskReferenceCreateSchema(BaseModel):
+    """创建任务引用关系的请求模式.
+
+    Attributes:
+        source_task_id: 被引用的历史任务 ID
+        append_to_requirement_brief: 是否把引用摘要追加到目标任务需求描述
+        reference_note: 引用备注（可选）
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+    source_task_id: str = Field(..., description="被引用的历史任务 ID")
+    append_to_requirement_brief: bool = Field(
+        default=False,
+        description="是否把引用摘要追加到目标任务需求描述",
+    )
+    reference_note: str | None = Field(
+        default=None,
+        description="引用备注（可选）",
+    )
+
+
+class TaskReferenceResponseSchema(DSLResponseSchema):
+    """任务引用创建响应模式.
+
+    Attributes:
+        target_task_id: 目标任务 ID
+        source_task_id: 来源任务 ID
+        reference_log_id: 首次创建或复用的引用日志 ID
+        requirement_brief_appended: 目标任务 requirement_brief 当前是否已包含该引用摘要
+    """
+
+    target_task_id: str = Field(..., description="目标任务 ID")
+    source_task_id: str = Field(..., description="来源任务 ID")
+    reference_log_id: str = Field(..., description="记录引用行为的日志 ID")
+    requirement_brief_appended: bool = Field(
+        default=False,
+        description="是否已追加到目标任务 requirement_brief",
+    )

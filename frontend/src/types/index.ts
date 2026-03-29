@@ -18,7 +18,16 @@ export enum TaskLifecycleStatus {
   CLOSED = "CLOSED",
   PENDING = "PENDING",
   DELETED = "DELETED",
+  ABANDONED = "ABANDONED",
 }
+
+export const PROJECT_TIMELINE_DEFAULT_STATUS_FILTER_LIST: TaskLifecycleStatus[] = [
+  TaskLifecycleStatus.OPEN,
+  TaskLifecycleStatus.PENDING,
+  TaskLifecycleStatus.CLOSED,
+  TaskLifecycleStatus.DELETED,
+  TaskLifecycleStatus.ABANDONED,
+];
 
 /** 需求卡片工作流阶段（UI 阶段展示的唯一数据源） */
 export enum WorkflowStage {
@@ -104,6 +113,7 @@ export interface AppConfig {
 export interface Project {
   id: string;
   display_name: string;
+  project_category: string | null;
   repo_path: string;
   repo_remote_url: string | null;
   repo_head_commit_hash: string | null;
@@ -354,4 +364,80 @@ export interface TaskChronicle {
     bug_count: number;
     fix_count: number;
   };
+}
+
+/** 任务工件快照 */
+export interface TaskArtifactSnapshot {
+  artifact_type: "PRD" | "PLANNING_WITH_FILES";
+  source_path: string | null;
+  content_markdown: string;
+  file_manifest: string[];
+  captured_at: string;
+}
+
+/** 项目时间线条目 */
+export interface ProjectTimelineEntry {
+  task_id: string;
+  project_id: string;
+  project_display_name: string | null;
+  project_category: string | null;
+  task_title: string;
+  lifecycle_status: TaskLifecycleStatus;
+  workflow_stage: WorkflowStage;
+  created_at: string;
+  closed_at: string | null;
+  last_activity_at: string;
+  total_logs: number;
+  bug_count: number;
+  fix_count: number;
+  has_prd_artifact: boolean;
+  has_planning_artifact: boolean;
+}
+
+/** 项目时间线任务详情 */
+export interface ProjectTimelineTaskDetail {
+  task: {
+    id: string;
+    project_id: string | null;
+    project_display_name: string | null;
+    project_category: string | null;
+    title: string;
+    lifecycle_status: TaskLifecycleStatus;
+    workflow_stage: WorkflowStage;
+    created_at: string;
+    closed_at: string | null;
+  };
+  requirement_snapshot: string | null;
+  prd_snapshot: TaskArtifactSnapshot | null;
+  planning_snapshot: TaskArtifactSnapshot | null;
+  logs: TimelineEntry[];
+  stats: {
+    total_logs: number;
+    bug_count: number;
+    fix_count: number;
+  };
+}
+
+/** 项目时间线总结 */
+export interface ProjectTimelineSummary {
+  summary_text: string;
+  milestones: string[];
+  risks: string[];
+  next_actions: string[];
+  source_task_ids: string[];
+}
+
+/** 历史需求引用请求体 */
+export interface TaskReferenceCreateRequest {
+  source_task_id: string;
+  append_to_requirement_brief: boolean;
+  reference_note?: string | null;
+}
+
+/** 历史需求引用结果 */
+export interface TaskReferenceCreateResponse {
+  target_task_id: string;
+  source_task_id: string;
+  reference_log_id: string;
+  requirement_brief_appended: boolean;
 }

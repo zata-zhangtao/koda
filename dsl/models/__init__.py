@@ -13,6 +13,7 @@ from dsl.models.enums import (
     TaskScheduleRunStatus,
     TaskScheduleTriggerType,
     TaskNotificationEventType,
+    TaskArtifactType,
     TaskLifecycleStatus,
     WorkflowStage,
 )
@@ -25,6 +26,8 @@ from dsl.models.task_schedule import TaskSchedule
 from dsl.models.task_schedule_run import TaskScheduleRun
 from dsl.models.task_notification import TaskNotification
 from dsl.models.task_qa_message import TaskQaMessage
+from dsl.models.task_artifact import TaskArtifact
+from dsl.models.task_reference_link import TaskReferenceLink
 from dsl.models.webdav_settings import WebDAVSettings
 
 __all__ = [
@@ -37,6 +40,7 @@ __all__ = [
     "TaskScheduleRunStatus",
     "TaskScheduleTriggerType",
     "TaskNotificationEventType",
+    "TaskArtifactType",
     "TaskLifecycleStatus",
     "WorkflowStage",
     "RunAccount",
@@ -48,5 +52,7 @@ __all__ = [
     "TaskScheduleRun",
     "TaskNotification",
     "TaskQaMessage",
+    "TaskArtifact",
+    "TaskReferenceLink",
     "WebDAVSettings",
 ]

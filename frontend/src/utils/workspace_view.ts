@@ -60,6 +60,7 @@ export interface WorkspaceDetailSelection {
 export const MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS = 1_500;
 const CLOSED_TASK_LIFECYCLE_STATUS = "CLOSED";
 const DELETED_TASK_LIFECYCLE_STATUS = "DELETED";
+const ABANDONED_TASK_LIFECYCLE_STATUS = "ABANDONED";
 
 export function resolveWorkspaceViewForTask(
   taskItem: Task,
@@ -71,6 +72,7 @@ export function resolveWorkspaceViewForTask(
 
   if (
     taskItem.lifecycle_status === DELETED_TASK_LIFECYCLE_STATUS ||
+    taskItem.lifecycle_status === ABANDONED_TASK_LIFECYCLE_STATUS ||
     changedTaskIdSet.has(taskItem.id)
   ) {
     return "changes";

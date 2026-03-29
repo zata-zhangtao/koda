@@ -54,6 +54,21 @@ class ProjectService:
         repo_consistency_note: str | None
 
     @staticmethod
+    def _normalize_project_category(raw_project_category_str: str | None) -> str | None:
+        """标准化项目类别文本.
+
+        Args:
+            raw_project_category_str: 原始项目类别文本
+
+        Returns:
+            str | None: 去首尾空白后的项目类别；空字符串返回 None
+        """
+        if raw_project_category_str is None:
+            return None
+        normalized_project_category_str = raw_project_category_str.strip()
+        return normalized_project_category_str or None
+
+    @staticmethod
     def _normalize_repo_path(raw_repo_path_str: str) -> Path:
         """标准化并验证项目仓库路径.
 
@@ -344,6 +359,9 @@ class ProjectService:
 
         new_project = Project(
             display_name=project_create_schema.display_name,
+            project_category=ProjectService._normalize_project_category(
+                project_create_schema.project_category
+            ),
             repo_path=str(normalized_repo_path_obj),
             repo_remote_url=repo_fingerprint_obj.normalized_remote_url,
             repo_head_commit_hash=repo_fingerprint_obj.head_commit_hash,
@@ -404,6 +422,11 @@ class ProjectService:
             )
 
         existing_project_obj.display_name = project_update_schema.display_name
+        existing_project_obj.project_category = (
+            ProjectService._normalize_project_category(
+                project_update_schema.project_category
+            )
+        )
         existing_project_obj.repo_path = normalized_repo_path_str
         if existing_project_obj.repo_remote_url is None:
             existing_project_obj.repo_remote_url = (

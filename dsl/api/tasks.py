@@ -14,13 +14,16 @@ from sqlalchemy.orm import Session
 
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
-from dsl.models.task import Task
+from dsl.models.task import TASK_REQUIREMENT_BRIEF_MAX_LENGTH, Task
+from dsl.models.task_reference_link import TaskReferenceLink
 from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
     TaskBranchHealthSchema,
     TaskCreateSchema,
     TaskCardMetadataSchema,
     TaskDestroySchema,
+    TaskReferenceCreateSchema,
+    TaskReferenceResponseSchema,
     TaskResponseSchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
@@ -93,6 +96,12 @@ _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
 _BRANCH_MISSING_DISPLAY_STAGE_KEY = "branch_missing"
 _BRANCH_MISSING_DISPLAY_STAGE_LABEL = "缺失分支待确认"
 _REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->"
+_REQUIREMENT_BRIEF_APPENDIX_HEADER = "## Referenced Requirement Context"
+_REQUIREMENT_BRIEF_APPENDIX_SEPARATOR = "\n\n---\n\n"
+_REQUIREMENT_BRIEF_COMPACT_APPENDIX_NOTE = (
+    "Full reference summary moved to the structured reference log because the "
+    "target requirement brief is near its size limit."
+)
 _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.BACKLOG: "Backlog",
     WorkflowStage.PRD_GENERATING: "Drafting PRD",
@@ -567,6 +576,217 @@ def _build_requirement_delete_audit_log(task_obj: Task) -> str:
             final_requirement_summary,
         ]
     )
+
+
+def _build_task_reference_log_markdown(
+    source_task_obj: Task,
+    target_task_obj: Task,
+    reference_note_text: str | None,
+) -> str:
+    """构建“引用历史任务”结构化日志.
+
+    Args:
+        source_task_obj: 来源任务
+        target_task_obj: 目标任务
+        reference_note_text: 引用备注
+
+    Returns:
+        str: 用于持久化到 DevLog 的 Markdown 文本
+    """
+    source_requirement_summary_text = (
+        source_task_obj.requirement_brief or "No requirement brief captured."
+    )
+    log_line_list = [
+        "<!-- requirement-reference:add -->",
+        "## Requirement Reference Added",
+        "",
+        f"Source Task ID: {source_task_obj.id}",
+        f"Source Task Title: {source_task_obj.task_title}",
+        f"Source Task Status: {source_task_obj.lifecycle_status.value}",
+        f"Target Task ID: {target_task_obj.id}",
+        f"Target Task Title: {target_task_obj.task_title}",
+        "",
+        "Source Requirement:",
+        source_requirement_summary_text,
+    ]
+    if reference_note_text:
+        log_line_list.extend(
+            [
+                "",
+                "Reference Note:",
+                reference_note_text,
+            ]
+        )
+    return "\n".join(log_line_list)
+
+
+def _build_reference_appendix_for_requirement_brief(
+    source_task_obj: Task,
+    reference_note_text: str | None,
+) -> str:
+    """构建追加到 requirement_brief 的引用附录.
+
+    Args:
+        source_task_obj: 来源任务
+        reference_note_text: 引用备注
+
+    Returns:
+        str: 结构化引用附录
+    """
+    source_requirement_summary_text = (
+        source_task_obj.requirement_brief or "No requirement brief captured."
+    )
+    appendix_line_list = [
+        _REQUIREMENT_BRIEF_APPENDIX_HEADER,
+        "",
+        f"- Source Task: {source_task_obj.task_title}",
+        f"- Source Task ID: {source_task_obj.id}",
+        f"- Source Task Status: {source_task_obj.lifecycle_status.value}",
+        "",
+        source_requirement_summary_text,
+    ]
+    if reference_note_text:
+        appendix_line_list.extend(
+            [
+                "",
+                f"Note: {reference_note_text}",
+            ]
+        )
+    return "\n".join(appendix_line_list)
+
+
+def _build_compact_reference_appendix_for_requirement_brief(
+    source_task_obj: Task,
+) -> str:
+    """构建紧凑版 requirement_brief 引用附录.
+
+    当完整来源摘要无法放入目标任务 `requirement_brief` 时，退化为仅保留
+    审计锚点和提示文案的紧凑版本，避免数据库长度溢出。
+
+    Args:
+        source_task_obj: 来源任务
+
+    Returns:
+        str: 紧凑版结构化引用附录
+    """
+    compact_appendix_line_list = [
+        _REQUIREMENT_BRIEF_APPENDIX_HEADER,
+        "",
+        f"- Source Task ID: {source_task_obj.id}",
+        "",
+        _REQUIREMENT_BRIEF_COMPACT_APPENDIX_NOTE,
+    ]
+    return "\n".join(compact_appendix_line_list)
+
+
+def _build_bounded_requirement_brief_with_reference_appendix(
+    existing_requirement_brief_text: str,
+    source_task_obj: Task,
+    reference_note_text: str | None,
+) -> str:
+    """构建受字段长度保护的 requirement_brief 更新文本.
+
+    优先尝试写入完整引用附录；若超出 `Task.requirement_brief` 列上限，
+    则退化为紧凑版引用附录；若连紧凑版都无法容纳，则直接返回 422，
+    避免数据库层抛出 500。
+
+    Args:
+        existing_requirement_brief_text: 目标任务当前 requirement_brief
+        source_task_obj: 来源任务
+        reference_note_text: 引用备注
+
+    Returns:
+        str: 可安全持久化的新 requirement_brief 文本
+
+    Raises:
+        HTTPException: 当目标字段没有足够空间容纳最小引用附录时抛出 422
+    """
+    appendix_separator_text = (
+        _REQUIREMENT_BRIEF_APPENDIX_SEPARATOR if existing_requirement_brief_text else ""
+    )
+    appendix_candidate_list = [
+        _build_reference_appendix_for_requirement_brief(
+            source_task_obj=source_task_obj,
+            reference_note_text=reference_note_text,
+        ),
+        _build_compact_reference_appendix_for_requirement_brief(
+            source_task_obj=source_task_obj,
+        ),
+    ]
+    for requirement_appendix_markdown in appendix_candidate_list:
+        bounded_requirement_brief_text = (
+            f"{existing_requirement_brief_text}"
+            f"{appendix_separator_text}"
+            f"{requirement_appendix_markdown}"
+        )
+        if len(bounded_requirement_brief_text) <= TASK_REQUIREMENT_BRIEF_MAX_LENGTH:
+            return bounded_requirement_brief_text
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            "Referenced requirement context cannot fit in target "
+            f"requirement_brief because the field is limited to "
+            f"{TASK_REQUIREMENT_BRIEF_MAX_LENGTH} characters."
+        ),
+    )
+
+
+def _requirement_brief_contains_reference(
+    target_task_obj: Task,
+    source_task_id: str,
+) -> bool:
+    """判断目标任务 requirement_brief 是否已包含指定来源任务的引用附录.
+
+    Args:
+        target_task_obj: 目标任务
+        source_task_id: 来源任务 ID
+
+    Returns:
+        bool: 若已存在该来源任务的引用附录则返回 True
+    """
+    requirement_brief_text = target_task_obj.requirement_brief or ""
+    return (
+        _REQUIREMENT_BRIEF_APPENDIX_HEADER in requirement_brief_text
+        and f"- Source Task ID: {source_task_id}" in requirement_brief_text
+    )
+
+
+def _find_existing_task_reference_log(
+    db_session: Session,
+    source_task_id: str,
+    target_task_id: str,
+) -> DevLog | None:
+    """按结构化内容查找已存在的任务引用日志.
+
+    Args:
+        db_session: 数据库会话
+        source_task_id: 来源任务 ID
+        target_task_id: 目标任务 ID
+
+    Returns:
+        DevLog | None: 已存在的结构化引用日志；不存在时返回 None
+    """
+    required_marker_text_list = [
+        "<!-- requirement-reference:add -->",
+        f"Source Task ID: {source_task_id}",
+        f"Target Task ID: {target_task_id}",
+    ]
+    candidate_reference_log_list = (
+        db_session.query(DevLog)
+        .filter(
+            DevLog.task_id == target_task_id,
+            DevLog.state_tag == DevLogStateTag.TRANSFERRED,
+        )
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+    for reference_log_obj in candidate_reference_log_list:
+        if all(
+            marker_text in reference_log_obj.text_content
+            for marker_text in required_marker_text_list
+        ):
+            return reference_log_obj
+    return None
 
 
 def _schedule_prd_generation(
@@ -2480,6 +2700,214 @@ def update_task(
             updated_task.run_account_id,
         )
     return _hydrate_task_response(updated_task, db_session=db_session)
+
+
+@router.post(
+    "/{target_task_id}/references",
+    response_model=TaskReferenceResponseSchema,
+)
+def create_task_reference(
+    target_task_id: str,
+    reference_create_schema: TaskReferenceCreateSchema,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> TaskReferenceResponseSchema:
+    """把历史需求任务引用到当前需求卡片.
+
+    该接口会创建结构化引用 DevLog，并可选把摘要追加到目标任务
+    `requirement_brief`。当完整附录会超过字段上限时，会退化为紧凑版
+    引用附录；若连紧凑版也放不下，则返回 422，而不是把错误拖到数据库层。
+
+    Args:
+        target_task_id: 目标任务 ID
+        reference_create_schema: 引用创建参数
+        db_session: 数据库会话
+
+    Returns:
+        TaskReferenceResponseSchema: 引用创建结果
+
+    Raises:
+        HTTPException: 当任务不存在、无权限或参数非法时返回 404/422
+    """
+    run_account_id = _get_current_run_account_id(db_session)
+    target_task_obj = TaskService.get_task_by_id(db_session, target_task_id)
+    source_task_obj = TaskService.get_task_by_id(
+        db_session,
+        reference_create_schema.source_task_id,
+    )
+
+    if target_task_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target task with id {target_task_id} not found",
+        )
+    if source_task_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Source task with id {reference_create_schema.source_task_id} "
+                "not found"
+            ),
+        )
+    if target_task_obj.run_account_id != run_account_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target task with id {target_task_id} not found",
+        )
+    if source_task_obj.run_account_id != run_account_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Source task with id {reference_create_schema.source_task_id} "
+                "not found"
+            ),
+        )
+    if source_task_obj.id == target_task_obj.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="source_task_id cannot be the same as target_task_id.",
+        )
+    if target_task_obj.lifecycle_status in {
+        TaskLifecycleStatus.CLOSED,
+        TaskLifecycleStatus.DELETED,
+        TaskLifecycleStatus.ABANDONED,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Target task is not editable in lifecycle "
+                f"'{target_task_obj.lifecycle_status.value}'."
+            ),
+        )
+
+    normalized_reference_note = (
+        reference_create_schema.reference_note.strip()
+        if reference_create_schema.reference_note
+        else None
+    )
+    task_reference_link_obj = (
+        db_session.query(TaskReferenceLink)
+        .filter(
+            TaskReferenceLink.source_task_id == source_task_obj.id,
+            TaskReferenceLink.target_task_id == target_task_obj.id,
+        )
+        .first()
+    )
+    requirement_brief_already_contains_reference = (
+        _requirement_brief_contains_reference(
+            target_task_obj=target_task_obj,
+            source_task_id=source_task_obj.id,
+        )
+    )
+    requirement_brief_reference_already_appended = (
+        requirement_brief_already_contains_reference
+        or (
+            task_reference_link_obj.requirement_brief_appended
+            if task_reference_link_obj is not None
+            else False
+        )
+    )
+    pending_requirement_brief_text: str | None = None
+
+    if (
+        reference_create_schema.append_to_requirement_brief
+        and not requirement_brief_reference_already_appended
+    ):
+        pending_requirement_brief_text = (
+            _build_bounded_requirement_brief_with_reference_appendix(
+                existing_requirement_brief_text=target_task_obj.requirement_brief or "",
+                source_task_obj=source_task_obj,
+                reference_note_text=normalized_reference_note,
+            )
+        )
+
+    if task_reference_link_obj is None:
+        existing_reference_log_obj = _find_existing_task_reference_log(
+            db_session=db_session,
+            source_task_id=source_task_obj.id,
+            target_task_id=target_task_obj.id,
+        )
+        reference_log_id = (
+            existing_reference_log_obj.id if existing_reference_log_obj else None
+        )
+        if reference_log_id is None:
+            reference_log_markdown = _build_task_reference_log_markdown(
+                source_task_obj=source_task_obj,
+                target_task_obj=target_task_obj,
+                reference_note_text=normalized_reference_note,
+            )
+            created_reference_log_obj = LogService.create_log(
+                db_session=db_session,
+                log_create_schema=DevLogCreateSchema(
+                    task_id=target_task_obj.id,
+                    text_content=reference_log_markdown,
+                    state_tag=DevLogStateTag.TRANSFERRED,
+                ),
+                run_account_id=run_account_id,
+            )
+            reference_log_id = created_reference_log_obj.id
+
+        task_reference_link_obj = TaskReferenceLink(
+            run_account_id=run_account_id,
+            source_task_id=source_task_obj.id,
+            target_task_id=target_task_obj.id,
+            reference_log_id=reference_log_id,
+            requirement_brief_appended=requirement_brief_already_contains_reference,
+        )
+        db_session.add(task_reference_link_obj)
+        db_session.commit()
+        db_session.refresh(task_reference_link_obj)
+    elif (
+        not task_reference_link_obj.requirement_brief_appended
+        and _requirement_brief_contains_reference(
+            target_task_obj=target_task_obj,
+            source_task_id=source_task_obj.id,
+        )
+    ):
+        task_reference_link_obj.requirement_brief_appended = True
+        db_session.commit()
+        db_session.refresh(task_reference_link_obj)
+
+    if task_reference_link_obj.reference_log_id is None:
+        existing_reference_log_obj = _find_existing_task_reference_log(
+            db_session=db_session,
+            source_task_id=source_task_obj.id,
+            target_task_id=target_task_obj.id,
+        )
+        if existing_reference_log_obj is None:
+            reference_log_markdown = _build_task_reference_log_markdown(
+                source_task_obj=source_task_obj,
+                target_task_obj=target_task_obj,
+                reference_note_text=normalized_reference_note,
+            )
+            existing_reference_log_obj = LogService.create_log(
+                db_session=db_session,
+                log_create_schema=DevLogCreateSchema(
+                    task_id=target_task_obj.id,
+                    text_content=reference_log_markdown,
+                    state_tag=DevLogStateTag.TRANSFERRED,
+                ),
+                run_account_id=run_account_id,
+            )
+        task_reference_link_obj.reference_log_id = existing_reference_log_obj.id
+        db_session.commit()
+        db_session.refresh(task_reference_link_obj)
+
+    if (
+        reference_create_schema.append_to_requirement_brief
+        and not task_reference_link_obj.requirement_brief_appended
+    ):
+        target_task_obj.requirement_brief = pending_requirement_brief_text
+        task_reference_link_obj.requirement_brief_appended = True
+        db_session.commit()
+        db_session.refresh(target_task_obj)
+        db_session.refresh(task_reference_link_obj)
+
+    return TaskReferenceResponseSchema(
+        target_task_id=target_task_obj.id,
+        source_task_id=source_task_obj.id,
+        reference_log_id=task_reference_link_obj.reference_log_id,
+        requirement_brief_appended=task_reference_link_obj.requirement_brief_appended,
+    )
 
 
 @router.get("/{task_id}", response_model=TaskResponseSchema)

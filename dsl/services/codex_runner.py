@@ -2305,6 +2305,78 @@ def _get_task_auto_confirm_prd_and_execute_bool(task_id_str: str) -> bool:
             db_session.close()
 
 
+def _capture_prd_artifact_snapshot_in_db(
+    task_id_str: str,
+    work_dir_path: Path,
+) -> None:
+    """把最新 PRD 内容固化为任务工件快照.
+
+    Args:
+        task_id_str: 任务 ID
+        work_dir_path: 任务 worktree 根目录
+    """
+    from dsl.services.chronicle_service import ChronicleService
+
+    db_session = SessionLocal()
+    try:
+        captured_task_artifact_obj = ChronicleService.capture_prd_artifact_snapshot(
+            db_session=db_session,
+            task_id=task_id_str,
+            worktree_dir_path=work_dir_path,
+        )
+        if captured_task_artifact_obj is None:
+            logger.info(
+                "No PRD artifact captured for task %s... (PRD file absent)",
+                task_id_str[:8],
+            )
+    except Exception as capture_error:
+        logger.warning(
+            "Failed to capture PRD artifact for task %s...: %s",
+            task_id_str[:8],
+            capture_error,
+        )
+        db_session.rollback()
+    finally:
+        db_session.close()
+
+
+def _capture_planning_artifact_snapshot_in_db(
+    task_id_str: str,
+    work_dir_path: Path,
+) -> None:
+    """把最新 planning with files 内容固化为任务工件快照.
+
+    Args:
+        task_id_str: 任务 ID
+        work_dir_path: 任务 worktree 根目录
+    """
+    from dsl.services.chronicle_service import ChronicleService
+
+    db_session = SessionLocal()
+    try:
+        captured_task_artifact_obj = (
+            ChronicleService.capture_planning_artifact_snapshot(
+                db_session=db_session,
+                task_id=task_id_str,
+                worktree_dir_path=work_dir_path,
+            )
+        )
+        if captured_task_artifact_obj is None:
+            logger.info(
+                "No planning artifact captured for task %s... (planning files absent)",
+                task_id_str[:8],
+            )
+    except Exception as capture_error:
+        logger.warning(
+            "Failed to capture planning artifact for task %s...: %s",
+            task_id_str[:8],
+            capture_error,
+        )
+        db_session.rollback()
+    finally:
+        db_session.close()
+
+
 async def _run_codex_phase(
     task_id_str: str,
     run_account_id_str: str,
@@ -2779,6 +2851,16 @@ async def run_codex_prd(
         )
         await asyncio.to_thread(
             _advance_stage_in_db, task_id_str, "prd_waiting_confirmation"
+        )
+        await asyncio.to_thread(
+            _capture_prd_artifact_snapshot_in_db,
+            task_id_str,
+            work_dir_path,
+        )
+        await asyncio.to_thread(
+            _capture_planning_artifact_snapshot_in_db,
+            task_id_str,
+            work_dir_path,
         )
         logger.info(
             f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation"
@@ -3627,6 +3709,16 @@ async def run_codex_completion(
             f"runner_kind={active_runner_kind_str} 修复；随后会在承载 `main` "
             "的工作区完成 merge 与清理。",
             "OPTIMIZATION",
+        )
+        await asyncio.to_thread(
+            _capture_prd_artifact_snapshot_in_db,
+            task_id_str,
+            Path(worktree_path_str),
+        )
+        await asyncio.to_thread(
+            _capture_planning_artifact_snapshot_in_db,
+            task_id_str,
+            Path(worktree_path_str),
         )
 
         completion_result = await asyncio.to_thread(

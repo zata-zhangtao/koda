@@ -59,6 +59,7 @@
 前端主入口集中在 `frontend/src/App.tsx`，它承担了三个关键职责：
 
 - 拉取 `RunAccount`、`Task`、`DevLog` 三类核心数据，并在初始加载或打开项目面板时按需刷新 `Project`
+- 维护项目面板里的 `Project` 元数据，包括仓库路径、描述以及可供时间线跨项目聚合的 `project_category`
 - 根据 `workflow_stage` 渲染阶段标签与 PRD 面板，并结合 `TaskResponse.is_codex_task_running` 判断后台自动化是否仍在执行
 - 在执行阶段做轻量任务状态轮询，并对当前任务通过 `created_after` 增量拉取新增日志，避免反复重拉完整时间线
 
@@ -67,6 +68,7 @@
 - `frontend/src/api/client.ts`：所有 HTTP 请求入口
 - `frontend/src/types/index.ts`：后端数据结构的 TypeScript 映射
 - `frontend/src/components/`：时间线、侧边栏、输入框等局部视图
+- `frontend/src/pages/ProjectTimelinePage.tsx`：项目时间线独立页面，支持按 `project_category` 或单项目查看历史
 
 ## 当前工作流实现情况
 

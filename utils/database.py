@@ -52,6 +52,10 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added repo_head_commit_hash column to projects",
     ),
     (
+        "ALTER TABLE projects ADD COLUMN project_category VARCHAR(100)",
+        "Migration: added project_category column to projects",
+    ),
+    (
         "CREATE INDEX IF NOT EXISTS idx_tasks_run_account_created_at "
         "ON tasks (run_account_id, created_at)",
         "Migration: ensured idx_tasks_run_account_created_at",
@@ -111,6 +115,14 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_task_qa_messages_task_status_role "
         "ON task_qa_messages (task_id, generation_status, role)",
         "Migration: ensured idx_task_qa_messages_task_status_role",
+    ),
+    (
+        "ALTER TABLE tasks ALTER COLUMN lifecycle_status TYPE VARCHAR(16)",
+        "Migration: expanded tasks.lifecycle_status length to 16",
+    ),
+    (
+        "ALTER TABLE tasks MODIFY COLUMN lifecycle_status VARCHAR(16)",
+        "Migration: expanded tasks.lifecycle_status length to 16 (MySQL syntax)",
     ),
 )
 _database_initialization_lock = Lock()

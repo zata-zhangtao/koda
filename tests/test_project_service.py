@@ -114,6 +114,7 @@ def test_create_project_persists_normalized_repo_path_and_git_fingerprint(
         db_session=db_session,
         project_create_schema=ProjectCreateSchema(
             display_name="Demo Repo",
+            project_category="backend",
             repo_path=repo_input_path_str,
             description="normalized path test",
         ),
@@ -122,6 +123,7 @@ def test_create_project_persists_normalized_repo_path_and_git_fingerprint(
     expected_head_commit_hash = _run_git_command(repo_root_path, ["rev-parse", "HEAD"])
 
     assert created_project.repo_path == str(repo_root_path.resolve())
+    assert created_project.project_category == "backend"
     assert ProjectService.is_repo_path_valid(created_project.repo_path) is True
     assert created_project.repo_remote_url == "github.com/example/demo-repo"
     assert created_project.repo_head_commit_hash == expected_head_commit_hash
@@ -147,6 +149,7 @@ def test_update_project_rebinds_repo_path_and_clears_missing_worktrees(
 
     project_obj = Project(
         display_name="Portable Repo",
+        project_category="legacy-sync",
         repo_path=str(original_repo_root_path),
         repo_remote_url="github.com/example/portable-repo",
         repo_head_commit_hash=_run_git_command(
@@ -188,6 +191,7 @@ def test_update_project_rebinds_repo_path_and_clears_missing_worktrees(
         project_id=project_obj.id,
         project_update_schema=ProjectUpdateSchema(
             display_name="Portable Repo",
+            project_category="platform",
             repo_path=str(rebound_repo_root_path),
             description="updated path",
         ),
@@ -195,6 +199,7 @@ def test_update_project_rebinds_repo_path_and_clears_missing_worktrees(
 
     assert updated_project is not None
     assert updated_project.repo_path == str(rebound_repo_root_path.resolve())
+    assert updated_project.project_category == "platform"
     assert updated_project.repo_remote_url == "github.com/example/portable-repo"
     assert updated_project.repo_head_commit_hash == _run_git_command(
         original_repo_root_path,

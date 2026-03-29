@@ -10,6 +10,8 @@ from dsl.schemas.run_account_schema import (
 )
 from dsl.schemas.task_schema import (
     TaskCreateSchema,
+    TaskReferenceCreateSchema,
+    TaskReferenceResponseSchema,
     TaskResponseSchema,
     TaskStatusUpdateSchema,
 )
@@ -39,6 +41,8 @@ __all__ = [
     "RunAccountResponseSchema",
     "RunAccountUpdateSchema",
     "TaskCreateSchema",
+    "TaskReferenceCreateSchema",
+    "TaskReferenceResponseSchema",
     "TaskResponseSchema",
     "TaskStatusUpdateSchema",
     "TaskScheduleCreateSchema",

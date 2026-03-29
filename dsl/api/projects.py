@@ -41,6 +41,7 @@ def _to_response(project_obj: Project) -> ProjectResponseSchema:
     return ProjectResponseSchema(
         id=project_obj.id,
         display_name=project_obj.display_name,
+        project_category=project_obj.project_category,
         repo_path=project_obj.repo_path,
         repo_remote_url=project_obj.repo_remote_url,
         repo_head_commit_hash=project_obj.repo_head_commit_hash,

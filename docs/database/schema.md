@@ -2,7 +2,7 @@
 
 ## 总览
 
-当前数据库围绕八个核心实体组织：
+当前数据库围绕十个核心实体组织：
 
 - `RunAccount`：谁在当前机器上运行 DSL
 - `Project`：可被任务绑定的本地 Git 仓库
@@ -12,6 +12,8 @@
 - `TaskNotification`：任务通知的审计记录与去重窗口
 - `TaskSchedule`：任务级自动触发规则（once/cron）
 - `TaskScheduleRun`：每次调度分发执行记录
+- `TaskArtifact`：任务工件快照（PRD 与 planning with files）
+- `TaskReferenceLink`：历史需求引用关系（source task -> target task）的审计与去重锚点
 
 ## 时间语义契约
 
@@ -25,12 +27,16 @@
 erDiagram
     RUN_ACCOUNT ||--o{ TASK : owns
     RUN_ACCOUNT ||--o{ DEV_LOG : writes
+    RUN_ACCOUNT ||--o{ TASK_REFERENCE_LINK : records
     PROJECT ||--o{ TASK : scopes
     TASK ||--o{ DEV_LOG : contains
     TASK ||--o{ TASK_NOTIFICATION : emits
     TASK ||--o{ TASK_SCHEDULE : owns
     TASK ||--o{ TASK_SCHEDULE_RUN : tracks
     TASK_SCHEDULE ||--o{ TASK_SCHEDULE_RUN : generates
+    TASK ||--o{ TASK_ARTIFACT : snapshots
+    TASK ||--o{ TASK_REFERENCE_LINK : source
+    TASK ||--o{ TASK_REFERENCE_LINK : target
 
     RUN_ACCOUNT {
         string id PK
@@ -135,6 +141,24 @@ erDiagram
         string run_status
         string skip_reason
         string error_message
+
+    TASK_ARTIFACT {
+        string id PK
+        string task_id FK
+        string artifact_type
+        string source_path
+        text content_markdown
+        text file_manifest_json
+        datetime captured_at
+    }
+
+    TASK_REFERENCE_LINK {
+        string id PK
+        string run_account_id FK
+        string source_task_id FK
+        string target_task_id FK
+        string reference_log_id FK
+        bool requirement_brief_appended
         datetime created_at
     }
 ```
@@ -167,6 +191,7 @@ erDiagram
 | 字段 | 说明 |
 | --- | --- |
 | `display_name` | 项目显示名称 |
+| `project_category` | 项目类别，可供项目时间线按类别聚合 |
 | `repo_path` | 本地 Git 仓库绝对路径 |
 | `repo_remote_url` | 最近一次保存/同步时记录的归一化 origin remote |
 | `repo_head_commit_hash` | 最近一次保存/同步时记录的 HEAD commit hash |
@@ -174,6 +199,11 @@ erDiagram
 | `is_repo_path_valid` | API 响应中的派生字段，表示当前机器上该路径是否仍可用 |
 | `is_repo_remote_consistent` | API 响应中的派生字段，表示当前 repo 是否仍然指向同一个 remote |
 | `is_repo_head_consistent` | API 响应中的派生字段，表示当前 repo HEAD 是否仍与同步基线一致 |
+
+补充说明：
+
+- `project_category` 是持久化字段，由项目面板维护；项目时间线页可以基于它跨多个项目聚合同类日志。
+- 若旧数据库是在该字段加入前创建，启动时的增量 schema patch 会自动补列，历史项目默认保持 `NULL`，前端展示为“未分类”。
 
 ### Task
 
@@ -207,6 +237,8 @@ erDiagram
 
 需要额外说明的是：前端可能把 `self_review_in_progress` 或 `test_in_progress` 这类真实阶段覆盖显示为“等待用户”，但这只是 `GET /api/tasks/card-metadata` 返回的展示态，不会写回 `Task.workflow_stage`，也不会新增持久化 `waiting_user` 阶段。
 
+`lifecycle_status` 目前支持 `OPEN`、`PENDING`、`CLOSED`、`DELETED`、`ABANDONED`；其中 `ABANDONED` 用于表达“明确废弃但保留审计历史”，语义上与 `DELETED` 分离。
+
 新的任务型 worktree 默认会写成仓库同级 `task/` 目录下的绝对路径。例如项目仓库是 `/Users/zata/code/my-app` 时，新任务通常会保存为 `/Users/zata/code/task/my-app-wt-12345678`。已经落库的历史 `worktree_path` 不会被系统自动改写。
 
 ### EmailSettings
@@ -221,6 +253,27 @@ erDiagram
 | `receiver_email` | 当前通知收件人 |
 | `is_enabled` | 邮件通知总开关 |
 | `stalled_task_threshold_minutes` | `prd_waiting_confirmation` / `changes_requested` 的停滞提醒阈值，默认 20 分钟 |
+
+### TaskReferenceLink
+
+`TaskReferenceLink` 用来持久化“历史需求引用到当前卡片”的 `source -> target` 关系。它的职责不是替代 `DevLog`，而是为引用动作提供稳定的审计锚点和幂等判断，避免同一个来源任务被重复加入同一个目标任务时再次污染时间线和 `requirement_brief`。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `run_account_id` | 执行该引用动作的运行账户 |
+| `source_task_id` | 被引用的来源任务 |
+| `target_task_id` | 接收引用的目标任务 |
+| `reference_log_id` | 首次引用时生成或回填复用的结构化引用日志 |
+| `requirement_brief_appended` | 目标任务 `requirement_brief` 是否已包含该来源摘要 |
+| `created_at` | 引用关系建立时间 |
+
+补充说明：
+
+- `source_task_id + target_task_id` 组合保持唯一，用于“加入当前需求卡片”的去重。
+- 首次创建关系时系统会写入结构化 `TRANSFERRED` DevLog；重复调用会复用已有关系和日志，只在尚未追加摘要时补一次 `requirement_brief`。
+- 若完整引用附录会超过 `tasks.requirement_brief` 的 5000 字符上限，系统会退化为紧凑版引用附录；若连紧凑版也无法容纳，则接口直接返回 `422`，避免数据库层溢出为 `500`。
 
 ### TaskNotification
 
@@ -291,6 +344,26 @@ erDiagram
 | `media_original_image_path` | 原图或附件路径 |
 | `media_thumbnail_path` | 缩略图路径 |
 | `ai_*` | AI 解析结果预留字段 |
+
+### TaskArtifact
+
+`TaskArtifact` 用于持久化任务关键工件快照，避免仅依赖 worktree 文件导致历史不可回溯。
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 所属任务 |
+| `artifact_type` | 工件类型，当前支持 `PRD`、`PLANNING_WITH_FILES` |
+| `source_path` | 工件来源（文件路径或日志锚点） |
+| `content_markdown` | 工件正文 |
+| `file_manifest_json` | 关联文件清单（JSON 数组字符串） |
+| `captured_at` | 快照采集时间 |
+
+当前快照来源策略：
+
+- `PRD`：优先从任务 worktree 的 `tasks/prd-{task_id[:8]}.md` 读取，并在 PRD 生成后及任务完成前刷新快照
+- `PLANNING_WITH_FILES`：优先从任务 worktree 的 `.claude/planning/current/{task_plan,findings,progress}.md` 读取，兼容旧根目录 planning 文件；若文件不存在，再回退到历史 DevLog 中的 planning 摘要文本
 
 ## 设计观察
 
