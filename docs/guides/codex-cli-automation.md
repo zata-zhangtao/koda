@@ -97,7 +97,10 @@
 - 结构化章节必须包含 fenced `json` code block，顶层键为 `pending_questions`
 - 每个问题对象至少包含 `id`、`title`、`required`、`recommended_option_key`、`recommendation_reason`、`options`
 - 如果上下文里出现 `Attached local files:`，必须显式检查这些本地文件；若某些二进制文件无法完整解析，也不能静默忽略
-- 将完整 PRD 写入任务专属文件 `tasks/prd-{task_id[:8]}.md`，而不是只把内容打印到终端
+- 将完整 PRD 写入任务专属文件 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`，而不是只把内容打印到终端
+- 文件名中的 `<requirement-slug>` 必须来自需求语义，不能使用随机值、UUID 或纯短 ID
+- `<requirement-slug>` 兼容中文输入：可以保留中文或其他自然语言词语，但必须经过文件系统安全清洗
+- 如果模型先写出了 `tasks/prd-{task_id[:8]}.md` 或带随机后缀的文件名，后端会在成功阶段后自动修正并写日志
 
 ### 实现 Prompt
 
@@ -228,10 +231,11 @@ Codex 的输出不是单独存放在某个审计表中，而是直接写回 `Dev
 后端读取 PRD 内容时，会在任务的 worktree 中查找：
 
 ```text
-tasks/prd-{task_id[:8]}.md
+tasks/prd-{task_id[:8]}-<requirement-slug>.md
 ```
 
-后端会按任务前缀 `tasks/prd-{task_id[:8]}*.md` 查找并返回最合适的文件，以固定文件名 `tasks/prd-{task_id[:8]}.md` 为主，同时兼容历史遗留的语义化命名文件。
+后端会按任务前缀 `tasks/prd-{task_id[:8]}*.md` 查找并返回最合适的文件，优先读取满足语义命名合同的新文件名，同时兼容旧的固定文件名。
+如果 Codex 写出了旧固定文件名或随机后缀，`run_codex_prd` 会自动重命名到合法的语义文件名并把修正结果写回日志。
 
 ## 故障处理
 

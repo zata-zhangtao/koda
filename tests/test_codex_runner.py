@@ -407,7 +407,7 @@ def test_build_completion_commit_message_falls_back_to_task_title() -> None:
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
-    """PRD prompt should require titles, structured question contract, and the fixed file path."""
+    """PRD prompt should require semantic naming plus structured pending-question rules."""
     prd_prompt_text = codex_runner.build_codex_prd_prompt(
         task_title="I hope the generated PRD simultaneously includes the name of the requirement",
         dev_log_text_list=["Need the output contract captured in tests and docs."],
@@ -420,7 +420,11 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "位于主要章节之前" in prd_prompt_text
     assert "回退到原始需求标题的规范化版本" in prd_prompt_text
     assert "不得为空" in prd_prompt_text
-    assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
+    assert "`tasks/prd-cf2b9461-<requirement-slug>.md`" in prd_prompt_text
+    assert "兼容中文输入" in prd_prompt_text
+    assert "不得使用随机字符串" in prd_prompt_text
+    assert "结束前必须自行修正" in prd_prompt_text
+    assert "tasks/prd-cf2b9461-修改-prd-命令.md" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
     assert "Attached local files:" in prd_prompt_text
     assert "`## 0. 待确认问题（结构化）`" in prd_prompt_text
@@ -443,6 +447,11 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
     async def fake_run_codex_phase(
         **_: object,
     ) -> codex_runner.CodexPhaseExecutionResult:
+        generated_prd_file_path = tasks_directory_path / "prd-cf2b9461-refreshed-prd.md"
+        generated_prd_file_path.write_text(
+            "# PRD\n\n**需求名称（AI 归纳）**：Refreshed PRD\n",
+            encoding="utf-8",
+        )
         return codex_runner.CodexPhaseExecutionResult(
             success=True,
             output_lines=["PRD generated"],
@@ -481,18 +490,249 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
 
     assert not legacy_prd_file_path.exists()
     assert not semantic_prd_file_path.exists()
+    assert (tasks_directory_path / "prd-cf2b9461-refreshed-prd.md").exists()
+
+
+def test_run_codex_prd_auto_corrects_legacy_file_name_after_success(
+    tmp_path: Path,
+) -> None:
+    """Successful PRD generation should rename legacy output files to semantic names."""
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+    recorded_log_entry_list: list[tuple[str, str]] = []
+
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        legacy_prd_file_path = tasks_directory_path / "prd-cf2b9461.md"
+        legacy_prd_file_path.write_text(
+            (
+                "# PRD\n"
+                "**原始需求标题**：修改 prd 命令\n"
+                "**需求名称（AI 归纳）**：c3e023d8\n"
+            ),
+            encoding="utf-8",
+        )
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
+        email_service.send_prd_ready_notification = lambda *args, **kwargs: True
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
+                run_account_id_str="run-account-1",
+                task_title_str="修改 prd 命令",
+                dev_log_text_list=["Need a refreshed PRD."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=False,
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert not (tasks_directory_path / "prd-cf2b9461.md").exists()
+    assert (tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md").exists()
+    assert any("自动修正" in log_text for log_text, _ in recorded_log_entry_list)
+
+
+def test_run_codex_prd_auto_corrects_short_random_suffix_after_success(
+    tmp_path: Path,
+) -> None:
+    """Successful PRD generation should repair short random suffix filenames."""
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+    recorded_log_entry_list: list[tuple[str, str]] = []
+
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        invalid_random_prd_file_path = tasks_directory_path / "prd-cf2b9461-k9m2qz.md"
+        invalid_random_prd_file_path.write_text(
+            (
+                "# PRD\n"
+                "**原始需求标题**：修改 prd 命令\n"
+                "**需求名称（AI 归纳）**：k9m2qz\n"
+            ),
+            encoding="utf-8",
+        )
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
+        email_service.send_prd_ready_notification = lambda *args, **kwargs: True
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
+                run_account_id_str="run-account-1",
+                task_title_str="修改 prd 命令",
+                dev_log_text_list=["Need a refreshed PRD."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=False,
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert not (tasks_directory_path / "prd-cf2b9461-k9m2qz.md").exists()
+    assert (tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md").exists()
+    assert any("自动修正" in log_text for log_text, _ in recorded_log_entry_list)
+
+
+def test_run_codex_prd_does_not_reuse_stale_invalid_prd_file(
+    tmp_path: Path,
+) -> None:
+    """A stale invalid PRD file must not satisfy a new successful-but-empty run."""
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+    stale_invalid_prd_file_path = tasks_directory_path / "prd-cf2b9461-k9m2qz.md"
+    stale_invalid_prd_file_path.write_text("# PRD\n", encoding="utf-8")
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+
+    async def fake_run_codex_phase(
+        **_: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=["PRD generated"],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+    original_send_prd_ready_notification = email_service.send_prd_ready_notification
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+        email_service.send_prd_ready_notification = lambda *args, **kwargs: True
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
+                run_account_id_str="run-account-1",
+                task_title_str="修改 prd 命令",
+                dev_log_text_list=["Need a refreshed PRD."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path),
+                auto_confirm_prd_and_execute_bool=False,
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
+        email_service.send_prd_ready_notification = original_send_prd_ready_notification
+        codex_runner._running_codex_processes.clear()
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert not stale_invalid_prd_file_path.exists()
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert recorded_failure_notification_list
+    assert any(
+        "未产出满足命名合同" in log_text for log_text, _ in recorded_log_entry_list
+    )
 
 
 def test_run_codex_prd_sends_prd_ready_notification_in_manual_mode(
     tmp_path: Path,
 ) -> None:
     """Manual PRD mode should stop at confirmation and send ready notification."""
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
     recorded_stage_value_list: list[str] = []
     recorded_ready_notification_list: list[tuple[str, str]] = []
 
     async def fake_run_codex_phase(
         **_: object,
     ) -> codex_runner.CodexPhaseExecutionResult:
+        generated_prd_file_path = tasks_directory_path / "prd-manual-p-manual-prd.md"
+        generated_prd_file_path.write_text(
+            "# PRD\n\n**需求名称（AI 归纳）**：Manual PRD\n",
+            encoding="utf-8",
+        )
         return codex_runner.CodexPhaseExecutionResult(
             success=True,
             output_lines=["PRD generated"],
@@ -932,7 +1172,7 @@ def test_run_codex_prd_unexpected_preflight_exception_writes_task_log_and_fails(
         )
         return True
 
-    def fake_list_task_prd_file_paths(
+    def fake_list_all_task_prd_file_paths(
         worktree_dir_path: Path,
         task_id_str: str,
     ) -> list[Path]:
@@ -941,14 +1181,16 @@ def test_run_codex_prd_unexpected_preflight_exception_writes_task_log_and_fails(
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_task_failed_notification = email_service.send_task_failed_notification
-    original_list_task_prd_file_paths = codex_runner.list_task_prd_file_paths
+    original_list_all_task_prd_file_paths = codex_runner.list_all_task_prd_file_paths
     original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
     try:
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
         email_service.send_task_failed_notification = fake_send_task_failed_notification
-        codex_runner.list_task_prd_file_paths = fake_list_task_prd_file_paths
+        codex_runner.list_all_task_prd_file_paths = (
+            fake_list_all_task_prd_file_paths
+        )
         codex_runner._CODEX_LOG_DIR = tmp_path
 
         asyncio.run(
@@ -967,7 +1209,9 @@ def test_run_codex_prd_unexpected_preflight_exception_writes_task_log_and_fails(
         email_service.send_task_failed_notification = (
             original_send_task_failed_notification
         )
-        codex_runner.list_task_prd_file_paths = original_list_task_prd_file_paths
+        codex_runner.list_all_task_prd_file_paths = (
+            original_list_all_task_prd_file_paths
+        )
         codex_runner._CODEX_LOG_DIR = original_codex_log_dir
         codex_runner._running_background_task_ids.clear()
         codex_runner._running_codex_processes.clear()

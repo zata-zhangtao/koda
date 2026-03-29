@@ -46,7 +46,8 @@
 - 该章节必须包含 fenced `json` code block，顶层键为 `pending_questions`
 - 每个待确认问题至少包含 `id`、`title`、`required`、`recommended_option_key`、`recommendation_reason`、`options`
 - 如果上下文中出现 `Attached local files:`，需要显式检查这些本地媒体文件，或在无法完整解析时至少吸收其文件名与存在性
-- 真正把 PRD 写到任务专属文件 `tasks/prd-{task_id[:8]}.md`
+- 真正把 PRD 写到任务专属文件 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`
+- `<requirement-slug>` 必须是语义化、非随机、中文输入兼容的安全文件名；如果模型先写错，runner 会做自动修正
 
 ### 完成阶段说明文本
 
@@ -81,7 +82,7 @@
 ### 保持输出可观察
 
 - Prompt 变更后，要确保当前 runner 的关键输出仍然会写回 `DevLog`
-- PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}.md` 读取结果，并能解析结构化待确认问题块
+- PRD Prompt 变更后，要确认前端仍能通过 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` 读取结果，并能解析结构化待确认问题块
 
 ### 保持工程约束
 
@@ -100,8 +101,9 @@
 3. 重新启动或重新触发对应任务
 4. 观察 `/tmp/koda-<task短ID>.log`
 5. 检查 `DevLog` 时间线是否仍然完整
-6. 如果改的是 PRD Prompt，检查 `tasks/prd-{task_id[:8]}.md` 是否按预期生成，且顶部包含 `原始需求标题`、`需求名称（AI 归纳）` 和结构化待确认问题块（如适用）
-7. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
+6. 如果改的是 PRD Prompt，检查 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` 是否按预期生成，且顶部包含 `原始需求标题`、`需求名称（AI 归纳）` 和结构化待确认问题块（如适用）
+7. 如果故意让模型先写出 `tasks/prd-{task_id[:8]}.md` 或随机后缀文件名，确认后端日志中出现自动修正记录
+8. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
 
 ## 当前缺口
 

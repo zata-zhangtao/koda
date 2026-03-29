@@ -44,7 +44,10 @@ from dsl.services.path_opener import (
     PathOpenTargetNotFoundError,
     open_path_in_editor,
 )
-from dsl.services.prd_file_service import find_task_prd_file_path
+from dsl.services.prd_file_service import (
+    find_task_prd_file_path,
+    repair_invalid_task_prd_file_for_read,
+)
 from dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
 from dsl.services.task_service import TaskService
 from utils.database import get_db
@@ -2239,8 +2242,8 @@ def get_task_prd_file(
 ) -> dict:
     """读取任务 worktree 中该任务专属的 PRD 文件内容.
 
-    后端优先读取固定任务文件 `tasks/prd-{task_id[:8]}.md`，
-    同时继续兼容历史上同前缀的旧 slug 文件名。
+    后端会按当前任务的专属前缀 `tasks/prd-{task_id[:8]}*.md` 查找，
+    优先读取带语义 slug 的新文件名，同时兼容旧的固定文件名。
 
     Args:
         task_id: 任务 ID
@@ -2260,6 +2263,13 @@ def get_task_prd_file(
         return {"content": None, "path": None}
 
     prd_file_path = find_task_prd_file_path(worktree_dir, task_id)
+    if prd_file_path is None:
+        repair_result = repair_invalid_task_prd_file_for_read(
+            worktree_dir_path=worktree_dir,
+            task_id_str=task_id,
+            task_title_str=task_obj.task_title,
+        )
+        prd_file_path = repair_result.resolved_file_path
     if prd_file_path is None:
         return {"content": None, "path": None}
 

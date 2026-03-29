@@ -126,12 +126,11 @@ def _create_git_repo(repo_root_path: Path) -> Path:
     _run_git_command(repo_root_path, ["commit", "-m", "init"])
     return repo_root_path
 
-
-def test_get_task_prd_file_reads_fixed_task_specific_path(
+def test_get_task_prd_file_prefers_semantic_filename_over_legacy_and_random_suffix(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    """PRD file lookup should prefer the canonical fixed task-specific path."""
+    """PRD lookup should prefer a valid semantic filename for the same task."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -153,41 +152,148 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
     tasks_directory_path = tmp_path / "tasks"
     tasks_directory_path.mkdir()
 
-    expected_prd_file_path = tasks_directory_path / f"prd-{task_obj.id[:8]}.md"
-    expected_prd_file_path.write_text(
-        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n",
+    semantic_prd_file_path = tasks_directory_path / (
+        f"prd-{task_obj.id[:8]}-修改-prd-命令.md"
+    )
+    semantic_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 修改 prd 命令\n",
         encoding="utf-8",
     )
 
-    legacy_slugged_prd_file_path = (
-        tasks_directory_path / f"prd-{task_obj.id[:8]}-legacy-scope.md"
-    )
-    legacy_slugged_prd_file_path.write_text(
-        "# Legacy PRD\n\n- 这个旧 slug 文件不应覆盖固定文件名。\n",
+    legacy_fixed_prd_file_path = tasks_directory_path / f"prd-{task_obj.id[:8]}.md"
+    legacy_fixed_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 旧固定文件名\n",
         encoding="utf-8",
     )
 
-    legacy_style_prd_file_path = tasks_directory_path / "20260317-prd-random.md"
-    legacy_style_prd_file_path.write_text(
-        "This older wildcard-style file should be ignored.",
+    invalid_random_prd_file_path = tasks_directory_path / (
+        f"prd-{task_obj.id[:8]}-c3e023d8.md"
+    )
+    invalid_random_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 随机后缀文件名\n",
+        encoding="utf-8",
+    )
+
+    invalid_short_random_prd_file_path = tasks_directory_path / (
+        f"prd-{task_obj.id[:8]}-k9m2qz.md"
+    )
+    invalid_short_random_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 非十六进制随机后缀文件名\n",
         encoding="utf-8",
     )
 
     prd_file_response = get_task_prd_file(task_obj.id, db_session)
 
+    assert (
+        prd_file_response["content"]
+        == "# PRD\n\n- 需求名称（AI 归纳）: 修改 prd 命令\n"
+    )
+    assert prd_file_response["path"] == str(semantic_prd_file_path)
+
+
+def test_get_task_prd_file_falls_back_to_legacy_fixed_filename_when_needed(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """PRD lookup should stay compatible with the historical fixed filename."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="PRD legacy fallback verification",
+        worktree_path=str(tmp_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+
+    legacy_fixed_prd_file_path = tasks_directory_path / f"prd-{task_obj.id[:8]}.md"
+    legacy_fixed_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 兼容旧固定文件名\n",
+        encoding="utf-8",
+    )
+
+    prd_file_response = get_task_prd_file(task_obj.id, db_session)
+
+    assert (
+        prd_file_response["content"]
+        == "# PRD\n\n- 需求名称（AI 归纳）: 兼容旧固定文件名\n"
+    )
+    assert prd_file_response["path"] == str(legacy_fixed_prd_file_path)
+
+
+def test_get_task_prd_file_repairs_random_suffix_when_it_is_the_only_candidate(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """PRD lookup should repair invalid random-suffix files for compatibility."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="PRD invalid candidate verification",
+        worktree_path=str(tmp_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+
+    random_hex_prd_file_path = (
+        tasks_directory_path / f"prd-{task_obj.id[:8]}-c3e023d8.md"
+    )
+    random_hex_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 十六进制随机后缀文件名\n",
+        encoding="utf-8",
+    )
+
+    random_short_prd_file_path = (
+        tasks_directory_path / f"prd-{task_obj.id[:8]}-k9m2qz.md"
+    )
+    random_short_prd_file_path.write_text(
+        "# PRD\n\n- 需求名称（AI 归纳）: 非十六进制随机后缀文件名\n",
+        encoding="utf-8",
+    )
+
+    prd_file_response = get_task_prd_file(task_obj.id, db_session)
+    expected_prd_file_path = tasks_directory_path / (
+        f"prd-{task_obj.id[:8]}-非十六进制随机后缀文件名.md"
+    )
+
     assert prd_file_response["content"] == (
-        "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
+        "# PRD\n\n- 需求名称（AI 归纳）: 非十六进制随机后缀文件名\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+    assert expected_prd_file_path.exists()
+    assert not random_short_prd_file_path.exists()
 
 
-def test_build_task_prd_output_path_contract_uses_fixed_filename() -> None:
-    """The prompt contract helper should advertise the canonical fixed filename."""
+def test_build_task_prd_output_path_contract_uses_semantic_placeholder() -> None:
+    """The prompt contract helper should advertise the semantic filename contract."""
     output_path_contract = build_task_prd_output_path_contract(
         "cf2b9461-1234-5678-9012-abcdefabcdef"
     )
 
-    assert output_path_contract == "tasks/prd-cf2b9461.md"
+    assert output_path_contract == "tasks/prd-cf2b9461-<requirement-slug>.md"
 
 
 def test_get_task_prd_file_falls_back_to_legacy_slugged_file(

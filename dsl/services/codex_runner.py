@@ -18,9 +18,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from dsl.services.prd_file_service import list_task_prd_file_paths
 from dsl.services.runners.base import AutomationRunner
 from dsl.services.runners.registry import get_runner_by_kind
+from dsl.services.prd_file_service import (
+    build_task_prd_output_path_contract,
+    ensure_task_prd_file_contract,
+    list_all_task_prd_file_paths,
+)
 from utils.database import SessionLocal
 from utils.helpers import serialize_datetime_for_api, utc_now_naive
 from utils.logger import logger
@@ -1801,7 +1805,7 @@ def build_codex_prd_prompt(
         separator_str="\n---\n",
         empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
     )
-    prd_output_relative_path_str = f"tasks/prd-{task_id_str[:8]}.md"
+    prd_output_relative_path_str = build_task_prd_output_path_contract(task_id_str)
 
     if worktree_path_str:
         prd_worktree_instruction_block_str = f"""
@@ -1832,12 +1836,17 @@ def build_codex_prd_prompt(
 7. 该章节必须包含 fenced `json` code block，顶层对象必须使用键 `pending_questions`。
 8. `pending_questions` 中的每个问题对象至少包含 `id`、`title`、`required`、`recommended_option_key`、`recommendation_reason`、`options`；`options` 中的每个选项至少包含 `key` 和 `label`。
 9. 如果当前需求没有待确认问题，可以省略整个结构化章节；不要伪造空问题。
-10. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
+10. 输出文件名必须使用语义化的 `<requirement-slug>`，不得使用随机字符串、UUID、纯短 ID 或无语义占位。
+11. `<requirement-slug>` 需要兼容中文输入：可以保留中文或其他自然语言词语，但必须做文件系统安全清洗，并保持可读、可复现。
+12. 如果你选择将中文需求翻译成英文 slug，也必须保持语义稳定，不能退化成随机值。
+13. 如果你最初写成了 `tasks/prd-{task_id_str[:8]}.md`、`tasks/prd-{task_id_str[:8]}-c3e023d8.md` 之类不满足合同的文件名，结束前必须自行修正。
+14. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
 2. 必须真正写入文件，不只是输出到终端。
-3. 写完后输出文件路径。
+3. 示例：中文需求可以写成 `tasks/prd-{task_id_str[:8]}-修改-prd-命令.md`；英文需求可以写成 `tasks/prd-{task_id_str[:8]}-restore-semantic-prd-name.md`。
+4. 写完后输出文件路径。
 """
 
     return constructed_prd_prompt_text
@@ -2277,8 +2286,9 @@ def _get_task_auto_confirm_prd_and_execute_bool(task_id_str: str) -> bool:
     """
     from dsl.models.task import Task
 
-    db_session = SessionLocal()
+    db_session = None
     try:
+        db_session = SessionLocal()
         task_obj = db_session.query(Task).filter(Task.id == task_id_str).first()
         if task_obj is None:
             return False
@@ -2291,7 +2301,8 @@ def _get_task_auto_confirm_prd_and_execute_bool(task_id_str: str) -> bool:
         )
         return False
     finally:
-        db_session.close()
+        if db_session is not None:
+            db_session.close()
 
 
 async def _run_codex_phase(
@@ -2617,7 +2628,7 @@ async def run_codex_prd(
             worktree_path_str=worktree_path_str,
         )
 
-        existing_prd_file_path_list = list_task_prd_file_paths(
+        existing_prd_file_path_list = list_all_task_prd_file_paths(
             worktree_dir_path=work_dir_path,
             task_id_str=task_id_str,
         )
@@ -2707,6 +2718,57 @@ async def run_codex_prd(
                 worktree_path_str=worktree_path_str,
             )
             return
+
+        prd_file_correction_result = ensure_task_prd_file_contract(
+            worktree_dir_path=work_dir_path,
+            task_id_str=task_id_str,
+            task_title_str=task_title_str,
+        )
+        if prd_file_correction_result.resolved_file_path is None:
+            await _move_task_to_changes_requested(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_title_str=task_title_str,
+                failure_log_text_str=(
+                    "❌ PRD 生成阶段未产出满足命名合同的任务专属文件，"
+                    "且自动修正失败。\n"
+                    "任务已进入：待修改（changes_requested），需要人工介入。"
+                ),
+                failure_reason_str=(
+                    "PRD 生成结果未落盘到合法的任务专属语义文件名，自动修正未成功。"
+                ),
+            )
+            return
+
+        if prd_file_correction_result.applied_correction_bool:
+            original_prd_path_str = os.path.relpath(
+                prd_file_correction_result.renamed_from_path,
+                work_dir_path,
+            )
+            corrected_prd_path_str = os.path.relpath(
+                prd_file_correction_result.resolved_file_path,
+                work_dir_path,
+            )
+            correction_log_text_str = (
+                "ℹ️ PRD 文件名未满足语义命名合同，系统已自动修正：\n"
+                f"- 原路径：`{original_prd_path_str}`\n"
+                f"- 修正后：`{corrected_prd_path_str}`\n"
+                f"- 命名来源：{prd_file_correction_result.naming_source_str}"
+            )
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                correction_log_text_str,
+                "OPTIMIZATION",
+            )
+            logger.info(
+                "Task %s... auto-corrected PRD filename from %s to %s (source=%s)",
+                task_id_str[:8],
+                original_prd_path_str,
+                corrected_prd_path_str,
+                prd_file_correction_result.naming_source_str,
+            )
 
         await asyncio.to_thread(
             _write_log_to_db,

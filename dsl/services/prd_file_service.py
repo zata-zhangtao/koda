@@ -1,13 +1,51 @@
 """Helpers for task-scoped PRD file naming and lookup.
 
-Koda's canonical PRD filename contract is ``tasks/prd-<task_id[:8]>.md``.
-Prefix-based lookup remains only as a backwards-compatible fallback for older
-slugged filenames that still start with the same stable task prefix.
+Koda keeps a stable task-id prefix in PRD filenames so the backend can always
+locate the current task's document, while still allowing an AI-generated
+semantic slug to describe the requirement. The semantic slug may preserve
+Chinese or other Unicode letters as long as the filename remains
+cross-platform-safe.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
+
+_TASK_PRD_REQUIREMENT_SLUG_MAX_LENGTH = 80
+_TASK_PRD_FILE_NAME_MAX_BYTES = 255
+_TASK_PRD_REQUIREMENT_SLUG_MAX_BYTES = _TASK_PRD_FILE_NAME_MAX_BYTES - len(
+    "prd-12345678-.md".encode("utf-8")
+)
+_WINDOWS_FORBIDDEN_FILENAME_CHAR_SET = set('<>:"/\\|?*')
+_MARKDOWN_INLINE_WRAPPER_PATTERN = re.compile(r"^[`*_]+|[`*_]+$")
+_ASCII_ALNUM_ONLY_PATTERN = re.compile(r"^[a-z0-9]+$")
+_HEX_ONLY_PATTERN = re.compile(r"^[0-9a-f]{6,}$")
+_UUID_LIKE_PATTERN = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4,})+$")
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPrdFileCorrectionResult:
+    """Describe one PRD filename validation/correction outcome.
+
+    Attributes:
+        resolved_file_path: Final PRD path that should be consumed
+        renamed_from_path: Original file path when a rename happened
+        semantic_slug_str: Semantic slug present in the resolved filename
+        naming_source_str: Source used to derive the semantic slug
+    """
+
+    resolved_file_path: Path | None
+    renamed_from_path: Path | None = None
+    semantic_slug_str: str | None = None
+    naming_source_str: str | None = None
+
+    @property
+    def applied_correction_bool(self) -> bool:
+        """Whether the PRD filename had to be corrected."""
+        return self.renamed_from_path is not None
 
 
 def build_task_prd_file_prefix(task_id_str: str) -> str:
@@ -29,42 +67,279 @@ def build_task_prd_output_path_contract(task_id_str: str) -> str:
         task_id_str: Task UUID string.
 
     Returns:
-        str: Output contract such as ``tasks/prd-cf2b9461.md``.
+        str: Output contract such as
+            ``tasks/prd-cf2b9461-<requirement-slug>.md``.
     """
     task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return f"tasks/{task_prd_file_prefix}.md"
+    return f"tasks/{task_prd_file_prefix}-<requirement-slug>.md"
 
+
+def normalize_task_prd_requirement_slug(
+    raw_requirement_text: str,
+    *,
+    max_length_int: int = _TASK_PRD_REQUIREMENT_SLUG_MAX_LENGTH,
+    max_bytes_int: int = _TASK_PRD_REQUIREMENT_SLUG_MAX_BYTES,
+) -> str:
+    """Normalize requirement text into a cross-platform-safe semantic slug.
+
+    Args:
+        raw_requirement_text: Raw requirement text or AI summary
+        max_length_int: Maximum slug length
+        max_bytes_int: Maximum UTF-8 byte length for the slug portion
+
+    Returns:
+        str: Safe semantic slug that may preserve Chinese or other letters
+    """
+    normalized_requirement_text = unicodedata.normalize(
+        "NFKC",
+        raw_requirement_text,
+    ).strip()
+    if normalized_requirement_text == "" or max_length_int <= 0 or max_bytes_int <= 0:
+        return ""
+
+    lowered_requirement_text = normalized_requirement_text.lower()
+    normalized_character_list: list[str] = []
+    pending_separator_bool = False
+    for raw_character in lowered_requirement_text:
+        unicode_category = unicodedata.category(raw_character)
+        if unicode_category.startswith(("L", "N")):
+            if pending_separator_bool and normalized_character_list:
+                normalized_character_list.append("-")
+            normalized_character_list.append(raw_character)
+            pending_separator_bool = False
+            continue
+
+        if (
+            raw_character.isspace()
+            or raw_character in _WINDOWS_FORBIDDEN_FILENAME_CHAR_SET
+            or raw_character in {"-", "_", ".", ",", "(", ")", "[", "]", "{", "}"}
+            or unicode_category.startswith(("P", "S", "C"))
+        ):
+            pending_separator_bool = True
+
+    compacted_slug_text = re.sub(
+        r"-{2,}",
+        "-",
+        "".join(normalized_character_list).strip("-"),
+    )
+    character_limited_slug_text = compacted_slug_text[:max_length_int].strip("-")
+    truncated_slug_text = _truncate_task_prd_slug_to_max_bytes(
+        character_limited_slug_text,
+        max_bytes_int=max_bytes_int,
+    )
+    return truncated_slug_text
+
+
+def is_valid_task_prd_semantic_slug(
+    semantic_slug_str: str,
+    task_id_str: str,
+) -> bool:
+    """Check whether a semantic PRD slug satisfies the non-random contract.
+
+    Args:
+        semantic_slug_str: Candidate semantic slug
+        task_id_str: Task UUID string
+
+    Returns:
+        bool: ``True`` when the slug is non-empty and not random-like
+    """
+    normalized_slug_str = normalize_task_prd_requirement_slug(semantic_slug_str)
+    if normalized_slug_str == "":
+        return False
+
+    task_short_id_str = task_id_str[:8].lower()
+    if normalized_slug_str == task_short_id_str:
+        return False
+    if _HEX_ONLY_PATTERN.fullmatch(normalized_slug_str):
+        return False
+    if _UUID_LIKE_PATTERN.fullmatch(normalized_slug_str):
+        return False
+    if _looks_like_interleaved_short_random_identifier(normalized_slug_str):
+        return False
+    return True
+
+
+def is_valid_task_prd_semantic_file_name(
+    file_name_str: str,
+    task_id_str: str,
+) -> bool:
+    """Validate whether a PRD filename satisfies the semantic naming contract.
+
+    Args:
+        file_name_str: Candidate PRD filename
+        task_id_str: Task UUID string
+
+    Returns:
+        bool: ``True`` when the file uses the semantic PRD contract
+    """
+    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
+    if not file_name_str.endswith(".md"):
+        return False
+    if not file_name_str.startswith(f"{task_prd_file_prefix}-"):
+        return False
+
+    semantic_slug_str = file_name_str[len(task_prd_file_prefix) + 1 : -len(".md")]
+    if not is_valid_task_prd_semantic_slug(semantic_slug_str, task_id_str):
+        return False
+
+    normalized_slug_str = normalize_task_prd_requirement_slug(semantic_slug_str)
+    return semantic_slug_str == normalized_slug_str
+
+
+def ensure_task_prd_file_contract(
+    worktree_dir_path: Path,
+    task_id_str: str,
+    task_title_str: str,
+) -> TaskPrdFileCorrectionResult:
+    """Ensure the task PRD file satisfies the semantic filename contract.
+
+    Args:
+        worktree_dir_path: Task worktree root directory
+        task_id_str: Task UUID string
+        task_title_str: Task title used as the final fallback naming source
+
+    Returns:
+        TaskPrdFileCorrectionResult: Final resolved PRD path and correction info
+    """
+    candidate_prd_file_path_list = _list_unsorted_task_prd_file_paths(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
+    )
+    if not candidate_prd_file_path_list:
+        return TaskPrdFileCorrectionResult(resolved_file_path=None)
+
+    sorted_candidate_prd_file_path_list = _list_ranked_task_prd_file_paths(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
+    )
+    for candidate_prd_file_path in sorted_candidate_prd_file_path_list:
+        if is_valid_task_prd_semantic_file_name(
+            candidate_prd_file_path.name,
+            task_id_str,
+        ):
+            semantic_slug_str = _extract_semantic_slug_from_file_name(
+                candidate_prd_file_path.name,
+                task_id_str,
+            )
+            return TaskPrdFileCorrectionResult(
+                resolved_file_path=candidate_prd_file_path,
+                semantic_slug_str=semantic_slug_str,
+                naming_source_str="existing_semantic",
+            )
+
+    return _repair_task_prd_file_candidates(
+        candidate_prd_file_path_list=candidate_prd_file_path_list,
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+    )
+
+
+def repair_invalid_task_prd_file_for_read(
+    worktree_dir_path: Path,
+    task_id_str: str,
+    task_title_str: str,
+) -> TaskPrdFileCorrectionResult:
+    """Repair invalid random-suffix PRD filenames for read compatibility.
+
+    This helper intentionally avoids mutating the still-supported legacy fixed
+    filename. It only repairs invalid task-prefixed candidates when no readable
+    semantic or legacy PRD file is currently available.
+
+    Args:
+        worktree_dir_path: Task worktree root directory
+        task_id_str: Task UUID string
+        task_title_str: Task title used as the final fallback naming source
+
+    Returns:
+        TaskPrdFileCorrectionResult: Resolved readable path or ``None`` when no
+            repairable invalid candidate exists
+    """
+    existing_readable_prd_file_path = find_task_prd_file_path(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
+    )
+    if existing_readable_prd_file_path is not None:
+        return TaskPrdFileCorrectionResult(
+            resolved_file_path=existing_readable_prd_file_path,
+            semantic_slug_str=_extract_semantic_slug_from_file_name(
+                existing_readable_prd_file_path.name,
+                task_id_str,
+            ),
+            naming_source_str="existing_readable",
+        )
+
+    invalid_candidate_prd_file_path_list = [
+        candidate_prd_file_path
+        for candidate_prd_file_path in _list_ranked_task_prd_file_paths(
+            worktree_dir_path=worktree_dir_path,
+            task_id_str=task_id_str,
+        )
+        if _build_task_prd_file_priority_int(candidate_prd_file_path, task_id_str) == 0
+    ]
+    if not invalid_candidate_prd_file_path_list:
+        return TaskPrdFileCorrectionResult(resolved_file_path=None)
+
+    return _repair_task_prd_file_candidates(
+        candidate_prd_file_path_list=invalid_candidate_prd_file_path_list,
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+    )
 
 def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[Path]:
-    """List candidate PRD files for one task, canonical filename first.
+    """List readable PRD files for one task, newest semantic filenames first.
 
     Args:
         worktree_dir_path: Task worktree root directory.
         task_id_str: Task UUID string.
 
     Returns:
-        list[Path]: Matching PRD file paths sorted so the canonical fixed
-            filename wins first, and legacy slugged filenames remain as
-            backwards-compatible fallbacks ordered by recency.
+        list[Path]: Matching PRD file paths sorted so semantic slug filenames are
+            preferred over the legacy fixed filename, while excluding invalid
+            random-suffix candidates from the read path.
     """
-    tasks_directory_path = worktree_dir_path / "tasks"
-    if not tasks_directory_path.exists():
-        return []
+    ranked_prd_file_path_list = _list_ranked_task_prd_file_paths(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
+    )
+    return [
+        task_prd_file_path
+        for task_prd_file_path in ranked_prd_file_path_list
+        if _is_readable_task_prd_file_path(
+            task_prd_file_path=task_prd_file_path,
+            task_id_str=task_id_str,
+        )
+    ]
 
-    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    canonical_task_prd_filename = f"{task_prd_file_prefix}.md"
-    matching_prd_file_path_list = list(
-        tasks_directory_path.glob(f"{task_prd_file_prefix}*.md")
+def list_all_task_prd_file_paths(
+    worktree_dir_path: Path, task_id_str: str
+) -> list[Path]:
+    """List all task-prefixed PRD files, including invalid repair candidates."""
+    return _list_ranked_task_prd_file_paths(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
+    )
+
+
+def _list_ranked_task_prd_file_paths(
+    worktree_dir_path: Path,
+    task_id_str: str,
+) -> list[Path]:
+    """List all task PRD candidates for repair, ranked by semantic quality."""
+    matching_prd_file_path_list = _list_unsorted_task_prd_file_paths(
+        worktree_dir_path=worktree_dir_path,
+        task_id_str=task_id_str,
     )
 
     def _sort_key(task_prd_file_path: Path) -> tuple[int, float, str]:
-        is_canonical_filename = task_prd_file_path.name == canonical_task_prd_filename
         try:
             last_modified_timestamp = task_prd_file_path.stat().st_mtime
         except OSError:
             last_modified_timestamp = -1.0
         return (
-            1 if is_canonical_filename else 0,
+            _build_task_prd_file_priority_int(
+                task_prd_file_path=task_prd_file_path,
+                task_id_str=task_id_str,
+            ),
             last_modified_timestamp,
             task_prd_file_path.name,
         )
@@ -74,6 +349,29 @@ def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[
         key=_sort_key,
         reverse=True,
     )
+
+
+def _build_task_prd_file_priority_int(
+    task_prd_file_path: Path,
+    task_id_str: str,
+) -> int:
+    """Rank PRD filenames for lookup and repair preference."""
+    if is_valid_task_prd_semantic_file_name(task_prd_file_path.name, task_id_str):
+        return 2
+
+    task_prd_stem = task_prd_file_path.stem
+    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
+    if task_prd_stem == task_prd_file_prefix:
+        return 1
+    return 0
+
+
+def _is_readable_task_prd_file_path(
+    task_prd_file_path: Path,
+    task_id_str: str,
+) -> bool:
+    """Return whether the PRD file is legal to expose through read APIs."""
+    return _build_task_prd_file_priority_int(task_prd_file_path, task_id_str) > 0
 
 
 def find_task_prd_file_path(worktree_dir_path: Path, task_id_str: str) -> Path | None:
@@ -94,3 +392,194 @@ def find_task_prd_file_path(worktree_dir_path: Path, task_id_str: str) -> Path |
         return None
 
     return matching_prd_file_path_list[0]
+
+
+def _list_unsorted_task_prd_file_paths(
+    worktree_dir_path: Path,
+    task_id_str: str,
+) -> list[Path]:
+    """Collect all task-scoped PRD files without ranking them."""
+    tasks_directory_path = worktree_dir_path / "tasks"
+    if not tasks_directory_path.exists():
+        return []
+
+    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
+    return list(tasks_directory_path.glob(f"{task_prd_file_prefix}*.md"))
+
+
+def _pick_latest_prd_file_path(candidate_prd_file_path_list: list[Path]) -> Path:
+    """Pick the most recently modified PRD file from a candidate list."""
+
+    def _sort_key(task_prd_file_path: Path) -> tuple[float, str]:
+        try:
+            last_modified_timestamp = task_prd_file_path.stat().st_mtime
+        except OSError:
+            last_modified_timestamp = -1.0
+        return (last_modified_timestamp, task_prd_file_path.name)
+
+    return max(candidate_prd_file_path_list, key=_sort_key)
+
+
+def _repair_task_prd_file_candidates(
+    candidate_prd_file_path_list: list[Path],
+    *,
+    task_id_str: str,
+    task_title_str: str,
+) -> TaskPrdFileCorrectionResult:
+    """Repair one PRD candidate set into a valid semantic filename."""
+    if not candidate_prd_file_path_list:
+        return TaskPrdFileCorrectionResult(resolved_file_path=None)
+
+    source_prd_file_path = _pick_latest_prd_file_path(candidate_prd_file_path_list)
+    source_prd_markdown_text = ""
+    try:
+        source_prd_markdown_text = source_prd_file_path.read_text(encoding="utf-8")
+    except OSError:
+        source_prd_markdown_text = ""
+
+    semantic_slug_str, naming_source_str = _build_semantic_slug_from_available_text(
+        task_id_str=task_id_str,
+        task_title_str=task_title_str,
+        prd_markdown_text=source_prd_markdown_text,
+    )
+    if semantic_slug_str == "":
+        return TaskPrdFileCorrectionResult(resolved_file_path=None)
+
+    target_prd_file_path = (
+        source_prd_file_path.parent
+        / f"{build_task_prd_file_prefix(task_id_str)}-{semantic_slug_str}.md"
+    )
+    if target_prd_file_path == source_prd_file_path:
+        return TaskPrdFileCorrectionResult(
+            resolved_file_path=source_prd_file_path,
+            semantic_slug_str=semantic_slug_str,
+            naming_source_str=naming_source_str,
+        )
+
+    if target_prd_file_path.exists():
+        try:
+            source_prd_file_path.unlink()
+        except OSError:
+            return TaskPrdFileCorrectionResult(resolved_file_path=None)
+    else:
+        source_prd_file_path.replace(target_prd_file_path)
+
+    return TaskPrdFileCorrectionResult(
+        resolved_file_path=target_prd_file_path,
+        renamed_from_path=source_prd_file_path,
+        semantic_slug_str=semantic_slug_str,
+        naming_source_str=naming_source_str,
+    )
+
+
+def _build_semantic_slug_from_available_text(
+    *,
+    task_id_str: str,
+    task_title_str: str,
+    prd_markdown_text: str,
+) -> tuple[str, str]:
+    """Resolve the best semantic slug from PRD metadata and task context."""
+    for naming_source_str, raw_candidate_text in (
+        (
+            "ai_summary",
+            _extract_prd_metadata_value(prd_markdown_text, "需求名称（AI 归纳）"),
+        ),
+        (
+            "original_title",
+            _extract_prd_metadata_value(prd_markdown_text, "原始需求标题"),
+        ),
+        ("task_title", task_title_str),
+    ):
+        normalized_slug_str = normalize_task_prd_requirement_slug(raw_candidate_text)
+        if is_valid_task_prd_semantic_slug(normalized_slug_str, task_id_str):
+            return normalized_slug_str, naming_source_str
+
+    fallback_slug_str = normalize_task_prd_requirement_slug("需求文档")
+    return fallback_slug_str, "default_fallback"
+
+
+def _truncate_task_prd_slug_to_max_bytes(
+    normalized_slug_str: str,
+    *,
+    max_bytes_int: int,
+) -> str:
+    """Trim a normalized slug to a UTF-8 byte limit without splitting codepoints."""
+    if len(normalized_slug_str.encode("utf-8")) <= max_bytes_int:
+        return normalized_slug_str
+
+    truncated_character_list: list[str] = []
+    current_byte_count_int = 0
+    for raw_character in normalized_slug_str:
+        character_byte_count_int = len(raw_character.encode("utf-8"))
+        if current_byte_count_int + character_byte_count_int > max_bytes_int:
+            break
+        truncated_character_list.append(raw_character)
+        current_byte_count_int += character_byte_count_int
+
+    return "".join(truncated_character_list).strip("-")
+
+
+def _looks_like_interleaved_short_random_identifier(normalized_slug_str: str) -> bool:
+    """Detect short random-like identifiers that are not semantic requirement names.
+
+    This focuses on short single-token ASCII slugs such as ``k9m2qz`` or
+    ``a1b2c`` where digits appear in multiple separate clusters. Semantic
+    version-like slugs such as ``ios17`` remain allowed.
+
+    Args:
+        normalized_slug_str: Normalized candidate slug text.
+
+    Returns:
+        bool: ``True`` when the slug still looks like a short random identifier.
+    """
+    if not _ASCII_ALNUM_ONLY_PATTERN.fullmatch(normalized_slug_str):
+        return False
+
+    slug_length_int = len(normalized_slug_str)
+    if slug_length_int < 5 or slug_length_int > 8:
+        return False
+
+    digit_count_int = sum(
+        raw_character.isdigit() for raw_character in normalized_slug_str
+    )
+    letter_count_int = slug_length_int - digit_count_int
+    if digit_count_int < 2 or letter_count_int < 2:
+        return False
+
+    digit_cluster_count_int = 0
+    previous_character_was_digit_bool = False
+    for raw_character in normalized_slug_str:
+        current_character_is_digit_bool = raw_character.isdigit()
+        if current_character_is_digit_bool and not previous_character_was_digit_bool:
+            digit_cluster_count_int += 1
+        previous_character_was_digit_bool = current_character_is_digit_bool
+
+    return digit_cluster_count_int >= 2
+
+
+def _extract_prd_metadata_value(
+    prd_markdown_text: str,
+    field_name_str: str,
+) -> str:
+    """Extract one top-level PRD metadata value from Markdown text."""
+    metadata_pattern = re.compile(
+        rf"^\s*(?:[-*]\s*)?(?:\*\*)?{re.escape(field_name_str)}(?:\*\*)?\s*[：:]\s*(.+?)\s*$",
+        re.MULTILINE,
+    )
+    metadata_match = metadata_pattern.search(prd_markdown_text)
+    if metadata_match is None:
+        return ""
+
+    metadata_value_str = metadata_match.group(1).strip()
+    return _MARKDOWN_INLINE_WRAPPER_PATTERN.sub("", metadata_value_str).strip()
+
+
+def _extract_semantic_slug_from_file_name(
+    file_name_str: str,
+    task_id_str: str,
+) -> str | None:
+    """Extract the semantic slug portion from a valid PRD filename."""
+    if not is_valid_task_prd_semantic_file_name(file_name_str, task_id_str):
+        return None
+    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
+    return file_name_str[len(task_prd_file_prefix) + 1 : -len(".md")]
