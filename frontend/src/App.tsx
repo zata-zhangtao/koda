@@ -53,6 +53,7 @@ import {
   sanitizePrdPendingQuestionAnswerSelectionMap,
   setTaskScopedPrdPendingQuestionAnswerSelectionMap,
 } from "./utils/prd_pending_questions";
+import { reconcileTaskListWithReturnedTaskSnapshot } from "./utils/task_list";
 import {
   AIProcessingStatus,
   DevLogStateTag,
@@ -1164,6 +1165,17 @@ function App() {
   useEffect(() => {
     latestTaskListRef.current = taskList;
   }, [taskList]);
+
+  function reconcileLocalTaskSnapshot(returnedTaskSnapshot: Task): void {
+    setTaskList((previousTaskList) => {
+      const nextTaskList = reconcileTaskListWithReturnedTaskSnapshot(
+        previousTaskList,
+        returnedTaskSnapshot
+      );
+      latestTaskListRef.current = nextTaskList;
+      return nextTaskList;
+    });
+  }
 
   useEffect(() => {
     if (!hasAnyTaskInActiveExecution) {
@@ -2460,13 +2472,17 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.manualComplete(taskItem.id);
+      const manuallyCompletedTask = await taskApi.manualComplete(taskItem.id);
+      reconcileLocalTaskSnapshot(manuallyCompletedTask);
+      setSelectedTaskId(manuallyCompletedTask.id);
       setWorkspaceView("completed");
       setIsManualCompletionChecklistOpen(false);
       setSuccessMessage(
         "已写入人工确认日志，任务已收敛到 Completed 归档。"
       );
-      await loadDashboardData(true);
+      // Keep the success path bound to the API response itself; the full
+      // dashboard refresh only backfills logs and global consistency.
+      void loadDashboardData(true);
     } catch (manualCompletionError) {
       console.error(manualCompletionError);
       setErrorMessage(

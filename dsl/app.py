@@ -162,9 +162,7 @@ async def lifespan(app: FastAPI):
         if config.SCHEDULER_ENABLE
         else None
     )
-    task_runner_watchdog_task = asyncio.create_task(
-        _run_task_runner_watchdog_loop()
-    )
+    task_runner_watchdog_task = asyncio.create_task(_run_task_runner_watchdog_loop())
 
     try:
         yield

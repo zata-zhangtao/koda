@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Koda Prototype - Manual Complete Refresh Recovery</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f1e8;
+        --panel: rgba(255, 252, 247, 0.88);
+        --panel-strong: #fffaf2;
+        --ink: #201912;
+        --muted: #6e6257;
+        --line: rgba(54, 38, 19, 0.12);
+        --accent: #c85b1d;
+        --accent-soft: rgba(200, 91, 29, 0.14);
+        --ok: #197a53;
+        --ok-soft: rgba(25, 122, 83, 0.14);
+        --warn: #b2561b;
+        --warn-soft: rgba(178, 86, 27, 0.16);
+        --danger: #b03f29;
+        --danger-soft: rgba(176, 63, 41, 0.12);
+        --shadow: 0 20px 50px rgba(54, 38, 19, 0.1);
+        --radius: 24px;
+        --radius-sm: 16px;
+        font-family: "Space Grotesk", "Noto Sans SC", "PingFang SC", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(255, 207, 137, 0.35), transparent 30%),
+          radial-gradient(circle at top right, rgba(255, 233, 173, 0.35), transparent 34%),
+          linear-gradient(180deg, #f7f4ee 0%, #efe5d8 100%);
+      }
+
+      .shell {
+        width: min(1280px, calc(100vw - 32px));
+        margin: 28px auto;
+        padding: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        border-radius: 32px;
+        background: rgba(255, 250, 242, 0.76);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(14px);
+      }
+
+      .hero {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: 1.3fr 0.9fr;
+        align-items: start;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        font-size: 12px;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 56px);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p {
+        margin: 14px 0 0;
+        color: var(--muted);
+        line-height: 1.65;
+        max-width: 62ch;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, rgba(255, 245, 231, 0.94), rgba(255, 252, 247, 0.92));
+        padding: 20px 22px;
+      }
+
+      .summary-card strong {
+        display: block;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+
+      .summary-card ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--ink);
+        line-height: 1.65;
+      }
+
+      .mode-switcher,
+      .control-row,
+      .workspace-tabs,
+      .fact-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .mode-switcher {
+        margin-top: 22px;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font: inherit;
+        cursor: pointer;
+        transition:
+          transform 140ms ease,
+          opacity 140ms ease,
+          box-shadow 140ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .mode-button {
+        background: rgba(32, 25, 18, 0.06);
+        color: var(--ink);
+      }
+
+      .mode-button.is-active {
+        background: var(--ink);
+        color: #fff8ee;
+        box-shadow: 0 14px 28px rgba(32, 25, 18, 0.18);
+      }
+
+      .screen-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(290px, 0.72fr) minmax(400px, 1fr) minmax(260px, 0.78fr);
+        margin-top: 28px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px;
+        min-height: 220px;
+      }
+
+      .panel h2,
+      .panel h3,
+      .panel h4 {
+        margin: 0;
+      }
+
+      .panel-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+
+      .badge--warning {
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+
+      .badge--ok {
+        background: var(--ok-soft);
+        color: var(--ok);
+      }
+
+      .badge--danger {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .workspace-tabs {
+        margin-bottom: 16px;
+      }
+
+      .tab {
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(32, 25, 18, 0.06);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .tab.is-active {
+        background: var(--ink);
+        color: #fff8ee;
+      }
+
+      .task-card {
+        border: 1px solid var(--line);
+        background: var(--panel-strong);
+        border-radius: 20px;
+        padding: 16px;
+      }
+
+      .task-card.is-hidden {
+        opacity: 0.36;
+      }
+
+      .task-card__meta,
+      .task-card__hint,
+      .fact-label,
+      .trace small {
+        color: var(--muted);
+      }
+
+      .task-card__title {
+        margin: 8px 0;
+        font-size: 19px;
+        line-height: 1.18;
+      }
+
+      .detail-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+      }
+
+      .detail-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .button-outline {
+        background: rgba(32, 25, 18, 0.05);
+        color: var(--ink);
+        border: 1px solid rgba(32, 25, 18, 0.08);
+      }
+
+      .button-primary {
+        background: var(--ink);
+        color: #fff8ee;
+      }
+
+      .button-warning {
+        background: linear-gradient(135deg, #f0c97b, #f7e7b8);
+        color: #5a3514;
+      }
+
+      .banner {
+        margin-top: 18px;
+        border-radius: 22px;
+        border: 1px solid rgba(207, 131, 25, 0.18);
+        padding: 18px;
+        background: linear-gradient(135deg, rgba(255, 236, 199, 0.92), rgba(255, 249, 235, 0.86));
+      }
+
+      .banner p {
+        color: #6a563c;
+        line-height: 1.65;
+      }
+
+      .checklist {
+        margin: 0;
+        padding-left: 18px;
+        line-height: 1.68;
+      }
+
+      .state-strip,
+      .trace,
+      .legend-item {
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.58);
+      }
+
+      .state-strip {
+        padding: 14px;
+        margin-top: 18px;
+      }
+
+      .state-strip strong {
+        display: block;
+        margin-bottom: 10px;
+      }
+
+      .fact {
+        flex: 1 1 110px;
+        min-width: 110px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(32, 25, 18, 0.04);
+      }
+
+      .fact-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .control-row {
+        margin-top: 16px;
+      }
+
+      .trace-list {
+        list-style: none;
+        padding: 0;
+        margin: 14px 0 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .trace {
+        padding: 14px;
+      }
+
+      .trace--pending {
+        border-color: rgba(176, 63, 41, 0.22);
+        background: rgba(176, 63, 41, 0.06);
+      }
+
+      .trace--success {
+        border-color: rgba(25, 122, 83, 0.24);
+        background: rgba(25, 122, 83, 0.08);
+      }
+
+      .legend {
+        display: grid;
+        gap: 12px;
+      }
+
+      .legend-item {
+        padding: 14px;
+      }
+
+      .status-copy {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .toast {
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: rgba(32, 25, 18, 0.06);
+        color: var(--ink);
+      }
+
+      .toast.is-warning {
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 248, 238, 0.35);
+        border-top-color: currentColor;
+        animation: spin 0.9s linear infinite;
+        display: inline-block;
+        vertical-align: middle;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 1120px) {
+        .hero,
+        .screen-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Prototype / PRD Support</p>
+          <h1>确认 Complete 后，如何避免“其实已收口但 UI 还在转圈”</h1>
+          <p>
+            这个原型对比两条路径：左边不是“后端还没完成”，而是
+            <strong>前端把手动完成成功和全量刷新绑定得过深</strong>；
+            右边则展示目标修复态：一旦 `POST /manual-complete` 返回 200，
+            立即以返回的 Task 快照更新界面，再把 dashboard 全量刷新降级为后台同步。
+          </p>
+          <div class="mode-switcher" role="tablist" aria-label="Prototype modes">
+            <button id="modeBuggy" class="mode-button is-active" type="button">当前问题态</button>
+            <button id="modeFixed" class="mode-button" type="button">目标修复态</button>
+          </div>
+        </div>
+        <aside class="summary-card">
+          <strong>阅读重点</strong>
+          <ul>
+            <li>先点击“查看完成检查单”，再点击“确认 Complete”。</li>
+            <li>在“当前问题态”里，后端已成功收口，但按钮仍被 dashboard 刷新卡住。</li>
+            <li>在“目标修复态”里，按钮忙碌态会在 API 成功后立即释放，页面同步切到 Completed。</li>
+          </ul>
+        </aside>
+      </section>
+
+      <section class="screen-grid">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Workspace</h2>
+            <span id="workspaceBadge" class="badge badge--warning">Active / 分支缺失待确认</span>
+          </div>
+          <div class="workspace-tabs">
+            <span id="activeTab" class="tab is-active">Active 2</span>
+            <span id="completedTab" class="tab">Completed 5</span>
+            <span class="tab">Changes 20</span>
+          </div>
+          <article id="taskCard" class="task-card">
+            <div class="task-card__meta">缺失分支待确认 · task/516e04ff</div>
+            <h3 class="task-card__title">任务完成, 点击 complete 的时候, commit 信息有问题</h3>
+            <div id="taskCardHint" class="task-card__hint">
+              当前缓存仍把它留在 Active 视图里，所以你会误以为“操作还没成功”。
+            </div>
+          </article>
+          <div id="workspaceToast" class="toast">
+            手动完成成功后，理想行为应当是“立即收口 + 后台刷新”，而不是无限等待全量刷新。
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="detail-header">
+            <div>
+              <p class="eyebrow">Requirement Detail</p>
+              <h2>缺失分支人工完成确认</h2>
+            </div>
+            <span id="detailBadge" class="badge badge--warning">等待人工确认</span>
+          </div>
+
+          <div class="detail-actions">
+            <button id="checklistButton" class="button-outline" type="button">查看完成检查单</button>
+            <button id="confirmButton" class="button-warning" type="button">确认 Complete</button>
+            <button id="resetButton" class="button-primary" type="button">重置</button>
+          </div>
+
+          <section class="banner">
+            <h3 id="bannerTitle">检测到任务分支缺失，等待人工确认</h3>
+            <p id="bannerCopy">
+              后端已为这个任务开放 `manual-complete` 路径。这里的关键缺陷不是业务校验，
+              而是提交成功后前端如何及时消化返回结果。
+            </p>
+            <ol id="checklist" class="checklist" hidden>
+              <li>先确认 Timeline 里已经有实现与验收记录。</li>
+              <li>必要时打开项目目录或 Worktree 核对最终代码。</li>
+              <li>确认分支缺失是人工 merge / cleanup 的结果，而不是误删。</li>
+            </ol>
+          </section>
+
+          <section class="state-strip">
+            <strong>当前前端观察值</strong>
+            <div class="fact-row">
+              <div class="fact">
+                <span class="fact-label">CTA busy</span>
+                <span id="factBusy" class="fact-value">否</span>
+              </div>
+              <div class="fact">
+                <span class="fact-label">本地任务阶段</span>
+                <span id="factStage" class="fact-value">branch_missing</span>
+              </div>
+              <div class="fact">
+                <span class="fact-label">刷新状态</span>
+                <span id="factRefresh" class="fact-value">idle</span>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-heading">
+            <h2>Trace</h2>
+            <span id="traceBadge" class="badge badge--danger">等待触发</span>
+          </div>
+          <p id="traceCopy" class="status-copy">
+            先点击“查看完成检查单”，再执行“确认 Complete”。
+          </p>
+          <ul id="traceList" class="trace-list">
+            <li class="trace">
+              <strong>1. Checklist Gate</strong><br />
+              <small>检查单尚未查看，按钮逻辑应先做前端拦截。</small>
+            </li>
+          </ul>
+          <div class="control-row">
+            <button id="finishRefreshButton" class="button-outline" type="button" hidden>模拟后台刷新完成</button>
+          </div>
+          <div class="legend">
+            <div class="legend-item">
+              <strong>当前问题态</strong>
+              <div class="status-copy">API 已返回成功，但 `manual_complete` 仍被 `loadDashboardData(true)` 绑住，所以按钮持续转圈。</div>
+            </div>
+            <div class="legend-item">
+              <strong>目标修复态</strong>
+              <div class="status-copy">先用返回的 Task 收口本地状态，再把全量刷新改成后台同步或可恢复警告。</div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const modeBuggyButton = document.getElementById("modeBuggy");
+      const modeFixedButton = document.getElementById("modeFixed");
+      const checklistButton = document.getElementById("checklistButton");
+      const confirmButton = document.getElementById("confirmButton");
+      const resetButton = document.getElementById("resetButton");
+      const finishRefreshButton = document.getElementById("finishRefreshButton");
+      const checklistElement = document.getElementById("checklist");
+      const workspaceBadgeElement = document.getElementById("workspaceBadge");
+      const detailBadgeElement = document.getElementById("detailBadge");
+      const taskCardElement = document.getElementById("taskCard");
+      const taskCardHintElement = document.getElementById("taskCardHint");
+      const workspaceToastElement = document.getElementById("workspaceToast");
+      const activeTabElement = document.getElementById("activeTab");
+      const completedTabElement = document.getElementById("completedTab");
+      const factBusyElement = document.getElementById("factBusy");
+      const factStageElement = document.getElementById("factStage");
+      const factRefreshElement = document.getElementById("factRefresh");
+      const traceBadgeElement = document.getElementById("traceBadge");
+      const traceCopyElement = document.getElementById("traceCopy");
+      const traceListElement = document.getElementById("traceList");
+      const bannerTitleElement = document.getElementById("bannerTitle");
+      const bannerCopyElement = document.getElementById("bannerCopy");
+
+      let runningTimerId = null;
+      let prototypeState = null;
+
+      function getInitialState(mode = "buggy") {
+        return {
+          mode,
+          checklistOpened: false,
+          busy: false,
+          stage: "branch_missing",
+          refreshState: "idle",
+          workspace: "active",
+          traceMode: "waiting",
+          traceMessage: "先点击“查看完成检查单”，再执行“确认 Complete”。",
+        };
+      }
+
+      function clearTimer() {
+        if (runningTimerId !== null) {
+          window.clearTimeout(runningTimerId);
+          runningTimerId = null;
+        }
+      }
+
+      function renderTrace() {
+        const traceList = [];
+        traceList.push(`
+          <li class="trace">
+            <strong>1. Checklist Gate</strong><br />
+            <small>${prototypeState.checklistOpened ? "检查单已查看，可以发送 API 请求。" : "检查单尚未查看，按钮逻辑应先做前端拦截。"}</small>
+          </li>
+        `);
+
+        if (prototypeState.busy) {
+          traceList.push(`
+            <li class="trace trace--pending">
+              <strong>2. POST /api/tasks/:id/manual-complete</strong><br />
+              <small>请求已发出，前端正在等待结果。</small>
+            </li>
+          `);
+        }
+
+        if (prototypeState.traceMode === "buggy_stalled") {
+          traceList.push(`
+            <li class="trace trace--success">
+              <strong>3. Backend</strong><br />
+              <small>后端已经返回 200，并把任务收敛到 done / CLOSED。</small>
+            </li>
+          `);
+          traceList.push(`
+            <li class="trace trace--pending">
+              <strong>4. Frontend</strong><br />
+              <small>全量刷新仍未结束，` + "`manual_complete`" + ` busy 状态没有释放。</small>
+            </li>
+          `);
+        }
+
+        if (prototypeState.traceMode === "fixed_success") {
+          traceList.push(`
+            <li class="trace trace--success">
+              <strong>3. Backend</strong><br />
+              <small>后端返回 200，并附带最新 Task 快照。</small>
+            </li>
+          `);
+          traceList.push(`
+            <li class="trace trace--success">
+              <strong>4. Frontend</strong><br />
+              <small>立即更新本地任务列表、切换到 Completed，并把 dashboard 刷新降级为后台同步。</small>
+            </li>
+          `);
+        }
+
+        if (prototypeState.traceMode === "fixed_background") {
+          traceList.push(`
+            <li class="trace trace--success">
+              <strong>5. Background Sync</strong><br />
+              <small>后台刷新继续进行，但不会重新锁住按钮。</small>
+            </li>
+          `);
+        }
+
+        traceListElement.innerHTML = traceList.join("");
+      }
+
+      function render() {
+        modeBuggyButton.classList.toggle("is-active", prototypeState.mode === "buggy");
+        modeFixedButton.classList.toggle("is-active", prototypeState.mode === "fixed");
+
+        checklistElement.hidden = !prototypeState.checklistOpened;
+        confirmButton.disabled = !prototypeState.checklistOpened || prototypeState.busy;
+        checklistButton.disabled = prototypeState.busy;
+
+        if (prototypeState.busy) {
+          confirmButton.innerHTML = '<span class="spinner" aria-hidden="true"></span> 提交中';
+        } else {
+          confirmButton.textContent = prototypeState.stage === "done" ? "已完成收口" : "确认 Complete";
+        }
+
+        factBusyElement.textContent = prototypeState.busy ? "是" : "否";
+        factStageElement.textContent = prototypeState.stage;
+        factRefreshElement.textContent = prototypeState.refreshState;
+
+        activeTabElement.classList.toggle("is-active", prototypeState.workspace === "active");
+        completedTabElement.classList.toggle("is-active", prototypeState.workspace === "completed");
+
+        const isCompleted = prototypeState.workspace === "completed";
+        workspaceBadgeElement.className = `badge ${isCompleted ? "badge--ok" : "badge--warning"}`;
+        workspaceBadgeElement.textContent = isCompleted
+          ? "Completed / 已收口"
+          : "Active / 分支缺失待确认";
+
+        detailBadgeElement.className = `badge ${isCompleted ? "badge--ok" : "badge--warning"}`;
+        detailBadgeElement.textContent = isCompleted ? "done / CLOSED" : "等待人工确认";
+
+        taskCardElement.classList.toggle("is-hidden", false);
+        taskCardHintElement.textContent = isCompleted
+          ? "任务已切到 Completed 归档，详情仍保持选中，方便用户继续核对。"
+          : "当前缓存仍把它留在 Active 视图里，所以你会误以为“操作还没成功”。";
+
+        if (prototypeState.traceMode === "buggy_stalled") {
+          traceBadgeElement.className = "badge badge--danger";
+          traceBadgeElement.textContent = "后端成功，前端卡住";
+          traceCopyElement.textContent =
+            "这就是要修的状态：后端已经成功收口，但前端把按钮忙碌态绑到了一个更慢的 dashboard 刷新上。";
+          workspaceToastElement.className = "toast is-warning";
+          workspaceToastElement.textContent =
+            "观察点：这时不是再点一次按钮，而是要把前端成功边界前移到 API 200。";
+          finishRefreshButton.hidden = false;
+        } else if (prototypeState.traceMode === "fixed_success") {
+          traceBadgeElement.className = "badge badge--ok";
+          traceBadgeElement.textContent = "即时收口";
+          traceCopyElement.textContent =
+            "目标修复态：API 成功后马上写回本地状态，视图切到 Completed，随后异步刷新。";
+          workspaceToastElement.className = "toast";
+          workspaceToastElement.textContent =
+            "用户已经拿到确定性反馈，不需要继续盯着一个无限转圈的按钮。";
+          finishRefreshButton.hidden = true;
+        } else if (prototypeState.traceMode === "fixed_background") {
+          traceBadgeElement.className = "badge badge--ok";
+          traceBadgeElement.textContent = "后台同步完成";
+          traceCopyElement.textContent =
+            "后台刷新已结束。这个刷新即使失败，也应降级成可恢复提示，而不是把按钮重新锁死。";
+          workspaceToastElement.className = "toast";
+          workspaceToastElement.textContent =
+            "最终状态与后端一致，且用户从 API 成功那一刻起就能看到已归档结果。";
+          finishRefreshButton.hidden = true;
+        } else {
+          traceBadgeElement.className = "badge badge--danger";
+          traceBadgeElement.textContent = "等待触发";
+          traceCopyElement.textContent = prototypeState.traceMessage;
+          workspaceToastElement.className = "toast";
+          workspaceToastElement.textContent =
+            "手动完成成功后，理想行为应当是“立即收口 + 后台刷新”，而不是无限等待全量刷新。";
+          finishRefreshButton.hidden = true;
+        }
+
+        bannerTitleElement.textContent = isCompleted
+          ? "manual-complete 已成功，详情正在展示归档结果"
+          : "检测到任务分支缺失，等待人工确认";
+        bannerCopyElement.textContent = isCompleted
+          ? "前端已基于 `manual-complete` 返回的 Task 快照完成本地收口；后续 dashboard 刷新只负责补齐全局一致性。"
+          : "后端已为这个任务开放 `manual-complete` 路径。这里的关键缺陷不是业务校验，而是提交成功后前端如何及时消化返回结果。";
+
+        renderTrace();
+      }
+
+      function setMode(mode) {
+        clearTimer();
+        prototypeState = getInitialState(mode);
+        render();
+      }
+
+      function openChecklist() {
+        prototypeState.checklistOpened = true;
+        prototypeState.traceMessage = "检查单已查看，现在可以发送 manual-complete 请求。";
+        render();
+      }
+
+      function confirmComplete() {
+        if (!prototypeState.checklistOpened || prototypeState.busy) {
+          return;
+        }
+
+        prototypeState.busy = true;
+        prototypeState.refreshState = "posting";
+        prototypeState.traceMode = "posting";
+        render();
+
+        clearTimer();
+        runningTimerId = window.setTimeout(() => {
+          if (prototypeState.mode === "buggy") {
+            prototypeState.busy = true;
+            prototypeState.stage = "branch_missing";
+            prototypeState.refreshState = "stalled_after_api_success";
+            prototypeState.workspace = "active";
+            prototypeState.traceMode = "buggy_stalled";
+          } else {
+            prototypeState.busy = false;
+            prototypeState.stage = "done";
+            prototypeState.refreshState = "background_sync";
+            prototypeState.workspace = "completed";
+            prototypeState.traceMode = "fixed_success";
+
+            runningTimerId = window.setTimeout(() => {
+              prototypeState.traceMode = "fixed_background";
+              prototypeState.refreshState = "synced";
+              render();
+            }, 1100);
+          }
+          render();
+        }, 900);
+      }
+
+      function finishRefresh() {
+        prototypeState.busy = false;
+        prototypeState.stage = "done";
+        prototypeState.refreshState = "synced_after_manual_reload";
+        prototypeState.workspace = "completed";
+        prototypeState.traceMode = "fixed_background";
+        render();
+      }
+
+      modeBuggyButton.addEventListener("click", () => setMode("buggy"));
+      modeFixedButton.addEventListener("click", () => setMode("fixed"));
+      checklistButton.addEventListener("click", openChecklist);
+      confirmButton.addEventListener("click", confirmComplete);
+      resetButton.addEventListener("click", () => setMode(prototypeState.mode));
+      finishRefreshButton.addEventListener("click", finishRefresh);
+
+      setMode("buggy");
+    </script>
+  </body>
+</html>

@@ -74,5 +74,6 @@ nav:
       - 需求工作流 Demo: prototypes/requirement-workflow-demo.html
       - PRD 待确认问题下拉 Demo: prototypes/prd-pending-question-dropdown-demo.html
       - 缺失分支完成确认: prototypes/missing-branch-complete-demo.html
+      - 确认 Complete 刷新修复: prototypes/manual-complete-refresh-demo.html
   - API:
       - 参考: api/references.md
