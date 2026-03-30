@@ -347,7 +347,7 @@ def test_build_completion_commit_message_falls_back_to_task_title() -> None:
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
-    """PRD prompt should require both titles, fallback guidance, and the fixed file path."""
+    """PRD prompt should require titles, structured question contract, and the fixed file path."""
     prd_prompt_text = codex_runner.build_codex_prd_prompt(
         task_title="I hope the generated PRD simultaneously includes the name of the requirement",
         dev_log_text_list=["Need the output contract captured in tests and docs."],
@@ -363,6 +363,11 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "`tasks/prd-cf2b9461.md`" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
     assert "Attached local files:" in prd_prompt_text
+    assert "`## 0. 待确认问题（结构化）`" in prd_prompt_text
+    assert "fenced `json` code block" in prd_prompt_text
+    assert "`pending_questions`" in prd_prompt_text
+    assert "`recommended_option_key`" in prd_prompt_text
+    assert "不要伪造空问题" in prd_prompt_text
 
 
 def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> None:

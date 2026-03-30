@@ -1718,7 +1718,11 @@ def build_codex_prd_prompt(
 3. 不得只保留 `需求名称（AI 归纳）`；`原始需求标题` 必须与 AI 归纳名称同时出现。
 4. 当上下文不足时，`需求名称（AI 归纳）` 必须回退到原始需求标题的规范化版本，输出值不能为空。
 5. 如果上下文中出现 `Attached local files:` 段落，请直接检查这些本地图片/附件/视频文件；若当前环境无法完整解析某类二进制文件，也要在 PRD 中显式吸收其文件名、存在性和可确认信息，而不是忽略。
-6. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
+6. 如果 PRD 中仍有需要用户确认的决策，必须额外输出固定章节：`## 0. 待确认问题（结构化）`。
+7. 该章节必须包含 fenced `json` code block，顶层对象必须使用键 `pending_questions`。
+8. `pending_questions` 中的每个问题对象至少包含 `id`、`title`、`required`、`recommended_option_key`、`recommendation_reason`、`options`；`options` 中的每个选项至少包含 `key` 和 `label`。
+9. 如果当前需求没有待确认问题，可以省略整个结构化章节；不要伪造空问题。
+10. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`

@@ -28,6 +28,7 @@ from dsl.api.tasks import (
     update_task_status,
 )
 from dsl.services import codex_runner
+from dsl.services.prd_file_service import build_task_prd_output_path_contract
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.project import Project
@@ -81,7 +82,7 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    """PRD file lookup should keep using `tasks/prd-{task_id[:8]}.md`."""
+    """PRD file lookup should prefer the canonical fixed task-specific path."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -109,6 +110,14 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         encoding="utf-8",
     )
 
+    legacy_slugged_prd_file_path = (
+        tasks_directory_path / f"prd-{task_obj.id[:8]}-legacy-scope.md"
+    )
+    legacy_slugged_prd_file_path.write_text(
+        "# Legacy PRD\n\n- 这个旧 slug 文件不应覆盖固定文件名。\n",
+        encoding="utf-8",
+    )
+
     legacy_style_prd_file_path = tasks_directory_path / "20260317-prd-random.md"
     legacy_style_prd_file_path.write_text(
         "This older wildcard-style file should be ignored.",
@@ -121,6 +130,57 @@ def test_get_task_prd_file_reads_fixed_task_specific_path(
         "# PRD\n\n- 需求名称（AI 归纳）: PRD 输出合同\n"
     )
     assert prd_file_response["path"] == str(expected_prd_file_path)
+
+
+def test_build_task_prd_output_path_contract_uses_fixed_filename() -> None:
+    """The prompt contract helper should advertise the canonical fixed filename."""
+    output_path_contract = build_task_prd_output_path_contract(
+        "cf2b9461-1234-5678-9012-abcdefabcdef"
+    )
+
+    assert output_path_contract == "tasks/prd-cf2b9461.md"
+
+
+def test_get_task_prd_file_falls_back_to_legacy_slugged_file(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """PRD file lookup should keep supporting legacy slugged files as fallback."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="PRD compatibility verification",
+        worktree_path=str(tmp_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    tasks_directory_path = tmp_path / "tasks"
+    tasks_directory_path.mkdir()
+
+    legacy_slugged_prd_file_path = (
+        tasks_directory_path / f"prd-{task_obj.id[:8]}-legacy-scope.md"
+    )
+    legacy_slugged_prd_file_path.write_text(
+        "# Legacy PRD\n\n- 仍然需要作为兼容兜底读取。\n",
+        encoding="utf-8",
+    )
+
+    prd_file_response = get_task_prd_file(task_obj.id, db_session)
+
+    assert (
+        prd_file_response["content"] == "# Legacy PRD\n\n- 仍然需要作为兼容兜底读取。\n"
+    )
+    assert prd_file_response["path"] == str(legacy_slugged_prd_file_path)
 
 
 def test_create_task_exposes_auto_confirm_prd_and_execute_flag(

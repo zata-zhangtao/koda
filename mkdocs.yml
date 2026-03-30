@@ -70,5 +70,8 @@ nav:
   - 开发:
       - 评测与验证: dev/evaluation.md
       - 发布说明: dev/release-notes.md
+  - 原型:
+      - 需求工作流 Demo: prototypes/requirement-workflow-demo.html
+      - PRD 待确认问题下拉 Demo: prototypes/prd-pending-question-dropdown-demo.html
   - API:
       - 参考: api/references.md

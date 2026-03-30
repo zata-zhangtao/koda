@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Koda - PRD Pending Question Quick Action Demo</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #151b24;
+      --panel-raised: #1b2431;
+      --panel-soft: #101722;
+      --line: #2a3443;
+      --line-strong: #3c4b60;
+      --text: #edf2f7;
+      --muted: #9fb0c7;
+      --blue: #5aa0ff;
+      --blue-deep: #12365f;
+      --green: #48d597;
+      --green-deep: #133f33;
+      --amber: #f8c15c;
+      --amber-deep: #5a4311;
+      --red: #ff7d7d;
+      --red-deep: #5b1f25;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --font-ui: "Inter", "IBM Plex Sans", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(90, 160, 255, 0.16), transparent 26%),
+        radial-gradient(circle at top right, rgba(72, 213, 151, 0.12), transparent 22%),
+        linear-gradient(180deg, #0a0f16 0%, #0d1117 100%);
+      color: var(--text);
+      font-family: var(--font-ui);
+    }
+
+    .shell {
+      width: min(1360px, calc(100vw - 32px));
+      margin: 24px auto;
+      padding: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 28px;
+      background: rgba(11, 16, 23, 0.86);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 6px 4px 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand__mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--blue), #86b9ff);
+      color: #08111b;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    .brand__copy h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: -0.03em;
+    }
+
+    .brand__copy p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stage-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-radius: 999px;
+      background: var(--blue-deep);
+      border: 1px solid rgba(90, 160, 255, 0.55);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 18px;
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(27, 36, 49, 0.96), rgba(16, 23, 34, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .card + .card {
+      margin-top: 18px;
+    }
+
+    .card__eyebrow {
+      display: inline-block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+    }
+
+    .card__title {
+      margin: 8px 0 6px;
+      font-size: 24px;
+      letter-spacing: -0.04em;
+    }
+
+    .card__text {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .stat {
+      padding: 14px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .stat__label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .stat__value {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      background: rgba(90, 160, 255, 0.08);
+      border: 1px solid rgba(90, 160, 255, 0.2);
+    }
+
+    .status-bar__pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--amber);
+      background: rgba(248, 193, 92, 0.12);
+      border: 1px solid rgba(248, 193, 92, 0.28);
+    }
+
+    .question-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .question {
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+    }
+
+    .question:hover {
+      transform: translateY(-1px);
+      border-color: rgba(90, 160, 255, 0.26);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .question__top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .question__copy {
+      min-width: 0;
+      flex: 1 1 56%;
+    }
+
+    .question__title {
+      margin: 0 0 10px;
+      font-size: 16px;
+      line-height: 1.45;
+      letter-spacing: -0.02em;
+    }
+
+    .question__reason {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .question__controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: stretch;
+      flex: 1 1 44%;
+    }
+
+    .question__control-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .question__select-label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge--recommended {
+      color: var(--green);
+      background: rgba(72, 213, 151, 0.12);
+      border: 1px solid rgba(72, 213, 151, 0.28);
+    }
+
+    .badge--pending {
+      color: var(--amber);
+      background: rgba(248, 193, 92, 0.12);
+      border: 1px solid rgba(248, 193, 92, 0.28);
+    }
+
+    .badge--done {
+      color: var(--green);
+      background: rgba(72, 213, 151, 0.12);
+      border: 1px solid rgba(72, 213, 151, 0.28);
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .question__select {
+      width: 100%;
+      min-height: 46px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font: inherit;
+      font-size: 14px;
+    }
+
+    .question__selection {
+      margin: 0;
+      color: #d8e4f4;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .button--primary {
+      color: #061018;
+      background: linear-gradient(135deg, var(--green), #8cf5c5);
+    }
+
+    .button--secondary {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .button--ghost {
+      color: var(--blue);
+      background: rgba(90, 160, 255, 0.12);
+      border: 1px solid rgba(90, 160, 255, 0.22);
+    }
+
+    .feedback-box,
+    .archive-box,
+    .timeline-box {
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .feedback-box pre,
+    .archive-box pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #d8e4f4;
+      font-family: var(--font-mono);
+      line-height: 1.65;
+      font-size: 12px;
+    }
+
+    .helper-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .timeline-item {
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .timeline-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .timeline-item__meta {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .timeline-item__text {
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .notice {
+      margin-top: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      display: none;
+      border: 1px solid rgba(72, 213, 151, 0.3);
+      background: rgba(72, 213, 151, 0.12);
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .notice.is-visible {
+      display: block;
+    }
+
+    @media (max-width: 1180px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .question__top {
+        flex-direction: column;
+      }
+
+      .question__controls,
+      .question__control-top {
+        justify-items: start;
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand__mark">PRD</div>
+        <div class="brand__copy">
+          <h1>PRD 待确认问题下拉原型</h1>
+          <p>演示“问题右侧使用下拉选取确认”的首期交互，同时保留 PRD Markdown 作为归档事实源。</p>
+        </div>
+      </div>
+      <div class="stage-chip">PRD Waiting Confirmation</div>
+    </div>
+
+    <div class="layout">
+      <section>
+        <div class="card">
+          <span class="card__eyebrow">Task Snapshot</span>
+          <h2 class="card__title">PRD 待确认问题改成下拉选取</h2>
+          <p class="card__text">
+            当前问题来自 AI 生成的 PRD 文本。这个原型不把 PRD 改成表单编辑器，而是在
+            PRD 正文上方增加一层结构化确认卡片，让用户在问题右侧通过下拉选项完成确认。
+          </p>
+
+          <div class="hero-grid">
+            <div class="stat">
+              <div class="stat__label">待确认问题</div>
+              <div class="stat__value" id="questionCount">4</div>
+            </div>
+            <div class="stat">
+              <div class="stat__label">已完成选择</div>
+              <div class="stat__value" id="resolvedCount">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat__label">提交状态</div>
+              <div class="stat__value" id="submissionState">Draft</div>
+            </div>
+          </div>
+
+          <div class="status-bar">
+            <div>
+              <strong id="statusLabel">还有 4 个问题待处理</strong>
+              <div class="card__text">所有问题完成后，才允许生成结构化反馈并重新生成 PRD。</div>
+            </div>
+            <div class="status-bar__pill" id="statusPill">Incomplete</div>
+          </div>
+
+          <div class="question-list" id="questionList"></div>
+
+          <div class="actions">
+            <button class="button--ghost" id="applyRecommendedButton" type="button">应用全部推荐</button>
+            <button class="button--secondary" id="previewButton" type="button">生成反馈预览</button>
+            <button class="button--primary" id="submitButton" type="button" disabled>提交并重新生成 PRD</button>
+          </div>
+
+          <div class="notice" id="successNotice">
+            已根据下拉选择生成结构化反馈，并模拟进入 PRD 重新生成状态。
+          </div>
+        </div>
+      </section>
+
+      <aside>
+        <div class="card">
+          <div class="helper-row">
+            <span class="card__eyebrow">Feedback Preview</span>
+            <span class="badge badge--pending" id="previewBadge">未生成</span>
+          </div>
+          <div class="feedback-box">
+            <pre id="feedbackPreview">点击“生成反馈预览”后，这里会出现写入 DevLog 的结构化答案摘要。</pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="helper-row">
+            <span class="card__eyebrow">Timeline Effect</span>
+            <span class="badge badge--done">复用现有链路</span>
+          </div>
+          <div class="timeline-box" id="timelineBox">
+            <div class="timeline-item">
+              <div class="timeline-item__meta">10:32 · System</div>
+              <div class="timeline-item__text">PRD 已生成，等待人工确认。</div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-item__meta">10:34 · PRD</div>
+              <div class="timeline-item__text">结构化待确认问题块驱动上方交互卡片；下拉选择完成后，继续复用 DevLog + regenerate-prd 链路。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="helper-row">
+            <span class="card__eyebrow">Archive View</span>
+            <span class="badge badge--recommended">PRD 原文保留</span>
+          </div>
+          <div class="archive-box">
+            <pre>## 0. 待确认问题（结构化）
+
+```json
+{
+  "pending_questions": [
+    {
+      "id": "pq-1",
+      "title": "待确认问题的数据源应该放在哪里？",
+      "recommended_option_key": "B"
+    }
+  ]
+}
+```
+
+正文仍保留人类可读的问题与推荐理由。
+前端不编辑 PRD 正文，只读取结构化块并在问题旁渲染下拉选项。</pre>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const questionDefinitionList = [
+      {
+        id: "pq-1",
+        title: "待确认问题的数据源应该放在哪里？",
+        recommendedKey: "B",
+        reason: "保持 PRD 文件作为单一事实源，同时避免直接抓取自由文本。",
+        options: [
+          { key: "A", label: "继续解析现有自然语言 Markdown 段落" },
+          { key: "B", label: "PRD 内结构化问题块 + UI 渲染" },
+          { key: "C", label: "新增数据库表" }
+        ]
+      },
+      {
+        id: "pq-2",
+        title: "用户完成下拉选择后，首期应该如何留痕？",
+        recommendedKey: "B",
+        reason: "复用已有反馈和 PRD 重生成链路，减少后端新增接口。",
+        options: [
+          { key: "A", label: "仅保存在前端内存，刷新即丢失" },
+          { key: "B", label: "写入 DevLog 并重新生成 PRD" },
+          { key: "C", label: "新增 Task JSON 字段" }
+        ]
+      },
+      {
+        id: "pq-3",
+        title: "未完成选择时，是否允许直接开始执行？",
+        recommendedKey: "A",
+        reason: "待确认问题本质上就是未定案前提，不能悄悄跳过。",
+        options: [
+          { key: "A", label: "必须完成选择或一键采用推荐值后才能继续" },
+          { key: "B", label: "允许跳过，只给提示" },
+          { key: "C", label: "默认自动采用推荐值" }
+        ]
+      },
+      {
+        id: "pq-4",
+        title: "问题旁的首期交互应该如何呈现？",
+        recommendedKey: "B",
+        reason: "右侧下拉更贴合当前需求标题，也更容易在窄屏下稳定排版。",
+        options: [
+          { key: "A", label: "题目右侧显示可点击选项按钮" },
+          { key: "B", label: "题目右侧使用下拉选项" },
+          { key: "C", label: "点击题目后弹出单独弹层" }
+        ]
+      }
+    ];
+
+    const selectionStateMap = Object.fromEntries(
+      questionDefinitionList.map((questionDefinition) => [questionDefinition.id, ""])
+    );
+
+    const questionListElement = document.getElementById("questionList");
+    const resolvedCountElement = document.getElementById("resolvedCount");
+    const questionCountElement = document.getElementById("questionCount");
+    const submissionStateElement = document.getElementById("submissionState");
+    const statusLabelElement = document.getElementById("statusLabel");
+    const statusPillElement = document.getElementById("statusPill");
+    const feedbackPreviewElement = document.getElementById("feedbackPreview");
+    const previewBadgeElement = document.getElementById("previewBadge");
+    const submitButtonElement = document.getElementById("submitButton");
+    const successNoticeElement = document.getElementById("successNotice");
+    const timelineBoxElement = document.getElementById("timelineBox");
+
+    questionCountElement.textContent = String(questionDefinitionList.length);
+
+    function findOptionLabel(questionDefinition, optionKey) {
+      const matchedOption = questionDefinition.options.find(
+        (optionDefinition) => optionDefinition.key === optionKey
+      );
+      return matchedOption ? matchedOption.label : "未选择";
+    }
+
+    function getResolvedCount() {
+      return questionDefinitionList.filter(
+        (questionDefinition) => selectionStateMap[questionDefinition.id]
+      ).length;
+    }
+
+    function buildFeedbackPreviewText() {
+      const selectedAnswerList = questionDefinitionList.map((questionDefinition) => {
+        const selectedOptionKey = selectionStateMap[questionDefinition.id];
+        return {
+          id: questionDefinition.id,
+          title: questionDefinition.title,
+          selected_option_key: selectedOptionKey || null,
+          selected_option_label: selectedOptionKey
+            ? findOptionLabel(questionDefinition, selectedOptionKey)
+            : null,
+          recommended_option_key: questionDefinition.recommendedKey
+        };
+      });
+
+      return [
+        "PRD structured confirmation feedback",
+        "",
+        "```json",
+        JSON.stringify({ pending_question_answers: selectedAnswerList }, null, 2),
+        "```"
+      ].join("\n");
+    }
+
+    function renderQuestionList() {
+      questionListElement.innerHTML = "";
+
+      questionDefinitionList.forEach((questionDefinition) => {
+        const questionElement = document.createElement("section");
+        questionElement.className = "question";
+
+        const selectedOptionKey = selectionStateMap[questionDefinition.id];
+        const badgeClassName = selectedOptionKey ? "badge badge--done" : "badge badge--pending";
+        const badgeText = selectedOptionKey ? `已选择 ${selectedOptionKey}` : "待选择";
+
+        const optionMarkup = questionDefinition.options
+          .map((optionDefinition) => `
+            <option value="${optionDefinition.key}" ${
+              optionDefinition.key === selectedOptionKey ? "selected" : ""
+            }>
+              ${optionDefinition.key}. ${optionDefinition.label}${
+                optionDefinition.key === questionDefinition.recommendedKey ? "（推荐）" : ""
+              }
+            </option>
+          `)
+          .join("");
+
+        questionElement.innerHTML = `
+          <div class="question__top">
+            <div class="question__copy">
+              <h3 class="question__title">${questionDefinition.title}</h3>
+              <p class="question__reason">
+                <span class="badge badge--recommended">Recommended ${questionDefinition.recommendedKey}</span>
+                ${questionDefinition.reason}
+              </p>
+            </div>
+            <div class="question__controls">
+              <div class="question__control-top">
+                <span class="${badgeClassName}">${badgeText}</span>
+              </div>
+              <label class="question__select-label">
+                选择答案
+                <select class="question__select" data-question-id="${questionDefinition.id}">
+                  <option value="">请选择一个选项</option>
+                  ${optionMarkup}
+                </select>
+              </label>
+              <p class="question__selection">${
+                selectedOptionKey
+                  ? `当前选择：${selectedOptionKey}. ${findOptionLabel(questionDefinition, selectedOptionKey)}`
+                  : "当前状态：尚未选择"
+              }</p>
+            </div>
+          </div>
+        `;
+
+        questionListElement.appendChild(questionElement);
+      });
+
+      questionListElement.querySelectorAll("select[data-question-id]").forEach((selectElement) => {
+        selectElement.addEventListener("change", (changeEvent) => {
+          const targetElement = changeEvent.currentTarget;
+          const questionId = targetElement.getAttribute("data-question-id");
+          const optionKey = targetElement.value;
+          selectionStateMap[questionId] = optionKey;
+          submissionStateElement.textContent = "Draft";
+          successNoticeElement.classList.remove("is-visible");
+          updateDashboardState();
+          renderQuestionList();
+        });
+      });
+    }
+
+    function updateDashboardState() {
+      const resolvedCount = getResolvedCount();
+      const unresolvedCount = questionDefinitionList.length - resolvedCount;
+
+      resolvedCountElement.textContent = String(resolvedCount);
+
+      if (unresolvedCount === 0) {
+        statusLabelElement.textContent = "所有问题已完成选择，可提交并重新生成 PRD";
+        statusPillElement.textContent = "Ready";
+        statusPillElement.style.color = "var(--green)";
+        statusPillElement.style.borderColor = "rgba(72, 213, 151, 0.28)";
+        statusPillElement.style.background = "rgba(72, 213, 151, 0.12)";
+      } else {
+        statusLabelElement.textContent = `还有 ${unresolvedCount} 个问题待处理`;
+        statusPillElement.textContent = "Incomplete";
+        statusPillElement.style.color = "var(--amber)";
+        statusPillElement.style.borderColor = "rgba(248, 193, 92, 0.28)";
+        statusPillElement.style.background = "rgba(248, 193, 92, 0.12)";
+      }
+
+      submitButtonElement.disabled = unresolvedCount !== 0;
+    }
+
+    document.getElementById("applyRecommendedButton").addEventListener("click", () => {
+      questionDefinitionList.forEach((questionDefinition) => {
+        selectionStateMap[questionDefinition.id] = questionDefinition.recommendedKey;
+      });
+      submissionStateElement.textContent = "Recommended";
+      successNoticeElement.classList.remove("is-visible");
+      renderQuestionList();
+      updateDashboardState();
+    });
+
+    document.getElementById("previewButton").addEventListener("click", () => {
+      if (getResolvedCount() !== questionDefinitionList.length) {
+        feedbackPreviewElement.textContent = "请先完成全部问题选择，再生成结构化反馈预览。";
+        previewBadgeElement.textContent = "缺少选择";
+        previewBadgeElement.className = "badge badge--pending";
+        return;
+      }
+
+      feedbackPreviewElement.textContent = buildFeedbackPreviewText();
+      previewBadgeElement.textContent = "已生成";
+      previewBadgeElement.className = "badge badge--done";
+    });
+
+    submitButtonElement.addEventListener("click", () => {
+      const feedbackPreviewText = buildFeedbackPreviewText();
+      feedbackPreviewElement.textContent = feedbackPreviewText;
+      previewBadgeElement.textContent = "已提交";
+      previewBadgeElement.className = "badge badge--done";
+      submissionStateElement.textContent = "Queued";
+      successNoticeElement.classList.add("is-visible");
+
+      const submissionTimelineItem = document.createElement("div");
+      submissionTimelineItem.className = "timeline-item";
+      submissionTimelineItem.innerHTML = `
+        <div class="timeline-item__meta">10:37 · Human Feedback</div>
+        <div class="timeline-item__text">已根据题旁下拉选择生成结构化反馈，系统准备重新生成 PRD。</div>
+      `;
+      timelineBoxElement.appendChild(submissionTimelineItem);
+    });
+
+    renderQuestionList();
+    updateDashboardState();
+  </script>
+</body>
+</html>

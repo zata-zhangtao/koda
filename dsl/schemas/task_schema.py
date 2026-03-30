@@ -125,6 +125,7 @@ class TaskResponseSchema(DSLResponseSchema):
         task_title: 任务标题
         lifecycle_status: 任务生命周期状态（向后兼容）
         workflow_stage: 工作流业务阶段；后台运行态由 is_codex_task_running 补充
+        stage_updated_at: 最近一次进入当前工作流阶段的时间
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
         created_at: 创建时间
@@ -145,6 +146,10 @@ class TaskResponseSchema(DSLResponseSchema):
     workflow_stage: WorkflowStage = Field(
         default=WorkflowStage.BACKLOG,
         description="工作流业务阶段",
+    )
+    stage_updated_at: datetime = Field(
+        ...,
+        description="最近一次进入当前工作流阶段的时间",
     )
     last_ai_activity_at: datetime | None = Field(
         None,

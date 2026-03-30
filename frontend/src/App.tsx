@@ -36,6 +36,8 @@ import {
   taskApi,
   taskQaApi,
 } from "./api/client";
+import { PrdPendingQuestionsPanel } from "./components/PrdPendingQuestionsPanel";
+import { useSelectedTaskPrdFile } from "./hooks/useSelectedTaskPrdFile";
 import { SettingsModal } from "./components/SettingsModal";
 import {
   configureAppTimezone,
@@ -44,6 +46,14 @@ import {
   toTimestampValue,
 } from "./utils/datetime";
 import {
+  buildPrdPendingQuestionsFeedbackText,
+  derivePrdPendingQuestionActionBlockReason,
+  getTaskScopedPrdPendingQuestionAnswerSelectionMap,
+  parsePrdPendingQuestions,
+  sanitizePrdPendingQuestionAnswerSelectionMap,
+  setTaskScopedPrdPendingQuestionAnswerSelectionMap,
+} from "./utils/prd_pending_questions";
+import {
   AIProcessingStatus,
   DevLogStateTag,
   TaskScheduleActionType,
@@ -51,6 +61,8 @@ import {
   TaskScheduleTriggerType,
   type TaskCardMetadata,
   type TaskDisplayStageKey,
+  type PrdPendingQuestionAnswerSelectionMap,
+  type PrdPendingQuestionAnswerSelectionMapByTaskId,
   TaskQaContextScope,
   TaskQaGenerationStatus,
   type TaskQaMessage,
@@ -133,6 +145,7 @@ type MutationName =
   | "start"
   | "confirm"
   | "execute"
+  | "pending_questions"
   | "accept"
   | "request_changes"
   | "feedback"
@@ -206,20 +219,10 @@ const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
 const MARKDOWN_MERMAID_LANGUAGE_PATTERN = /\blanguage-mermaid\b/;
 const IMAGE_FILE_NAME_PATTERN = /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/i;
 const VIDEO_FILE_NAME_PATTERN = /\.(avi|m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
-const PRD_RELEVANT_STAGE_SET = new Set<WorkflowStage>([
-  WorkflowStage.PRD_WAITING_CONFIRMATION,
-  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
-  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
-  WorkflowStage.TEST_IN_PROGRESS,
-  WorkflowStage.PR_PREPARING,
-  WorkflowStage.ACCEPTANCE_IN_PROGRESS,
-  WorkflowStage.CHANGES_REQUESTED,
-]);
 const WAITING_USER_METADATA_CANDIDATE_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.SELF_REVIEW_IN_PROGRESS,
   WorkflowStage.TEST_IN_PROGRESS,
 ]);
-
 let hasInitializedMermaidRenderer = false;
 
 function _isContinueCommand(text: string): boolean {
@@ -490,7 +493,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
-  const [prdFileContent, setPrdFileContent] = useState<string | null>(null);
+  const [
+    prdPendingQuestionAnswerSelectionMapByTaskId,
+    setPrdPendingQuestionAnswerSelectionMapByTaskId,
+  ] = useState<PrdPendingQuestionAnswerSelectionMapByTaskId>({});
   const [isPrdFullscreenOpen, setIsPrdFullscreenOpen] = useState(false);
   const [isProjectPanelOpen, setIsProjectPanelOpen] = useState(false);
   const [visibleConversationTurnCount, setVisibleConversationTurnCount] = useState(
@@ -796,6 +802,21 @@ function App() {
         : null,
     [selectedTask, selectedTaskDevLogs]
   );
+  const {
+    content: prdFileContent,
+    path: selectedTaskPrdFilePath,
+    resolvedTaskId: resolvedSelectedTaskPrdFileTaskId,
+    hasLoadedCurrentWaitingConfirmationPrdFile:
+      hasLoadedSelectedTaskWaitingConfirmationPrdFile,
+    isCurrentWaitingConfirmationPrdFileInitialLoadPending:
+      isSelectedTaskWaitingConfirmationPrdFileInitialLoadPending,
+  } = useSelectedTaskPrdFile({
+    detailTaskId,
+    selectedTaskStage,
+    selectedTaskStageUpdatedAt: selectedTask?.stage_updated_at ?? null,
+    selectedTaskWorktreePath: selectedTask?.worktree_path ?? null,
+    getPrdFile: taskApi.getPrdFile,
+  });
   const visibleTimelineItemList = useMemo(
     () =>
       visibleConversationTurnCount >= selectedTimelineItemList.length
@@ -886,13 +907,142 @@ function App() {
   const isSelectedTaskPrdGenerating =
     selectedTaskStage === WorkflowStage.PRD_GENERATING;
   const shouldRenderPersistedPrdFile =
-    Boolean(prdFileContent) &&
+    resolvedSelectedTaskPrdFileTaskId === detailTaskId &&
+    selectedTaskPrdFilePath !== null &&
     selectedTaskStage !== WorkflowStage.BACKLOG &&
     selectedTaskStage !== WorkflowStage.DONE &&
+    (
+      selectedTaskStage !== WorkflowStage.PRD_WAITING_CONFIRMATION ||
+      hasLoadedSelectedTaskWaitingConfirmationPrdFile
+    ) &&
     !isSelectedTaskPrdGenerating;
   const selectedTaskPrdMarkdown = shouldRenderPersistedPrdFile
     ? prdFileContent ?? ""
     : selectedTaskDocumentMarkdown;
+  const selectedTaskParsedPrdPendingQuestions = useMemo(
+    () => parsePrdPendingQuestions(selectedTaskPrdMarkdown),
+    [selectedTaskPrdMarkdown]
+  );
+  const selectedTaskRenderablePrdMarkdown =
+    selectedTaskParsedPrdPendingQuestions.renderableMarkdownText;
+  const selectedTaskPrdPendingQuestionList =
+    selectedTaskParsedPrdPendingQuestions.pendingQuestionList;
+  const selectedTaskPrdPendingQuestionParseErrorText =
+    selectedTaskStage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
+    selectedTaskParsedPrdPendingQuestions.hasStructuredQuestionBlock
+      ? selectedTaskParsedPrdPendingQuestions.parseErrorText
+      : null;
+  const selectedTaskPrdPendingQuestionSignatureText = useMemo(
+    () =>
+      selectedTaskPrdPendingQuestionList
+        .map(
+          (pendingQuestionItem) =>
+            `${pendingQuestionItem.id}:${pendingQuestionItem.options
+              .map((optionItem) => optionItem.key)
+              .join(",")}`
+        )
+        .join("|"),
+    [selectedTaskPrdPendingQuestionList]
+  );
+  const selectedTaskPrdPendingQuestionAnswerSelectionMap = useMemo(
+    () =>
+      getTaskScopedPrdPendingQuestionAnswerSelectionMap(
+        prdPendingQuestionAnswerSelectionMapByTaskId,
+        detailTaskId
+      ),
+    [detailTaskId, prdPendingQuestionAnswerSelectionMapByTaskId]
+  );
+  const selectedTaskRequiredPrdPendingQuestionCount = useMemo(
+    () =>
+      selectedTaskPrdPendingQuestionList.filter(
+        (pendingQuestionItem) => pendingQuestionItem.required
+      ).length,
+    [selectedTaskPrdPendingQuestionList]
+  );
+  const selectedTaskUnansweredRequiredPrdPendingQuestionCount = useMemo(
+    () =>
+      selectedTaskPrdPendingQuestionList.filter((pendingQuestionItem) => {
+        if (!pendingQuestionItem.required) {
+          return false;
+        }
+
+        const selectedOptionKeyText =
+          selectedTaskPrdPendingQuestionAnswerSelectionMap[pendingQuestionItem.id];
+        return typeof selectedOptionKeyText !== "string" || selectedOptionKeyText.length === 0;
+      }).length,
+    [
+      selectedTaskPrdPendingQuestionAnswerSelectionMap,
+      selectedTaskPrdPendingQuestionList,
+    ]
+  );
+  const hasSelectedTaskPrdPendingQuestionAnswerDraft = useMemo(
+    () =>
+      selectedTaskPrdPendingQuestionList.some((pendingQuestionItem) => {
+        const selectedOptionKeyText =
+          selectedTaskPrdPendingQuestionAnswerSelectionMap[pendingQuestionItem.id];
+        return typeof selectedOptionKeyText === "string" && selectedOptionKeyText.length > 0;
+      }),
+    [
+      selectedTaskPrdPendingQuestionAnswerSelectionMap,
+      selectedTaskPrdPendingQuestionList,
+    ]
+  );
+  const shouldRenderSelectedTaskPrdPendingQuestionsPanel =
+    selectedTaskStage === WorkflowStage.PRD_WAITING_CONFIRMATION &&
+    selectedTaskPrdPendingQuestionParseErrorText === null &&
+    selectedTaskPrdPendingQuestionList.length > 0;
+  const selectedTaskPrdPendingQuestionsFeedbackPreviewText = useMemo(
+    () =>
+      buildPrdPendingQuestionsFeedbackText(
+        selectedTaskPrdPendingQuestionList,
+        selectedTaskPrdPendingQuestionAnswerSelectionMap
+      ),
+    [
+      selectedTaskPrdPendingQuestionAnswerSelectionMap,
+      selectedTaskPrdPendingQuestionList,
+    ]
+  );
+  const selectedTaskPrdPendingQuestionSubmitDisabledReasonText = useMemo(() => {
+    if (selectedTaskPrdPendingQuestionList.length === 0) {
+      return "当前 PRD 没有可提交的结构化待确认问题。";
+    }
+    if (selectedTask?.is_codex_task_running) {
+      return "AI 正在处理当前任务，请等待本轮 PRD 生成结束。";
+    }
+    if (selectedTaskRequiredPrdPendingQuestionCount === 0) {
+      return null;
+    }
+    if (selectedTaskUnansweredRequiredPrdPendingQuestionCount > 0) {
+      return `还有 ${selectedTaskUnansweredRequiredPrdPendingQuestionCount} 个必答问题未完成。`;
+    }
+    return null;
+  }, [
+    selectedTask,
+    selectedTaskPrdPendingQuestionList,
+    selectedTaskRequiredPrdPendingQuestionCount,
+    selectedTaskUnansweredRequiredPrdPendingQuestionCount,
+  ]);
+  const isSelectedTaskPrdFileInitialLoadPending =
+    isSelectedTaskWaitingConfirmationPrdFileInitialLoadPending;
+  const selectedTaskPrdActionBlockReasonText = useMemo(
+    () =>
+      derivePrdPendingQuestionActionBlockReason({
+        selectedTaskStage,
+        isSelectedTaskPrdFileInitialLoadPending,
+        selectedTaskPrdPendingQuestionParseErrorText,
+        selectedTaskPrdPendingQuestionList,
+        selectedTaskUnansweredRequiredPrdPendingQuestionCount,
+        hasSelectedTaskPrdPendingQuestionAnswerDraft,
+      }),
+    [
+      hasSelectedTaskPrdPendingQuestionAnswerDraft,
+      isSelectedTaskPrdFileInitialLoadPending,
+      selectedTaskPrdPendingQuestionParseErrorText,
+      selectedTaskPrdPendingQuestionList,
+      selectedTaskStage,
+      selectedTaskUnansweredRequiredPrdPendingQuestionCount,
+    ]
+  );
   const currentUserLabel =
     currentRunAccount?.account_display_name || GUEST_USER_LABEL;
   const canCreateRequirements = workspaceView === "active";
@@ -1090,7 +1240,6 @@ function App() {
     setSelectedTaskQaMessageList([]);
     setSuccessMessage(null);
     setErrorMessage(null);
-    setPrdFileContent(null);
     setSelectedTaskLogList([]);
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
@@ -1178,12 +1327,6 @@ function App() {
       window.removeEventListener("keydown", handleDestroyModalKeydown);
     };
   }, [activeMutationName, isDestroyModalOpen]);
-
-  // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
-  useEffect(() => {
-    setPrdFileContent(null);
-  }, [detailTaskId]);
-
   // 按任务拉取完整日志列表，避免全局 100 条限制导致时间线空白
   useEffect(() => {
     if (!detailTaskId) {
@@ -1350,43 +1493,31 @@ function App() {
       window.clearInterval(pollId);
     };
   }, [canRenderComposer, detailTaskId]);
-
-  // PRD 轮询：依赖稳定的派生值而非整个 taskList，防止每秒重置 interval
-  const _prdPollTask = useMemo(
-    () => taskList.find((taskItem) => taskItem.id === detailTaskId) ?? null,
-    [detailTaskId, taskList]
-  );
-  const _prdWorktreePath = _prdPollTask?.worktree_path ?? null;
-  const _prdPollStage = useMemo(
-    () =>
-      _prdPollTask
-        ? deriveRequirementStage(_prdPollTask, devLogsByTaskId[_prdPollTask.id] ?? [])
-        : null,
-    [_prdPollTask, devLogsByTaskId]
-  );
-  const _prdPollActive =
-    _prdWorktreePath !== null &&
-    _prdPollStage !== null &&
-    PRD_RELEVANT_STAGE_SET.has(_prdPollStage);
-
   useEffect(() => {
-    if (!detailTaskId || !_prdPollActive) return;
+    if (!detailTaskId) {
+      return;
+    }
 
-    const loadPrd = () => {
-      taskApi
-        .getPrdFile(detailTaskId)
-        .then((result) => {
-          const nextContent = result.content ?? null;
-          setPrdFileContent((prev) => (prev === nextContent ? prev : nextContent));
-        })
-        .catch(() => {});
-    };
-
-    loadPrd();
-    const prdPollId = window.setInterval(loadPrd, 2000);
-    return () => window.clearInterval(prdPollId);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailTaskId, _prdPollActive, _prdWorktreePath]);
+    const nextAnswerMap =
+      selectedTaskPrdPendingQuestionList.length === 0
+        ? {}
+        : sanitizePrdPendingQuestionAnswerSelectionMap(
+            selectedTaskPrdPendingQuestionList,
+            selectedTaskPrdPendingQuestionAnswerSelectionMap
+          );
+    setPrdPendingQuestionAnswerSelectionMapByTaskId((previousAnswerSelectionMapByTaskId) =>
+      setTaskScopedPrdPendingQuestionAnswerSelectionMap(
+        previousAnswerSelectionMapByTaskId,
+        detailTaskId,
+        nextAnswerMap
+      )
+    );
+  }, [
+    detailTaskId,
+    selectedTaskPrdPendingQuestionAnswerSelectionMap,
+    selectedTaskPrdPendingQuestionList,
+    selectedTaskPrdPendingQuestionSignatureText,
+  ]);
 
   async function handleRevealOrLoadOlderConversationHistory(): Promise<void> {
     if (hiddenTimelineItemCount > 0) {
@@ -1843,7 +1974,104 @@ function App() {
     }
   }
 
+  function handleSelectPrdPendingQuestionAnswer(
+    questionIdText: string,
+    optionKeyText: string
+  ): void {
+    if (!detailTaskId) {
+      return;
+    }
+
+    setPrdPendingQuestionAnswerSelectionMapByTaskId((previousAnswerSelectionMapByTaskId) => {
+      const previousAnswerMap =
+        getTaskScopedPrdPendingQuestionAnswerSelectionMap(
+          previousAnswerSelectionMapByTaskId,
+          detailTaskId
+        );
+      const nextAnswerMap = !optionKeyText
+        ? Object.fromEntries(
+            Object.entries(previousAnswerMap).filter(
+              ([existingQuestionIdText]) => existingQuestionIdText !== questionIdText
+            )
+          )
+        : {
+            ...previousAnswerMap,
+            [questionIdText]: optionKeyText,
+          };
+
+      return setTaskScopedPrdPendingQuestionAnswerSelectionMap(
+        previousAnswerSelectionMapByTaskId,
+        detailTaskId,
+        nextAnswerMap
+      );
+    });
+  }
+
+  function handleApplyAllRecommendedPrdPendingQuestionAnswers(): void {
+    if (!detailTaskId) {
+      return;
+    }
+
+    const nextAnswerMap: PrdPendingQuestionAnswerSelectionMap = {};
+    for (const pendingQuestionItem of selectedTaskPrdPendingQuestionList) {
+      nextAnswerMap[pendingQuestionItem.id] = pendingQuestionItem.recommendedOptionKey;
+    }
+    setPrdPendingQuestionAnswerSelectionMapByTaskId((previousAnswerSelectionMapByTaskId) =>
+      setTaskScopedPrdPendingQuestionAnswerSelectionMap(
+        previousAnswerSelectionMapByTaskId,
+        detailTaskId,
+        nextAnswerMap
+      )
+    );
+  }
+
+  async function handleSubmitPrdPendingQuestionAnswers(): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    if (selectedTaskPrdPendingQuestionSubmitDisabledReasonText) {
+      setErrorMessage(selectedTaskPrdPendingQuestionSubmitDisabledReasonText);
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("pending_questions");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const structuredFeedbackText = buildPrdPendingQuestionsFeedbackText(
+        selectedTaskPrdPendingQuestionList,
+        selectedTaskPrdPendingQuestionAnswerSelectionMap
+      );
+      await logApi.create({
+        task_id: selectedTask.id,
+        text_content: structuredFeedbackText,
+        state_tag: DevLogStateTag.NONE,
+      });
+      const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
+      setTaskList((previousTaskList) =>
+        previousTaskList.map((taskItem) =>
+          taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
+        )
+      );
+      setSuccessMessage("结构化确认结果已提交，Koda 正在重新生成 PRD。");
+    } catch (submitPendingQuestionsError) {
+      console.error(submitPendingQuestionsError);
+      setErrorMessage("Failed to submit structured PRD confirmation.");
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   async function handleConfirmPrd(taskItem: Task): Promise<void> {
+    if (selectedTaskPrdActionBlockReasonText) {
+      setErrorMessage(selectedTaskPrdActionBlockReasonText);
+      setSuccessMessage(null);
+      return;
+    }
+
     setActiveMutationName("confirm");
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -1866,6 +2094,12 @@ function App() {
   }
 
   async function handleStartExecution(taskItem: Task): Promise<void> {
+    if (selectedTaskPrdActionBlockReasonText) {
+      setErrorMessage(selectedTaskPrdActionBlockReasonText);
+      setSuccessMessage(null);
+      return;
+    }
+
     setActiveMutationName("execute");
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -3320,6 +3554,7 @@ function App() {
                           <ActionButton
                             variant="secondary"
                             busy={activeMutationName === "confirm"}
+                            disabled={selectedTaskPrdActionBlockReasonText !== null}
                             onClick={() => {
                               void handleConfirmPrd(selectedTask);
                             }}
@@ -3330,6 +3565,7 @@ function App() {
                           <ActionButton
                             variant="execute"
                             busy={activeMutationName === "execute"}
+                            disabled={selectedTaskPrdActionBlockReasonText !== null}
                             onClick={() => {
                               void handleStartExecution(selectedTask);
                             }}
@@ -3452,6 +3688,12 @@ function App() {
                             <span>{canDestroySelectedTask ? "Destroy" : "Delete"}</span>
                           </ActionButton>
                         </>
+                      ) : null}
+
+                      {selectedTaskPrdActionBlockReasonText ? (
+                        <p className="devflow-detail__actions-hint">
+                          {selectedTaskPrdActionBlockReasonText}
+                        </p>
                       ) : null}
                     </div>
                   </div>
@@ -4035,6 +4277,59 @@ function App() {
                         </button>
                       </div>
 
+                      {selectedTaskPrdPendingQuestionParseErrorText !== null ? (
+                        <CardSurface className="devflow-prd-pending-panel devflow-prd-pending-panel--error">
+                          <div className="devflow-prd-pending-panel__header">
+                            <div className="devflow-prd-pending-panel__copy">
+                              <span className="devflow-prd-pending-panel__eyebrow devflow-prd-pending-panel__eyebrow--error">
+                                Structured Block Invalid
+                              </span>
+                              <h4 className="devflow-prd-pending-panel__title">
+                                待确认问题区块需要修复
+                              </h4>
+                              <p className="devflow-prd-pending-panel__hint devflow-prd-pending-panel__hint--error">
+                                检测到 PRD 中存在固定的结构化待确认问题章节，但其 JSON /
+                                Schema 未通过校验。为避免未确认问题被静默绕过，当前已阻断
+                                “确认 PRD”和“开始执行”。
+                              </p>
+                              <p className="devflow-prd-pending-panel__action-hint">
+                                解析错误：{selectedTaskPrdPendingQuestionParseErrorText}
+                              </p>
+                            </div>
+                          </div>
+                        </CardSurface>
+                      ) : null}
+
+                      {shouldRenderSelectedTaskPrdPendingQuestionsPanel ? (
+                        <PrdPendingQuestionsPanel
+                          pendingQuestionList={selectedTaskPrdPendingQuestionList}
+                          selectedAnswerMap={
+                            selectedTaskPrdPendingQuestionAnswerSelectionMap
+                          }
+                          unansweredRequiredQuestionCount={
+                            selectedTaskUnansweredRequiredPrdPendingQuestionCount
+                          }
+                          feedbackPreviewText={
+                            selectedTaskPrdPendingQuestionsFeedbackPreviewText
+                          }
+                          isSubmitting={activeMutationName === "pending_questions"}
+                          isSubmitDisabled={
+                            selectedTaskPrdPendingQuestionSubmitDisabledReasonText !== null ||
+                            activeMutationName === "pending_questions"
+                          }
+                          submitDisabledReasonText={
+                            selectedTaskPrdPendingQuestionSubmitDisabledReasonText
+                          }
+                          onSelectAnswer={handleSelectPrdPendingQuestionAnswer}
+                          onApplyAllRecommended={
+                            handleApplyAllRecommendedPrdPendingQuestionAnswers
+                          }
+                          onSubmit={() => {
+                            void handleSubmitPrdPendingQuestionAnswers();
+                          }}
+                        />
+                      ) : null}
+
                       <CardSurface className="devflow-document-card">
                         {isSelectedTaskPrdGenerating ? (
                           <div className="devflow-execution-banner">
@@ -4044,7 +4339,7 @@ function App() {
                         ) : (
                           <MarkdownBlock
                             className="devflow-markdown devflow-markdown--document"
-                            markdownText={selectedTaskPrdMarkdown}
+                            markdownText={selectedTaskRenderablePrdMarkdown}
                             enableMermaid
                           />
                         )}
@@ -4053,7 +4348,7 @@ function App() {
                       {isPrdFullscreenOpen ? (
                         <PrdFullscreenModal
                           taskTitle={selectedTask.task_title}
-                          markdownText={selectedTaskPrdMarkdown}
+                          markdownText={selectedTaskRenderablePrdMarkdown}
                           isGenerating={isSelectedTaskPrdGenerating}
                           onClose={() => setIsPrdFullscreenOpen(false)}
                         />

@@ -25,7 +25,7 @@
 
 ### PRD 生成
 
-`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求当前 runner 在 worktree 中生成包含 `原始需求标题` 与 `需求名称（AI 归纳）` 的 PRD，并写入任务专属文件 `tasks/prd-{task_id[:8]}-<english-requirement-slug>.md`。
+`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求当前 runner（默认 `codex`）在 worktree 中生成包含 `原始需求标题`、`需求名称（AI 归纳）` 与结构化待确认问题块（如适用）的 PRD，并写入任务专属文件 `tasks/prd-{task_id[:8]}.md`。
 
 ### 编码执行
 

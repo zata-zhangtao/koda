@@ -78,6 +78,7 @@ def test_task_response_schema_serializes_datetime_with_explicit_offset() -> None
         task_title="Timezone contract",
         lifecycle_status=TaskLifecycleStatus.OPEN,
         workflow_stage=WorkflowStage.BACKLOG,
+        stage_updated_at=datetime(2026, 3, 18, 22, 0, 0),
         worktree_path=None,
         requirement_brief=None,
         created_at=datetime(2026, 3, 18, 23, 30, 0),
@@ -88,6 +89,7 @@ def test_task_response_schema_serializes_datetime_with_explicit_offset() -> None
     response_payload = task_response.model_dump(mode="json")
 
     assert response_payload["created_at"] == "2026-03-19T07:30:00+08:00"
+    assert response_payload["stage_updated_at"] == "2026-03-19T06:00:00+08:00"
 
 
 def test_app_config_route_exposes_runtime_timezone() -> None:

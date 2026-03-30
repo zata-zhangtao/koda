@@ -4,3 +4,4 @@
  */
 
 export { useLogs, useRunAccount, useTasks } from "./useApi";
+export { useSelectedTaskPrdFile } from "./useSelectedTaskPrdFile";

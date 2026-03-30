@@ -1867,8 +1867,8 @@ def get_task_prd_file(
 ) -> dict:
     """读取任务 worktree 中该任务专属的 PRD 文件内容.
 
-    后端会按当前任务的专属前缀 `tasks/prd-{task_id[:8]}*.md` 查找，
-    优先读取带英文语义 slug 的新文件名，同时兼容旧的固定文件名。
+    后端优先读取固定任务文件 `tasks/prd-{task_id[:8]}.md`，
+    同时继续兼容历史上同前缀的旧 slug 文件名。
 
     Args:
         task_id: 任务 ID

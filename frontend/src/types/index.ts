@@ -126,6 +126,7 @@ export interface Task {
   lifecycle_status: TaskLifecycleStatus;
   workflow_stage: WorkflowStage;
   last_ai_activity_at: string | null;
+  stage_updated_at: string;
   worktree_path: string | null;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
@@ -206,6 +207,31 @@ export interface TaskQaFeedbackDraftResponse {
   source_message_id: string;
   draft_markdown: string;
 }
+
+/** PRD 待确认问题选项 */
+export interface PrdPendingQuestionOption {
+  key: string;
+  label: string;
+}
+
+/** PRD 待确认问题 */
+export interface PrdPendingQuestion {
+  id: string;
+  title: string;
+  required: boolean;
+  recommendedOptionKey: string;
+  recommendationReason: string;
+  options: PrdPendingQuestionOption[];
+}
+
+/** PRD 待确认问题答案映射 */
+export type PrdPendingQuestionAnswerSelectionMap = Record<string, string>;
+
+/** 按任务隔离的 PRD 待确认问题答案映射 */
+export type PrdPendingQuestionAnswerSelectionMapByTaskId = Record<
+  string,
+  PrdPendingQuestionAnswerSelectionMap
+>;
 
 /** DevLog 类型 */
 export interface DevLog {

@@ -1,8 +1,8 @@
 """Helpers for task-scoped PRD file naming and lookup.
 
-Koda keeps a stable task-id prefix in PRD filenames so the backend can always
-locate the current task's document, while still allowing an AI-generated
-English slug to describe the requirement semantics.
+Koda's canonical PRD filename contract is ``tasks/prd-<task_id[:8]>.md``.
+Prefix-based lookup remains only as a backwards-compatible fallback for older
+slugged filenames that still start with the same stable task prefix.
 """
 
 from __future__ import annotations
@@ -29,43 +29,42 @@ def build_task_prd_output_path_contract(task_id_str: str) -> str:
         task_id_str: Task UUID string.
 
     Returns:
-        str: Output contract such as
-            ``tasks/prd-cf2b9461-<english-requirement-slug>.md``.
+        str: Output contract such as ``tasks/prd-cf2b9461.md``.
     """
     task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return f"tasks/{task_prd_file_prefix}-<english-requirement-slug>.md"
+    return f"tasks/{task_prd_file_prefix}.md"
 
 
 def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[Path]:
-    """List candidate PRD files for one task, newest semantic filenames first.
+    """List candidate PRD files for one task, canonical filename first.
 
     Args:
         worktree_dir_path: Task worktree root directory.
         task_id_str: Task UUID string.
 
     Returns:
-        list[Path]: Matching PRD file paths sorted so semantic slug filenames are
-            preferred over the legacy fixed filename, and newer files win within
-            the same class.
+        list[Path]: Matching PRD file paths sorted so the canonical fixed
+            filename wins first, and legacy slugged filenames remain as
+            backwards-compatible fallbacks ordered by recency.
     """
     tasks_directory_path = worktree_dir_path / "tasks"
     if not tasks_directory_path.exists():
         return []
 
     task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
+    canonical_task_prd_filename = f"{task_prd_file_prefix}.md"
     matching_prd_file_path_list = list(
         tasks_directory_path.glob(f"{task_prd_file_prefix}*.md")
     )
 
     def _sort_key(task_prd_file_path: Path) -> tuple[int, float, str]:
-        task_prd_stem = task_prd_file_path.stem
-        has_semantic_slug = task_prd_stem != task_prd_file_prefix
+        is_canonical_filename = task_prd_file_path.name == canonical_task_prd_filename
         try:
             last_modified_timestamp = task_prd_file_path.stat().st_mtime
         except OSError:
             last_modified_timestamp = -1.0
         return (
-            1 if has_semantic_slug else 0,
+            1 if is_canonical_filename else 0,
             last_modified_timestamp,
             task_prd_file_path.name,
         )

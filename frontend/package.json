@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:prd-pending-questions": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_pending_questions.test.ts",
+    "test:selected-task-prd-file": "node --experimental-strip-types --experimental-specifier-resolution=node tests/use_selected_task_prd_file.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -19,6 +21,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "react-test-renderer": "^18.2.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.8"
   }
