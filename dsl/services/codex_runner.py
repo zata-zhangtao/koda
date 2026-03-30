@@ -1235,6 +1235,44 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
+    fetch_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "fetch", "origin"],
+        cwd_path=merge_target_worktree_path,
+        command_log_label_str="git-fetch-origin",
+    )
+    output_line_list.extend((fetch_process.stdout or "").splitlines())
+    output_line_list.extend((fetch_process.stderr or "").splitlines())
+    if fetch_process.returncode != 0:
+        _append_text_to_task_log(
+            task_log_path, "无法从远程拉取更新（git fetch origin），跳过拉取继续执行。"
+        )
+    else:
+        pull_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=["git", "merge", "--ff-only", "origin/main"],
+            cwd_path=merge_target_worktree_path,
+            command_log_label_str="git-pull-ff-only",
+        )
+        output_line_list.extend((pull_process.stdout or "").splitlines())
+        output_line_list.extend((pull_process.stderr or "").splitlines())
+        if pull_process.returncode != 0:
+            failure_reason_text = (
+                "远程 `main` 分支有分叉更新，无法自动快进合并，请手动处理后重试。"
+            )
+            _append_text_to_task_log(task_log_path, failure_reason_text)
+            return GitCompletionExecutionResult(
+                merged_to_main=False,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+
     merge_target_branch_process = _run_logged_command(
         task_id_str=task_id_str,
         run_account_id_str=run_account_id_str,

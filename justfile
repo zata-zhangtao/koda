@@ -486,6 +486,7 @@ dsl-dev arg1="" arg2="":
 
     (
         cd frontend
+        npm install
         KODA_VITE_PORT="${FRONTEND_PORT}" KODA_VITE_BACKEND_TARGET="http://127.0.0.1:${BACKEND_PORT}" npm run dev
     ) &
     FRONTEND_PID=$!
