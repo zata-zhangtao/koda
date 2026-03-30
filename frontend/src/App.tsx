@@ -71,6 +71,20 @@ import {
   type WorkspaceView,
 } from "./utils/workspace_view";
 import {
+  ALL_TASK_PROJECT_FILTER_VALUE,
+  buildTaskProjectDisplayLabelMap,
+  buildTaskProjectFilterOptionList,
+  buildTaskProjectFilterRequestOptions,
+  createNextTaskProjectRequestToken,
+  deriveCreateRequirementProjectIdFromFilter,
+  getTaskProjectFilterDisplayLabel,
+  normalizeTaskProjectFilterValue,
+  shouldCommitTaskProjectMetadataResponse,
+  shouldCommitTaskProjectResponse,
+  shouldReloadTaskProjectFilterData,
+} from "./utils/task_project_filter";
+import { deriveFallbackRequirementChangeMetadata } from "./utils/task_card_metadata_fallback";
+import {
   AIProcessingStatus,
   DevLogStateTag,
   TaskScheduleActionType,
@@ -117,6 +131,7 @@ interface RequirementViewModel {
   displayStageLabel: string;
   cardMetaLabel: string;
   cardMetaTitle: string;
+  projectLabel: string;
 }
 
 interface TimelineViewModel {
@@ -466,6 +481,15 @@ function App() {
   const editRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const feedbackAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const latestTaskListRef = useRef<Task[]>([]);
+  const committedTaskProjectFilterValueRef = useRef<string>(
+    ALL_TASK_PROJECT_FILTER_VALUE
+  );
+  const lastRequestedTaskProjectFilterValueRef = useRef<string | null>(null);
+  const currentSelectedTaskProjectFilterValueRef = useRef<string>(
+    ALL_TASK_PROJECT_FILTER_VALUE
+  );
+  const latestStartedTaskListRequestTokenRef = useRef(0);
+  const latestStartedTaskCardMetadataRequestTokenRef = useRef(0);
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -479,6 +503,10 @@ function App() {
   >([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskProjectFilterValue, setSelectedTaskProjectFilterValue] =
+    useState<string>(ALL_TASK_PROJECT_FILTER_VALUE);
+  const [committedTaskProjectFilterValue, setCommittedTaskProjectFilterValue] =
+    useState<string>(ALL_TASK_PROJECT_FILTER_VALUE);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
   const [lastManualWorkspaceSwitchAt, setLastManualWorkspaceSwitchAt] =
     useState<number | null>(null);
@@ -580,7 +608,9 @@ function App() {
   }
 
   function openCreateRequirementPanel(): void {
-    resetCreateRequirementDraft();
+    resetCreateRequirementDraft(
+      deriveCreateRequirementProjectIdFromFilter(selectedTaskProjectFilterValue)
+    );
     setIsCreatePanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -688,6 +718,20 @@ function App() {
     }
   }, [editingProjectId, projectList]);
 
+  useEffect(() => {
+    const normalizedTaskProjectFilterValue = normalizeTaskProjectFilterValue(
+      selectedTaskProjectFilterValue,
+      projectList
+    );
+    if (normalizedTaskProjectFilterValue !== selectedTaskProjectFilterValue) {
+      setSelectedTaskProjectFilterValue(normalizedTaskProjectFilterValue);
+    }
+  }, [projectList, selectedTaskProjectFilterValue]);
+  useEffect(() => {
+    currentSelectedTaskProjectFilterValueRef.current =
+      selectedTaskProjectFilterValue;
+  }, [selectedTaskProjectFilterValue]);
+
   const devLogsByTaskId = useMemo(
     () => buildDevLogsByTaskId(allDevLogList),
     [allDevLogList]
@@ -697,11 +741,37 @@ function App() {
       new Set(
         taskList
           .filter((taskItem) =>
-            hasRequirementUpdateLog(devLogsByTaskId[taskItem.id] ?? [])
+            hasRequirementUpdateMetadata(
+              resolveTaskCardMetadataFromSnapshot(
+                taskItem,
+                taskCardMetadataMap[taskItem.id],
+                devLogsByTaskId[taskItem.id] ?? []
+              )
+            )
           )
           .map((taskItem) => taskItem.id)
       ),
-    [taskList, devLogsByTaskId]
+    [devLogsByTaskId, taskCardMetadataMap, taskList]
+  );
+  const projectMapById = useMemo(
+    () => buildProjectMapById(projectList),
+    [projectList]
+  );
+  const taskProjectDisplayLabelMap = useMemo(
+    () => buildTaskProjectDisplayLabelMap(projectList),
+    [projectList]
+  );
+  const selectedTaskProjectFilterOptionList = useMemo(
+    () => buildTaskProjectFilterOptionList(projectList),
+    [projectList]
+  );
+  const committedTaskProjectFilterLabel = useMemo(
+    () =>
+      getTaskProjectFilterDisplayLabel(
+        committedTaskProjectFilterValue,
+        projectList
+      ),
+    [committedTaskProjectFilterValue, projectList]
   );
   const workspaceTaskBuckets = useMemo(
     () =>
@@ -754,10 +824,9 @@ function App() {
   const selectedTaskProject = useMemo(
     () =>
       selectedTask?.project_id
-        ? projectList.find((projectItem) => projectItem.id === selectedTask.project_id) ??
-          null
+        ? projectMapById[selectedTask.project_id] ?? null
         : null,
-    [projectList, selectedTask]
+    [projectMapById, selectedTask]
   );
   const selectedTaskCardMetadata = useMemo(
     () =>
@@ -776,8 +845,13 @@ function App() {
   const selectedTaskSummaryText =
     selectedTaskSnapshot?.summary || "No requirement brief captured yet.";
   const selectedTaskProjectLabel = useMemo(
-    () => getTaskProjectDisplayName(selectedTask, selectedTaskProject),
-    [selectedTask, selectedTaskProject]
+    () =>
+      getTaskProjectDisplayName(
+        selectedTask,
+        selectedTaskProject,
+        taskProjectDisplayLabelMap
+      ),
+    [selectedTask, selectedTaskProject, taskProjectDisplayLabelMap]
   );
   const isSelectedTaskSummaryExpandable = useMemo(
     () => shouldAllowRequirementSummaryExpansion(selectedTaskSummaryText),
@@ -797,11 +871,15 @@ function App() {
       visibleTaskList.map((taskItem) =>
         buildRequirementViewModel(
           taskItem,
-          devLogsByTaskId[taskItem.id] ?? [],
-          resolveTaskCardMetadata(taskItem, taskCardMetadataMap)
+          resolveTaskCardMetadata(taskItem, taskCardMetadataMap),
+          getTaskProjectDisplayName(
+            taskItem,
+            taskItem.project_id ? projectMapById[taskItem.project_id] ?? null : null,
+            taskProjectDisplayLabelMap
+          )
         )
       ),
-    [devLogsByTaskId, taskCardMetadataMap, visibleTaskList]
+    [projectMapById, taskCardMetadataMap, taskProjectDisplayLabelMap, visibleTaskList]
   );
   const selectedTimelineItemList = useMemo(
     () =>
@@ -1221,17 +1299,53 @@ function App() {
     return () => {
       window.clearInterval(pollingIntervalId);
     };
-  }, [hasAnyTaskInActiveExecution]);
+  }, [hasAnyTaskInActiveExecution, selectedTaskProjectFilterValue]);
 
   async function refreshTaskCardMetadata(options?: {
     fallbackTaskList?: Task[];
     errorLabel?: string;
+    requestedTaskProjectFilterValue?: string;
   }): Promise<void> {
     const fallbackTaskList = options?.fallbackTaskList ?? latestTaskListRef.current;
+    // Keep metadata polling aligned with the task list that actually rendered.
+    const requestedTaskProjectFilterValue =
+      options?.requestedTaskProjectFilterValue ??
+      committedTaskProjectFilterValueRef.current;
+    const requestedTaskProjectFilterRequestOptions =
+      buildTaskProjectFilterRequestOptions(requestedTaskProjectFilterValue);
+    const taskCardMetadataRequestToken = createNextTaskProjectRequestToken(
+      latestStartedTaskCardMetadataRequestTokenRef.current
+    );
+    latestStartedTaskCardMetadataRequestTokenRef.current =
+      taskCardMetadataRequestToken;
     try {
-      const taskCardMetadataList = await taskApi.listCardMetadata();
+      const taskCardMetadataList = await taskApi.listCardMetadata(
+        requestedTaskProjectFilterRequestOptions
+      );
+      const shouldCommitTaskCardMetadataState =
+        shouldCommitTaskProjectMetadataResponse(
+          latestStartedTaskCardMetadataRequestTokenRef.current,
+          taskCardMetadataRequestToken,
+          requestedTaskProjectFilterValue,
+          committedTaskProjectFilterValueRef.current,
+          false
+        );
+      if (!shouldCommitTaskCardMetadataState) {
+        return;
+      }
       setTaskCardMetadataMap(buildTaskCardMetadataMap(taskCardMetadataList));
     } catch (taskCardMetadataError) {
+      const shouldCommitTaskCardMetadataState =
+        shouldCommitTaskProjectMetadataResponse(
+          latestStartedTaskCardMetadataRequestTokenRef.current,
+          taskCardMetadataRequestToken,
+          requestedTaskProjectFilterValue,
+          committedTaskProjectFilterValueRef.current,
+          false
+        );
+      if (!shouldCommitTaskCardMetadataState) {
+        return;
+      }
       console.error(
         options?.errorLabel ?? "Failed to load task card metadata:",
         taskCardMetadataError
@@ -1239,26 +1353,38 @@ function App() {
       setTaskCardMetadataMap((previousTaskCardMetadataMap) =>
         buildTaskCardMetadataFallbackMap(
           fallbackTaskList,
-          previousTaskCardMetadataMap
+          previousTaskCardMetadataMap,
+          devLogsByTaskId
         )
       );
     }
   }
 
   useEffect(() => {
-    const pollTaskCardMetadata = () => {
-      void refreshTaskCardMetadata();
-    };
-
-    pollTaskCardMetadata();
     const metadataPollIntervalId = window.setInterval(
-      pollTaskCardMetadata,
+      () => {
+        void refreshTaskCardMetadata();
+      },
       TASK_CARD_METADATA_POLL_INTERVAL_MS
     );
     return () => {
       window.clearInterval(metadataPollIntervalId);
     };
-  }, []);
+  }, [committedTaskProjectFilterValue]);
+
+  useEffect(() => {
+    if (
+      !shouldReloadTaskProjectFilterData(
+        lastRequestedTaskProjectFilterValueRef.current,
+        selectedTaskProjectFilterValue,
+        isDashboardLoading
+      )
+    ) {
+      return;
+    }
+
+    void loadDashboardData(true);
+  }, [isDashboardLoading, selectedTaskProjectFilterValue]);
 
   useEffect(() => {
     const nextSelectedTaskId = resolveWorkspaceSelectedTaskId({
@@ -1658,17 +1784,36 @@ function App() {
     const shouldIncludeGlobalLogs = options?.includeGlobalLogs ?? true;
     const shouldIncludeTaskCardMetadata =
       options?.includeTaskCardMetadata ?? true;
+    const requestedTaskProjectFilterValue = selectedTaskProjectFilterValue;
+    const requestedTaskProjectFilterRequestOptions =
+      buildTaskProjectFilterRequestOptions(requestedTaskProjectFilterValue);
+    const taskListRequestToken = createNextTaskProjectRequestToken(
+      latestStartedTaskListRequestTokenRef.current
+    );
+    latestStartedTaskListRequestTokenRef.current = taskListRequestToken;
+    const taskCardMetadataRequestToken = shouldIncludeTaskCardMetadata
+      ? createNextTaskProjectRequestToken(
+          latestStartedTaskCardMetadataRequestTokenRef.current
+        )
+      : null;
+    if (taskCardMetadataRequestToken !== null) {
+      latestStartedTaskCardMetadataRequestTokenRef.current =
+        taskCardMetadataRequestToken;
+    }
+    lastRequestedTaskProjectFilterValueRef.current =
+      requestedTaskProjectFilterValue;
+
     if (!silent) {
       setIsDashboardLoading(true);
     }
 
     const runAccountPromise = runAccountApi.getCurrent();
-    const taskListPromise = taskApi.list();
+    const taskListPromise = taskApi.list(requestedTaskProjectFilterRequestOptions);
     const devLogListPromise = shouldIncludeGlobalLogs
       ? logApi.list()
       : Promise.resolve<DevLog[] | null>(null);
     const taskCardMetadataPromise = shouldIncludeTaskCardMetadata
-      ? taskApi.listCardMetadata()
+      ? taskApi.listCardMetadata(requestedTaskProjectFilterRequestOptions)
       : Promise.resolve<TaskCardMetadata[] | null>(null);
     const [
       runAccountResult,
@@ -1681,6 +1826,14 @@ function App() {
       devLogListPromise,
       taskCardMetadataPromise,
     ]);
+    const shouldCommitDashboardTaskListState = shouldCommitTaskProjectResponse(
+      latestStartedTaskListRequestTokenRef.current,
+      taskListRequestToken,
+      requestedTaskProjectFilterValue,
+      currentSelectedTaskProjectFilterValueRef.current
+    );
+    let currentCommittedTaskProjectFilterValue =
+      committedTaskProjectFilterValueRef.current;
     let nextTaskList: Task[] | null = null;
     let shouldRefreshWaitingUserMetadata = false;
 
@@ -1690,7 +1843,7 @@ function App() {
     if (runAccountResult.status === "fulfilled") {
       setCurrentRunAccount(runAccountResult.value);
     }
-    if (taskListResult.status === "fulfilled") {
+    if (taskListResult.status === "fulfilled" && shouldCommitDashboardTaskListState) {
       const previousTaskListSnapshot = latestTaskListRef.current;
       const sortedNextTaskList = sortTaskListByCreatedAt(taskListResult.value);
       nextTaskList = sortedNextTaskList;
@@ -1701,7 +1854,10 @@ function App() {
           sortedNextTaskList
         );
       latestTaskListRef.current = sortedNextTaskList;
+      currentCommittedTaskProjectFilterValue = requestedTaskProjectFilterValue;
+      committedTaskProjectFilterValueRef.current = requestedTaskProjectFilterValue;
       setTaskList(sortedNextTaskList);
+      setCommittedTaskProjectFilterValue(requestedTaskProjectFilterValue);
       setSelectedTaskId((previousSelectedTaskId) => {
         if (!previousSelectedTaskId) return previousSelectedTaskId;
         const hasMatchingTask = sortedNextTaskList.some(
@@ -1716,17 +1872,38 @@ function App() {
       }
     }
     const fallbackTaskListForMetadata = nextTaskList ?? latestTaskListRef.current;
-    if (taskCardMetadataResult.status === "fulfilled") {
+    const fallbackDevLogsByTaskId =
+      devLogListResult.status === "fulfilled" && devLogListResult.value !== null
+        ? buildDevLogsByTaskId(sortDevLogListByCreatedAt(devLogListResult.value))
+        : devLogsByTaskId;
+    const shouldCommitDashboardTaskCardMetadataState =
+      taskCardMetadataRequestToken !== null &&
+      shouldCommitTaskProjectMetadataResponse(
+        latestStartedTaskCardMetadataRequestTokenRef.current,
+        taskCardMetadataRequestToken,
+        requestedTaskProjectFilterValue,
+        currentCommittedTaskProjectFilterValue,
+        taskListResult.status === "fulfilled" && shouldCommitDashboardTaskListState
+      );
+    if (
+      taskCardMetadataResult.status === "fulfilled" &&
+      shouldCommitDashboardTaskCardMetadataState
+    ) {
       if (taskCardMetadataResult.value !== null) {
         setTaskCardMetadataMap(
           buildTaskCardMetadataMap(taskCardMetadataResult.value)
         );
       }
-    } else if (shouldIncludeTaskCardMetadata) {
+    } else if (
+      shouldIncludeTaskCardMetadata &&
+      taskCardMetadataResult.status === "rejected" &&
+      shouldCommitDashboardTaskCardMetadataState
+    ) {
       setTaskCardMetadataMap((previousTaskCardMetadataMap) =>
         buildTaskCardMetadataFallbackMap(
           fallbackTaskListForMetadata,
-          previousTaskCardMetadataMap
+          previousTaskCardMetadataMap,
+          fallbackDevLogsByTaskId
         )
       );
     }
@@ -1735,42 +1912,41 @@ function App() {
       void refreshTaskCardMetadata({
         fallbackTaskList: nextTaskList,
         errorLabel: "Failed to refresh waiting-user metadata:",
+        requestedTaskProjectFilterValue,
       });
     }
 
     const dashboardErrors: string[] = [];
-    if (runAccountResult.status === "rejected") {
-      dashboardErrors.push("Failed to load run account.");
-      console.error(runAccountResult.reason);
-    }
-    if (taskListResult.status === "rejected") {
-      dashboardErrors.push("Failed to load requirements.");
-      console.error(taskListResult.reason);
-    }
-    if (shouldIncludeGlobalLogs && devLogListResult.status === "rejected") {
-      dashboardErrors.push("Failed to load timeline entries.");
-      console.error(devLogListResult.reason);
-    }
-    if (
-      shouldIncludeTaskCardMetadata &&
-      taskCardMetadataResult.status === "rejected"
-    ) {
-      dashboardErrors.push("Failed to load task card metadata.");
-      console.error(taskCardMetadataResult.reason);
-    }
+    if (shouldCommitDashboardTaskListState) {
+      if (runAccountResult.status === "rejected") {
+        dashboardErrors.push("Failed to load run account.");
+        console.error(runAccountResult.reason);
+      }
+      if (taskListResult.status === "rejected") {
+        dashboardErrors.push("Failed to load requirements.");
+        console.error(taskListResult.reason);
+      }
+      if (shouldIncludeGlobalLogs && devLogListResult.status === "rejected") {
+        dashboardErrors.push("Failed to load timeline entries.");
+        console.error(devLogListResult.reason);
+      }
+      if (
+        shouldIncludeTaskCardMetadata &&
+        taskCardMetadataResult.status === "rejected" &&
+        shouldCommitDashboardTaskCardMetadataState
+      ) {
+        dashboardErrors.push("Failed to load task card metadata.");
+        console.error(taskCardMetadataResult.reason);
+      }
 
-    setErrorMessage(dashboardErrors.length > 0 ? dashboardErrors.join(" ") : null);
+      setErrorMessage(dashboardErrors.length > 0 ? dashboardErrors.join(" ") : null);
+    }
     setIsDashboardLoading(false);
   }
 
   async function initializeDashboard(): Promise<void> {
     await loadAppConfig();
-    await Promise.all([
-      loadDashboardData(false, {
-        includeTaskCardMetadata: false,
-      }),
-      loadProjectList(),
-    ]);
+    await Promise.all([loadDashboardData(false), loadProjectList()]);
   }
 
   async function loadProjectList(): Promise<void> {
@@ -3376,18 +3552,46 @@ function App() {
         <div className="devflow-layout">
           <section className="devflow-column devflow-column--requirements">
             <div className="devflow-section-heading">
-              <h2 className="devflow-section-heading__title">
-                {getWorkspaceHeading(workspaceView)}
-              </h2>
-              {canCreateRequirements ? (
-                <ActionButton
-                  variant="outline"
-                  className="devflow-icon-button"
-                  onClick={openCreateRequirementPanel}
-                >
-                  <PlusIcon className="devflow-icon devflow-icon--small" />
-                </ActionButton>
-              ) : null}
+              <div className="devflow-section-heading__copy">
+                <h2 className="devflow-section-heading__title">
+                  {getWorkspaceHeading(workspaceView)}
+                </h2>
+                <p className="devflow-section-heading__subtitle">
+                  {committedTaskProjectFilterValue === ALL_TASK_PROJECT_FILTER_VALUE
+                    ? "显示全部项目的需求卡片"
+                    : `当前聚焦：${committedTaskProjectFilterLabel}`}
+                </p>
+              </div>
+              <div className="devflow-section-heading__actions">
+                <label className="devflow-project-filter">
+                  <span className="devflow-project-filter__label">项目筛选</span>
+                  <select
+                    className="devflow-input devflow-input--select devflow-project-filter__select"
+                    value={selectedTaskProjectFilterValue}
+                    onChange={(changeEvent) =>
+                      setSelectedTaskProjectFilterValue(changeEvent.target.value)
+                    }
+                  >
+                    {selectedTaskProjectFilterOptionList.map((taskProjectFilterOption) => (
+                      <option
+                        key={taskProjectFilterOption.value}
+                        value={taskProjectFilterOption.value}
+                      >
+                        {taskProjectFilterOption.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {canCreateRequirements ? (
+                  <ActionButton
+                    variant="outline"
+                    className="devflow-icon-button"
+                    onClick={openCreateRequirementPanel}
+                  >
+                    <PlusIcon className="devflow-icon devflow-icon--small" />
+                  </ActionButton>
+                ) : null}
+              </div>
             </div>
 
             {isCreatePanelOpen && canCreateRequirements ? (
@@ -3476,8 +3680,9 @@ function App() {
                       disabled={!isProjectSelectable(projectItem)}
                     >
                       {isProjectSelectable(projectItem)
-                        ? projectItem.display_name
-                        : `${projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
+                        ? taskProjectDisplayLabelMap[projectItem.id] ??
+                          projectItem.display_name
+                        : `${taskProjectDisplayLabelMap[projectItem.id] ?? projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
                     </option>
                   ))}
                 </select>
@@ -3540,7 +3745,11 @@ function App() {
               {!isDashboardLoading && requirementViewModelList.length === 0 ? (
                 <div className="devflow-empty-card">
                   <p className="devflow-empty-card__text">
-                    {getWorkspaceEmptyState(workspaceView)}
+                    {getWorkspaceEmptyState(
+                      workspaceView,
+                      committedTaskProjectFilterValue,
+                      committedTaskProjectFilterLabel
+                    )}
                   </p>
                   {canCreateRequirements ? (
                     <ActionButton
@@ -4051,8 +4260,9 @@ function App() {
                             disabled={!isProjectSelectable(projectItem)}
                           >
                             {isProjectSelectable(projectItem)
-                              ? projectItem.display_name
-                              : `${projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
+                              ? taskProjectDisplayLabelMap[projectItem.id] ??
+                                projectItem.display_name
+                              : `${taskProjectDisplayLabelMap[projectItem.id] ?? projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
                           </option>
                         ))}
                       </select>
@@ -5920,6 +6130,11 @@ const RequirementCardButton = memo(function RequirementCardButton({
         <h3 className="devflow-requirement-card__title">
           {requirementViewModel.task.task_title}
         </h3>
+        <div className="devflow-requirement-card__project-row">
+          <span className="devflow-requirement-card__project-pill">
+            {requirementViewModel.projectLabel}
+          </span>
+        </div>
         <p className="devflow-requirement-card__description">
           {requirementViewModel.description}
         </p>
@@ -5930,16 +6145,17 @@ const RequirementCardButton = memo(function RequirementCardButton({
 
 function buildRequirementViewModel(
   taskItem: Task,
-  taskDevLogList: DevLog[],
-  taskCardMetadata: TaskCardMetadata
+  taskCardMetadata: TaskCardMetadata,
+  projectLabel: string
 ): RequirementViewModel {
   return {
     task: taskItem,
-    description: buildRequirementDescription(taskItem, taskDevLogList),
+    description: buildRequirementDescription(taskItem, taskCardMetadata),
     displayStage: taskCardMetadata.display_stage_key,
     displayStageLabel: taskCardMetadata.display_stage_label,
     cardMetaLabel: formatTaskCardActivityLabel(taskCardMetadata.last_ai_activity_at),
     cardMetaTitle: formatTaskCardActivityTitle(taskCardMetadata.last_ai_activity_at),
+    projectLabel,
   };
 }
 
@@ -6569,11 +6785,15 @@ function buildTaskQaStatusLabel(taskQaMessage: TaskQaMessage): string {
   return taskQaMessage.role === TaskQaMessageRole.USER ? "问题已发送" : "回答完成";
 }
 
-function buildRequirementDescription(taskItem: Task, taskDevLogList: DevLog[]): string {
-  return truncateText(
-    deriveRequirementSnapshot(taskItem, taskDevLogList).summary,
-    120
-  );
+function buildRequirementDescription(
+  taskItem: Task,
+  taskCardMetadata: TaskCardMetadata
+): string {
+  const requirementSummaryText =
+    taskCardMetadata.requirement_summary?.trim() ||
+    taskItem.requirement_brief?.trim() ||
+    "No requirement brief captured yet.";
+  return truncateText(requirementSummaryText, 120);
 }
 
 function deriveRequirementSnapshot(
@@ -6711,20 +6931,31 @@ function buildTaskCardMetadataMap(
 
 function buildTaskCardMetadataFallbackMap(
   taskList: Task[],
-  previousTaskCardMetadataMap: Record<string, TaskCardMetadata>
+  previousTaskCardMetadataMap: Record<string, TaskCardMetadata>,
+  devLogsByTaskId: Record<string, DevLog[]>
 ): Record<string, TaskCardMetadata> {
   return Object.fromEntries(
     taskList.map((taskItem) => [
       taskItem.id,
       resolveTaskCardMetadataFromSnapshot(
         taskItem,
-        previousTaskCardMetadataMap[taskItem.id]
+        previousTaskCardMetadataMap[taskItem.id],
+        devLogsByTaskId[taskItem.id] ?? []
       ),
     ])
   );
 }
 
-function buildFallbackTaskCardMetadata(taskItem: Task): TaskCardMetadata {
+function buildFallbackTaskCardMetadata(
+  taskItem: Task,
+  taskDevLogList: DevLog[],
+  cachedTaskCardMetadata?: TaskCardMetadata
+): TaskCardMetadata {
+  const fallbackRequirementChangeMetadata =
+    deriveFallbackRequirementChangeMetadata(
+      taskDevLogList,
+      cachedTaskCardMetadata
+    );
   if (taskItem.branch_health?.manual_completion_candidate) {
     return {
       task_id: taskItem.id,
@@ -6732,6 +6963,10 @@ function buildFallbackTaskCardMetadata(taskItem: Task): TaskCardMetadata {
       display_stage_label: "缺失分支待确认",
       is_waiting_for_user: false,
       last_ai_activity_at: taskItem.last_ai_activity_at,
+      requirement_change_kind:
+        fallbackRequirementChangeMetadata.requirement_change_kind,
+      requirement_summary:
+        fallbackRequirementChangeMetadata.requirement_summary,
       branch_health: taskItem.branch_health,
     };
   }
@@ -6742,6 +6977,10 @@ function buildFallbackTaskCardMetadata(taskItem: Task): TaskCardMetadata {
     display_stage_label: formatStageLabel(taskItem.workflow_stage),
     is_waiting_for_user: false,
     last_ai_activity_at: taskItem.last_ai_activity_at,
+    requirement_change_kind:
+      fallbackRequirementChangeMetadata.requirement_change_kind,
+    requirement_summary:
+      fallbackRequirementChangeMetadata.requirement_summary,
     branch_health: taskItem.branch_health,
   };
 }
@@ -6799,9 +7038,14 @@ function resolveTaskBranchHealth(
 
 function resolveTaskCardMetadataFromSnapshot(
   taskItem: Task,
-  cachedTaskCardMetadata: TaskCardMetadata | undefined
+  cachedTaskCardMetadata: TaskCardMetadata | undefined,
+  taskDevLogList: DevLog[] = []
 ): TaskCardMetadata {
-  const fallbackTaskCardMetadata = buildFallbackTaskCardMetadata(taskItem);
+  const fallbackTaskCardMetadata = buildFallbackTaskCardMetadata(
+    taskItem,
+    taskDevLogList,
+    cachedTaskCardMetadata
+  );
   if (!cachedTaskCardMetadata) {
     return fallbackTaskCardMetadata;
   }
@@ -6943,14 +7187,17 @@ function canDestroyTask(taskItem: Task): boolean {
 
 function getTaskProjectDisplayName(
   taskItem: Task | null,
-  projectItem: Project | null
+  projectItem: Project | null,
+  taskProjectDisplayLabelMap: Record<string, string>
 ): string {
   if (!taskItem?.project_id) {
     return "未关联项目";
   }
 
   if (projectItem?.display_name) {
-    return projectItem.display_name;
+    return (
+      taskProjectDisplayLabelMap[projectItem.id] ?? projectItem.display_name
+    );
   }
 
   return `未知项目（${taskItem.project_id.slice(0, 8)}...）`;
@@ -7000,11 +7247,8 @@ function hasLatestPostReviewLintCyclePassed(taskDevLogList: DevLog[]): boolean {
   return false;
 }
 
-function hasRequirementUpdateLog(taskDevLogList: DevLog[]): boolean {
-  return taskDevLogList.some((devLogItem) => {
-    const parsedRequirementChange = parseRequirementChangeLog(devLogItem.text_content);
-    return parsedRequirementChange?.kind === "update";
-  });
+function hasRequirementUpdateMetadata(taskCardMetadata: TaskCardMetadata): boolean {
+  return taskCardMetadata.requirement_change_kind === "update";
 }
 
 function parseRequirementChangeLog(
@@ -7329,7 +7573,23 @@ function getWorkspaceHeading(workspaceView: WorkspaceView): string {
   return "Requirements";
 }
 
-function getWorkspaceEmptyState(workspaceView: WorkspaceView): string {
+function getWorkspaceEmptyState(
+  workspaceView: WorkspaceView,
+  selectedTaskProjectFilterValue: string,
+  selectedTaskProjectFilterLabel: string
+): string {
+  if (selectedTaskProjectFilterValue !== ALL_TASK_PROJECT_FILTER_VALUE) {
+    if (workspaceView === "completed") {
+      return `${selectedTaskProjectFilterLabel} 下暂无已完成需求。`;
+    }
+
+    if (workspaceView === "changes") {
+      return `${selectedTaskProjectFilterLabel} 下暂无变更或已删除需求。`;
+    }
+
+    return `${selectedTaskProjectFilterLabel} 下暂无需求卡片。`;
+  }
+
   if (workspaceView === "completed") {
     return "No completed requirements yet.";
   }
@@ -7339,6 +7599,18 @@ function getWorkspaceEmptyState(workspaceView: WorkspaceView): string {
   }
 
   return "No requirements yet.";
+}
+
+function buildProjectMapById(
+  projectList: Project[]
+): Record<string, Project> {
+  return projectList.reduce<Record<string, Project>>(
+    (projectMapById, projectItem) => {
+      projectMapById[projectItem.id] = projectItem;
+      return projectMapById;
+    },
+    {}
+  );
 }
 
 function getWorkspaceDetailEmptyState(workspaceView: WorkspaceView): string {

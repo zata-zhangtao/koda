@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -89,6 +89,7 @@ _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
 _BRANCH_MISSING_DISPLAY_STAGE_KEY = "branch_missing"
 _BRANCH_MISSING_DISPLAY_STAGE_LABEL = "缺失分支待确认"
+_REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->"
 _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.BACKLOG: "Backlog",
     WorkflowStage.PRD_GENERATING: "Drafting PRD",
@@ -115,6 +116,19 @@ class CompletionCommitInformationResolution:
 
     commit_information_text: str
     commit_information_source: str
+
+
+@dataclass(frozen=True)
+class RequirementChangeSnapshot:
+    """Describe the latest requirement-change log found for a task.
+
+    Attributes:
+        change_kind: Whether the log captured an update or delete event.
+        summary_text: Human-readable summary extracted from the marker body.
+    """
+
+    change_kind: str
+    summary_text: str | None
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -153,6 +167,129 @@ def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
         task_obj.dev_logs,
         key=lambda dev_log_item: (dev_log_item.created_at, dev_log_item.id),
     )
+
+def _get_ordered_task_dev_logs_by_task_id(
+    db_session: Session,
+    task_id_list: list[str],
+) -> dict[str, list[DevLog]]:
+    """批量返回按时间排序的任务日志列表.
+
+    Args:
+        db_session: 数据库会话
+        task_id_list: 需要查询日志的任务 ID 列表
+
+    Returns:
+        dict[str, list[DevLog]]: `task_id -> ordered dev logs` 映射
+    """
+    ordered_task_dev_logs_by_task_id: dict[str, list[DevLog]] = {
+        task_id_str: [] for task_id_str in task_id_list
+    }
+    if not task_id_list:
+        return ordered_task_dev_logs_by_task_id
+
+    ordered_dev_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id.in_(task_id_list))
+        .order_by(DevLog.task_id.asc(), DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+    for dev_log_item in ordered_dev_log_list:
+        ordered_task_dev_logs_by_task_id.setdefault(dev_log_item.task_id, []).append(
+            dev_log_item
+        )
+    return ordered_task_dev_logs_by_task_id
+
+
+def _clean_markdown_preview(raw_markdown_text: str) -> str:
+    """Normalize marker bodies into the short plain-text summary used by cards.
+
+    Args:
+        raw_markdown_text: Raw Markdown section content.
+
+    Returns:
+        str: Collapsed preview text suitable for task cards.
+    """
+    normalized_preview_text = re.sub(r"<!--[\s\S]*?-->", " ", raw_markdown_text)
+    normalized_preview_text = re.sub(r"^/[a-z-]+\s+", "", normalized_preview_text)
+    normalized_preview_text = re.sub(
+        r"```[\s\S]*?```",
+        " code block ",
+        normalized_preview_text,
+    )
+    normalized_preview_text = normalized_preview_text.replace("`", "")
+    normalized_preview_text = re.sub(
+        r"[#!>*_[\]()\-+]+",
+        " ",
+        normalized_preview_text,
+    )
+    normalized_preview_text = re.sub(r"\s+", " ", normalized_preview_text)
+    return normalized_preview_text.strip()
+
+
+def _extract_marker_body(
+    raw_markdown_text: str,
+    section_label: str,
+) -> str | None:
+    """Extract the body text after a marker section heading.
+
+    Args:
+        raw_markdown_text: Full Markdown log body.
+        section_label: Section heading to locate.
+
+    Returns:
+        str | None: Trimmed body text or `None` when the section is absent.
+    """
+    section_pattern = re.compile(rf"{re.escape(section_label)}\n([\s\S]*)$")
+    section_match = section_pattern.search(raw_markdown_text)
+    return (section_match.group(1).strip() if section_match else None) or None
+
+
+def _parse_requirement_change_log(
+    raw_markdown_text: str,
+) -> RequirementChangeSnapshot | None:
+    """Parse a requirement-update/delete audit log into card-friendly fields.
+
+    Args:
+        raw_markdown_text: Full log Markdown body.
+
+    Returns:
+        RequirementChangeSnapshot | None: Parsed change snapshot or `None`.
+    """
+    has_requirement_update_marker = _REQUIREMENT_UPDATE_MARKER in raw_markdown_text
+    has_requirement_delete_marker = _REQUIREMENT_DELETE_MARKER in raw_markdown_text
+    if not has_requirement_update_marker and not has_requirement_delete_marker:
+        return None
+
+    change_kind = "update" if has_requirement_update_marker else "delete"
+    summary_section_label = "Summary:" if change_kind == "update" else "Final Summary:"
+    raw_summary_body = (
+        _extract_marker_body(raw_markdown_text, summary_section_label) or ""
+    )
+    normalized_summary_text = _clean_markdown_preview(raw_summary_body)
+    return RequirementChangeSnapshot(
+        change_kind=change_kind,
+        summary_text=normalized_summary_text or None,
+    )
+
+
+def _get_latest_requirement_change_snapshot(
+    ordered_task_dev_log_list: list[DevLog],
+) -> RequirementChangeSnapshot | None:
+    """Find the most recent requirement-change audit log for a task.
+
+    Args:
+        ordered_task_dev_log_list: Task logs ordered by time ascending.
+
+    Returns:
+        RequirementChangeSnapshot | None: Latest parsed requirement-change snapshot.
+    """
+    for dev_log_item in reversed(ordered_task_dev_log_list):
+        requirement_change_snapshot = _parse_requirement_change_log(
+            dev_log_item.text_content
+        )
+        if requirement_change_snapshot is not None:
+            return requirement_change_snapshot
+    return None
 
 
 def _get_latest_waiting_user_signal_map_by_task_id(
@@ -853,6 +990,7 @@ def _build_task_card_metadata(
     task_obj: Task,
     task_branch_health: TaskBranchHealthSchema | None,
     *,
+    ordered_task_dev_log_list: list[DevLog] | None = None,
     is_task_running: bool,
     latest_self_review_passed: bool = False,
     latest_post_review_lint_passed: bool = False,
@@ -866,6 +1004,14 @@ def _build_task_card_metadata(
     Returns:
         TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
     """
+    resolved_ordered_task_dev_log_list = (
+        ordered_task_dev_log_list
+        if ordered_task_dev_log_list is not None
+        else _get_ordered_task_dev_logs(task_obj)
+    )
+    latest_requirement_change_snapshot = _get_latest_requirement_change_snapshot(
+        resolved_ordered_task_dev_log_list
+    )
     if task_branch_health and task_branch_health.manual_completion_candidate:
         return TaskCardMetadataSchema(
             task_id=task_obj.id,
@@ -873,6 +1019,16 @@ def _build_task_card_metadata(
             display_stage_label=_BRANCH_MISSING_DISPLAY_STAGE_LABEL,
             is_waiting_for_user=False,
             last_ai_activity_at=task_obj.last_ai_activity_at,
+            requirement_change_kind=(
+                latest_requirement_change_snapshot.change_kind
+                if latest_requirement_change_snapshot is not None
+                else None
+            ),
+            requirement_summary=(
+                latest_requirement_change_snapshot.summary_text
+                if latest_requirement_change_snapshot is not None
+                else None
+            ),
             branch_health=task_branch_health,
         )
     waiting_for_user_after_self_review = (
@@ -904,6 +1060,16 @@ def _build_task_card_metadata(
         display_stage_label=display_stage_label,
         is_waiting_for_user=is_waiting_for_user,
         last_ai_activity_at=task_obj.last_ai_activity_at,
+        requirement_change_kind=(
+            latest_requirement_change_snapshot.change_kind
+            if latest_requirement_change_snapshot is not None
+            else None
+        ),
+        requirement_summary=(
+            latest_requirement_change_snapshot.summary_text
+            if latest_requirement_change_snapshot is not None
+            else None
+        ),
         branch_health=task_branch_health,
     )
 
@@ -976,20 +1142,69 @@ def _build_manual_branch_missing_completion_log_text(
     )
 
 
+def _validate_task_project_filter(
+    project_id: str | None,
+    unlinked_only: bool,
+) -> tuple[str | None, bool]:
+    """规范化任务列表的项目筛选参数.
+
+    Args:
+        project_id: 请求中的项目 ID 过滤值
+        unlinked_only: 是否只返回未关联项目任务
+
+    Returns:
+        tuple[str | None, bool]: 规范化后的 `(project_id, unlinked_only)`
+
+    Raises:
+        HTTPException: 当 `project_id` 与 `unlinked_only=true` 同时出现时抛出
+    """
+    normalized_project_id = project_id.strip() if project_id else None
+    normalized_project_id = normalized_project_id or None
+    if normalized_project_id and unlinked_only:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="project_id and unlinked_only cannot be used together.",
+        )
+    return normalized_project_id, unlinked_only
+
+
 @router.get("", response_model=list[TaskResponseSchema])
 def list_tasks(
     db_session: Annotated[Session, Depends(get_db)],
+    project_id: Annotated[
+        str | None,
+        Query(
+            description="Only return tasks bound to the specified project ID.",
+        ),
+    ] = None,
+    unlinked_only: Annotated[
+        bool,
+        Query(
+            description="When true, only return tasks without a bound project.",
+        ),
+    ] = False,
 ) -> list[Task]:
     """列出当前账户的任务.
 
     Args:
+        project_id: 关联项目 ID 过滤（可选）
+        unlinked_only: 是否只返回未关联项目任务
         db_session: 数据库会话
 
     Returns:
         list[Task]: 任务列表，按创建时间倒序排列
     """
     run_account_id = _get_current_run_account_id(db_session)
-    task_list = TaskService.get_tasks(db_session, run_account_id)
+    normalized_project_id, normalized_unlinked_only = _validate_task_project_filter(
+        project_id,
+        unlinked_only,
+    )
+    task_list = TaskService.get_tasks(
+        db_session,
+        run_account_id,
+        project_id=normalized_project_id,
+        unlinked_only=normalized_unlinked_only,
+    )
     task_log_count_map = TaskService.get_task_log_count_map(
         db_session,
         [task_item.id for task_item in task_list],
@@ -1011,6 +1226,18 @@ def list_tasks(
 @router.get("/card-metadata", response_model=list[TaskCardMetadataSchema])
 def list_task_card_metadata(
     db_session: Annotated[Session, Depends(get_db)],
+    project_id: Annotated[
+        str | None,
+        Query(
+            description="Only return task card metadata for the specified project ID.",
+        ),
+    ] = None,
+    unlinked_only: Annotated[
+        bool,
+        Query(
+            description="When true, only return metadata for tasks without a bound project.",
+        ),
+    ] = False,
 ) -> list[TaskCardMetadataSchema]:
     """列出任务卡片展示元数据.
 
@@ -1019,13 +1246,25 @@ def list_task_card_metadata(
     `workflow_stage`。
 
     Args:
+        project_id: 关联项目 ID 过滤（可选）
+        unlinked_only: 是否只返回未关联项目任务
         db_session: 数据库会话
 
     Returns:
         list[TaskCardMetadataSchema]: 当前账户下全部任务的卡片展示元数据
     """
     run_account_id = _get_current_run_account_id(db_session)
-    task_list = TaskService.get_tasks(db_session, run_account_id)
+    normalized_project_id, normalized_unlinked_only = _validate_task_project_filter(
+        project_id,
+        unlinked_only,
+    )
+    task_list = TaskService.get_tasks(
+        db_session,
+        run_account_id,
+        project_id=normalized_project_id,
+        unlinked_only=normalized_unlinked_only,
+    )
+    task_id_list = [task_item.id for task_item in task_list]
     waiting_user_candidate_task_id_list = [
         task_item.id
         for task_item in task_list
@@ -1040,6 +1279,10 @@ def list_task_card_metadata(
             WorkflowStage.TEST_IN_PROGRESS,
         }
     ]
+    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
+        db_session,
+        task_id_list,
+    )
     latest_waiting_user_signal_map_by_task_id = (
         _get_latest_waiting_user_signal_map_by_task_id(
             db_session,
@@ -1064,6 +1307,10 @@ def list_task_card_metadata(
             _build_task_card_metadata(
                 task_item,
                 task_branch_health_map.get(task_item.id),
+                ordered_task_dev_log_list=ordered_task_dev_logs_by_task_id.get(
+                    task_item.id,
+                    [],
+                ),
                 is_task_running=is_codex_task_running(task_item.id),
                 latest_self_review_passed=bool(
                     waiting_user_signal_map["self_review_passed"]

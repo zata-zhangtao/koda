@@ -223,6 +223,8 @@ class TaskCardMetadataSchema(DSLResponseSchema):
         display_stage_label: 直接给前端 badge 使用的文案
         is_waiting_for_user: 当前是否处于“等待用户”展示态
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
+        requirement_change_kind: 最近一次需求变更日志类型；仅卡片分组/摘要使用
+        requirement_summary: 最近一次需求变更摘要；为空时前端回退到 `Task.requirement_brief`
         branch_health: 任务关联 Git 分支的派生健康状态
     """
 
@@ -239,6 +241,14 @@ class TaskCardMetadataSchema(DSLResponseSchema):
     last_ai_activity_at: datetime | None = Field(
         None,
         description="最近一次 Codex 自动化输出写入时间",
+    )
+    requirement_change_kind: str | None = Field(
+        None,
+        description="最近一次需求变更日志类型；可能为 update 或 delete",
+    )
+    requirement_summary: str | None = Field(
+        None,
+        description="最近一次需求变更摘要；为空时前端回退到 Task.requirement_brief",
     )
     branch_health: TaskBranchHealthSchema | None = Field(
         None,

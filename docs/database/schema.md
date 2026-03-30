@@ -202,7 +202,7 @@ erDiagram
 - `stage_updated_at`：停滞提醒的计算基准。系统只会在任务真正进入新阶段时刷新该值，因此它也是“同一阶段停留窗口”去重的锚点
 - `last_ai_activity_at`：只记录最近一次 Codex 自动化输出落库时间，供需求卡片和详情头部展示“最近 AI 活动”使用；它不是通过扫描 worktree 文件时间推导出来的
 - `worktree_path`：决定 Codex 实际工作目录
-- `project_id`：仅允许在 `backlog` 且尚未生成 `worktree_path` 时改绑；任务一旦开始，项目绑定会锁定，避免与运行上下文脱钩
+- `project_id`：仅允许在 `backlog` 且尚未生成 `worktree_path` 时改绑；任务一旦开始，项目绑定会锁定，避免与运行上下文脱钩。前端需求卡片列表也会基于它提供按项目/未关联项目的筛选入口
 - `destroy_reason` / `destroyed_at`：用于 started-task destroy 审计。普通 backlog 轻量删除也可能写入 `destroyed_at`，但通常不会有 `destroy_reason`
 
 需要额外说明的是：前端可能把 `self_review_in_progress` 或 `test_in_progress` 这类真实阶段覆盖显示为“等待用户”，但这只是 `GET /api/tasks/card-metadata` 返回的展示态，不会写回 `Task.workflow_stage`，也不会新增持久化 `waiting_user` 阶段。

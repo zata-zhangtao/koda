@@ -38,6 +38,11 @@ type LogListOptions = {
   offset?: number;
 };
 
+type TaskListOptions = {
+  projectId?: string | null;
+  unlinkedOnly?: boolean;
+};
+
 function extractApiErrorMessage(
   responseText: string,
   statusCode: number
@@ -81,6 +86,23 @@ async function fetchApi<T>(
   return response.json() as Promise<T>;
 }
 
+function buildTaskListQueryString(taskListOptions?: TaskListOptions): string {
+  if (!taskListOptions) {
+    return "";
+  }
+
+  const searchParams = new URLSearchParams();
+  if (taskListOptions.projectId) {
+    searchParams.set("project_id", taskListOptions.projectId);
+  }
+  if (taskListOptions.unlinkedOnly) {
+    searchParams.set("unlinked_only", "true");
+  }
+
+  const serializedQueryString = searchParams.toString();
+  return serializedQueryString ? `?${serializedQueryString}` : "";
+}
+
 /** RunAccount API */
 export const runAccountApi = {
   /** 获取当前活跃账户 */
@@ -117,10 +139,14 @@ export const appConfigApi = {
 /** Task API */
 export const taskApi = {
   /** 列出任务 */
-  list: () => fetchApi<Task[]>("/tasks"),
+  list: (taskListOptions?: TaskListOptions) =>
+    fetchApi<Task[]>(`/tasks${buildTaskListQueryString(taskListOptions)}`),
 
   /** 列出任务卡片展示元数据 */
-  listCardMetadata: () => fetchApi<TaskCardMetadata[]>("/tasks/card-metadata"),
+  listCardMetadata: (taskListOptions?: TaskListOptions) =>
+    fetchApi<TaskCardMetadata[]>(
+      `/tasks/card-metadata${buildTaskListQueryString(taskListOptions)}`
+    ),
 
   /** 创建任务 */
   create: (data: {

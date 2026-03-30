@@ -204,6 +204,8 @@ export interface TaskCardMetadata {
   display_stage_label: string;
   is_waiting_for_user: boolean;
   last_ai_activity_at: string | null;
+  requirement_change_kind: "update" | "delete" | null;
+  requirement_summary: string | null;
   branch_health: TaskBranchHealth | null;
 }
 

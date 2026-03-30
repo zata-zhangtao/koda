@@ -153,7 +153,7 @@ flowchart TD
 5. 标准输出被批量写回 `DevLog`
 6. 每次自动化输出落 `DevLog` 时，后端会同步刷新 `Task.last_ai_activity_at`
 7. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志，而不是重复重拉大批量时间线
-8. 左侧需求卡片与详情头部每 60 秒单独轮询 `/api/tasks/card-metadata`，统一消费 badge 展示态与 `last_ai_activity_at`
+8. 左侧需求卡片与详情头部每 60 秒单独轮询 `/api/tasks/card-metadata`，统一消费 badge 展示态、`last_ai_activity_at` 以及最近一次需求变更快照，这样卡片分组/摘要不再受全局日志分页窗口影响
 9. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
 10. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}.md` 的内容；后端优先读取固定文件名，并兼容回退到同前缀的历史 slugged 文件
 11. 当 PRD Markdown 中存在 `## 0. 待确认问题（结构化）` JSON 块时，前端会先解析该块渲染下拉确认卡片，再渲染清洗后的 PRD 正文；如果结构化块 malformed，则前端显示修复提示并阻断“确认 PRD / 开始执行”

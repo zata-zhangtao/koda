@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:task-card-metadata-fallback": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_card_metadata_fallback.test.ts",
+    "test:task-project-filter": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_project_filter.test.ts",
     "test:prd-pending-questions": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_pending_questions.test.ts",
     "test:workspace-view": "node --experimental-strip-types --experimental-specifier-resolution=node tests/workspace_view.test.ts",
     "test:selected-task-prd-file": "node --experimental-strip-types --experimental-specifier-resolution=node tests/use_selected_task_prd_file.test.ts",

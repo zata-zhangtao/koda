@@ -1932,6 +1932,237 @@ def test_list_tasks_uses_precomputed_log_counts(
     assert returned_task_list[0].log_count == 17
 
 
+def test_list_tasks_filters_by_project_id(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task list responses should support narrowing cards to one bound project."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    project_one_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Project one task",
+        project_id=project_one_obj.id,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    project_two_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Project two task",
+        project_id=project_two_obj.id,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    unlinked_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Unlinked task",
+        project_id=None,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([project_one_task_obj, project_two_task_obj, unlinked_task_obj])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        tasks_api.TaskService,
+        "get_task_log_count_map",
+        lambda _db_session, task_id_list: {
+            task_id_str: 0 for task_id_str in task_id_list
+        },
+    )
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task_list = list_tasks(
+        db_session=db_session,
+        project_id=project_one_obj.id,
+    )
+
+    assert [task_obj.id for task_obj in returned_task_list] == [project_one_task_obj.id]
+    assert returned_task_list[0].project_id == project_one_obj.id
+
+
+def test_list_tasks_rejects_conflicting_project_filters(
+    db_session: Session,
+) -> None:
+    """Task list requests should reject conflicting project filter parameters."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        list_tasks(
+            db_session=db_session,
+            project_id="project-one",
+            unlinked_only=True,
+        )
+
+    assert raised_http_error.value.status_code == 422
+    assert "cannot be used together" in str(raised_http_error.value.detail)
+
+
+def test_list_task_card_metadata_filters_unlinked_tasks(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task card metadata should support the unlinked-only project filter."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    project_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Project task",
+        project_id=project_obj.id,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    unlinked_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Unlinked task",
+        project_id=None,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([project_task_obj, unlinked_task_obj])
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task_card_metadata_list = list_task_card_metadata(
+        db_session=db_session,
+        unlinked_only=True,
+    )
+
+    assert [
+        task_card_metadata.task_id
+        for task_card_metadata in returned_task_card_metadata_list
+    ] == [unlinked_task_obj.id]
+
+
+def test_list_task_card_metadata_includes_latest_requirement_change_snapshot(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task card metadata should expose the latest requirement-change snapshot."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    project_one_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Project one task",
+        project_id=project_one_obj.id,
+        requirement_brief="Initial summary",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    project_two_task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Project two task",
+        project_id=project_two_obj.id,
+        requirement_brief="Other summary",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([project_one_task_obj, project_two_task_obj])
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=project_one_task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="\n".join(
+                    [
+                        "<!-- requirement-change:update -->",
+                        "## Requirement Updated",
+                        "",
+                        "Previous Title: Project one task",
+                        "Current Title: Project one task",
+                        "",
+                        "Summary:",
+                        "Project one updated summary",
+                    ]
+                ),
+                state_tag=DevLogStateTag.NONE,
+            ),
+            DevLog(
+                task_id=project_two_task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="Unrelated project log",
+                state_tag=DevLogStateTag.NONE,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task_card_metadata_list = list_task_card_metadata(
+        db_session=db_session,
+        project_id=project_one_obj.id,
+    )
+
+    assert len(returned_task_card_metadata_list) == 1
+    assert returned_task_card_metadata_list[0].task_id == project_one_task_obj.id
+    assert returned_task_card_metadata_list[0].requirement_change_kind == "update"
+    assert (
+        returned_task_card_metadata_list[0].requirement_summary
+        == "Project one updated summary"
+    )
+
+
 def test_cancel_task_sends_manual_interruption_notification(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,

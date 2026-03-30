@@ -318,6 +318,13 @@ img {
   gap: 8px;
 }
 
+.devflow-section-heading__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
 .devflow-section-heading__title,
 .devflow-detail-section__title {
   display: inline-flex;
@@ -329,6 +336,40 @@ img {
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: #a8a29e;
+}
+
+.devflow-section-heading__subtitle {
+  margin: 0;
+  color: #78716c;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.devflow-section-heading__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.devflow-project-filter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.devflow-project-filter__label {
+  color: #a8a29e;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.devflow-project-filter__select {
+  min-width: 180px;
 }
 
 .devflow-card {
@@ -559,6 +600,23 @@ img {
 
 .devflow-requirement-card-button:hover .devflow-requirement-card__title {
   color: #059669;
+}
+
+.devflow-requirement-card__project-row {
+  margin-bottom: 8px;
+}
+
+.devflow-requirement-card__project-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.09);
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
 }
 
 .devflow-requirement-card__description {

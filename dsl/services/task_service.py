@@ -508,6 +508,8 @@ class TaskService:
         db_session: Session,
         run_account_id: str,
         status: TaskLifecycleStatus | None = None,
+        project_id: str | None = None,
+        unlinked_only: bool = False,
     ) -> list[Task]:
         """获取任务列表.
 
@@ -515,6 +517,8 @@ class TaskService:
             db_session: 数据库会话
             run_account_id: 运行账户 ID
             status: 按生命周期状态过滤（可选）
+            project_id: 按关联项目 ID 过滤（可选）
+            unlinked_only: 是否只返回未关联项目的任务
 
         Returns:
             list[Task]: 任务对象列表，按创建时间倒序排列
@@ -523,6 +527,11 @@ class TaskService:
 
         if status:
             query = query.filter(Task.lifecycle_status == status)
+
+        if project_id is not None:
+            query = query.filter(Task.project_id == project_id)
+        elif unlinked_only:
+            query = query.filter(Task.project_id.is_(None))
 
         return query.order_by(Task.created_at.desc()).all()
 
