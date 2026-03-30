@@ -3859,7 +3859,7 @@ function App() {
                       </p>
                       <div className="devflow-branch-health-banner__facts">
                         <span className="devflow-branch-health-banner__fact">
-                          <strong>Expected Branch</strong>
+                          <strong>Task Branch</strong>
                           <code>{selectedTaskBranchHealth.expected_branch_name}</code>
                         </span>
                         <span className="devflow-branch-health-banner__fact">

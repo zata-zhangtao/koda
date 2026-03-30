@@ -35,6 +35,29 @@ class TaskService:
     """
 
     @staticmethod
+    def _select_display_task_branch_name(
+        canonical_task_branch_name_str: str,
+        matching_task_branch_name_list: list[str],
+    ) -> str:
+        """Select the branch name that should be shown in branch-health UI.
+
+        Args:
+            canonical_task_branch_name_str: Legacy canonical branch name
+            matching_task_branch_name_list: All locally matched branch names
+
+        Returns:
+            str: Preferred branch name for display and messaging
+        """
+        if canonical_task_branch_name_str in matching_task_branch_name_list:
+            return canonical_task_branch_name_str
+
+        sorted_matching_task_branch_name_list = sorted(
+            matching_task_branch_name_list,
+            key=lambda branch_name_str: (len(branch_name_str), branch_name_str),
+        )
+        return sorted_matching_task_branch_name_list[0]
+
+    @staticmethod
     def _ensure_task_worktree_if_needed(
         db_session: Session,
         task_obj: Task,
@@ -216,9 +239,10 @@ class TaskService:
         from dsl.services.git_worktree_service import GitWorktreeService
 
         resolved_linked_project_obj = linked_project_obj or task_obj.project
-        expected_branch_name_str = GitWorktreeService.build_task_branch_name(
+        canonical_task_branch_name_str = GitWorktreeService.build_task_branch_name(
             task_obj.id
         )
+        expected_branch_name_str = canonical_task_branch_name_str
         has_entered_worktree_backed_git_flow_bool = (
             TaskService._has_task_entered_worktree_backed_git_flow(task_obj)
         )
@@ -247,10 +271,28 @@ class TaskService:
             else:
                 branch_status_message_str = "当前无法定位可检查的本地 Git 仓库。"
         else:
-            branch_exists_bool = GitWorktreeService.check_local_branch_exists(
-                branch_probe_working_tree_path,
-                expected_branch_name_str,
+            matching_task_branch_name_list = (
+                GitWorktreeService.list_local_task_branch_names(
+                    branch_probe_working_tree_path,
+                    task_obj.id,
+                )
             )
+            if matching_task_branch_name_list is None:
+                branch_exists_bool = None
+            else:
+                branch_exists_bool = bool(matching_task_branch_name_list)
+                if matching_task_branch_name_list:
+                    expected_branch_name_str = (
+                        TaskService._select_display_task_branch_name(
+                            canonical_task_branch_name_str,
+                            matching_task_branch_name_list,
+                        )
+                    )
+            if branch_exists_bool is None:
+                branch_exists_bool = GitWorktreeService.check_local_branch_exists(
+                    branch_probe_working_tree_path,
+                    canonical_task_branch_name_str,
+                )
             if branch_exists_bool is True:
                 branch_status_message_str = f"检测到本地任务分支 `{expected_branch_name_str}` 仍存在，可继续使用标准 Git Complete 流程。"
             elif branch_exists_bool is False:

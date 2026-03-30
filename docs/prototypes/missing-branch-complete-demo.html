@@ -507,7 +507,7 @@
             <div class="probe-row">
               <div class="probe-row__label">期望任务分支</div>
               <div class="probe-row__value"><code>task/0fd7ed62</code></div>
-              <div class="probe-row__note">由 `task_id[:8]` 推导出的 canonical branch name。</div>
+              <div class="probe-row__note">先按 `task_id[:8]` 前缀探测；若命中语义分支则显示真实 branch name。</div>
             </div>
             <div class="probe-row">
               <div class="probe-row__label">Branch Presence</div>
@@ -598,7 +598,7 @@
             "任务已进入 Completed Archive。后续仍可查看时间线和需求文档，但不会继续阻塞 Active 视图。",
           branchPresence: "Missing",
           branchPresenceNote:
-            "探针确认 `refs/heads/task/0fd7ed62` 不存在；该状态已被人工审核并吸收到完成确认流程中。",
+            "探针确认以 `task/0fd7ed62` 为前缀的任务分支均不存在；该状态已被人工审核并吸收到完成确认流程中。",
           nextStep: "Archive Complete",
           nextStepNote:
             "显示详情只读视图；保留日志和 PRD，可追溯人工确认动作。",
@@ -607,7 +607,7 @@
               time: "T-2m",
               title: "检测到分支缺失",
               copy:
-                "系统刷新任务卡片时发现 canonical branch 已不存在，因此显示“查看完成状态”入口。",
+                "系统刷新任务卡片时发现该任务对应的本地分支候选都已不存在，因此显示“查看完成状态”入口。",
             },
             {
               time: "T-1m",

@@ -485,6 +485,16 @@ def _schedule_prd_generation(
         task_obj,
     )
 
+    task_log_path = get_task_log_path(task_obj.id)
+    if not task_log_path.exists():
+        task_log_path.write_text(
+            (
+                f"=== Koda queued-prd | task {task_obj.id[:8]} ===\n"
+                "已收到 PRD 生成请求，等待后台执行器开始写入详细日志。\n"
+            ),
+            encoding="utf-8",
+        )
+
     register_task_background_activity(task_obj.id)
     background_tasks.add_task(
         run_codex_prd,
@@ -1270,6 +1280,12 @@ def start_task(
     Raises:
         HTTPException: 任务不存在（404）、阶段不合法（422）或 worktree 创建失败（422）
     """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
     try:
         started_task = TaskService.start_task(db_session, task_id)
     except ValueError as start_error:
@@ -1730,7 +1746,7 @@ def manual_complete_task(
 ) -> Task:
     """Manually close a task after a missing-branch confirmation.
 
-    This endpoint is reserved for the case where the canonical task branch has
+    This endpoint is reserved for the case where the resolved task branch has
     already been merged and deleted outside Koda, so rerunning the standard Git
     completion flow would no longer make sense.
 

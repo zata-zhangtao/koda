@@ -234,6 +234,7 @@ tasks/prd-{task_id[:8]}.md
 如果开发机找不到当前配置执行器的可执行文件：
 
 - 后端会写入一条 `BUG` 类型的 DevLog（包含 `runner_kind`、`executable` 和安装提示）
+- 后端也会创建该任务对应的本地日志文件（`/tmp/koda-{task_id[:8]}.log`），方便“打开终端”直接查看失败原因
 - 任务阶段会回退到 `changes_requested`
 
 #### Codex 排障

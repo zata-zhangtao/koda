@@ -2148,12 +2148,21 @@ async def _run_codex_phase(
     active_runner_obj = _resolve_active_runner()
     runner_executable_path_str = shutil.which(active_runner_obj.executable_name)
     if not runner_executable_path_str:
+        task_log_path = get_task_log_path(task_id_str)
+        _write_phase_log_header(
+            task_log_path=task_log_path,
+            task_id_str=task_id_str,
+            phase_log_label_str=phase_log_label_str,
+            overwrite_existing_log_bool=overwrite_existing_log_bool,
+            runner_kind_str=active_runner_obj.runner_kind,
+        )
         missing_runner_log_text = (
             "❌ 未找到目标执行器可执行文件："
             f"runner_kind={active_runner_obj.runner_kind}, "
             f"executable={active_runner_obj.executable_name}。\n"
             f"{active_runner_obj.build_missing_cli_hint()}"
         )
+        _append_text_to_task_log(task_log_path, missing_runner_log_text)
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
@@ -2541,6 +2550,39 @@ async def run_codex_prd(
             logger.warning(
                 f"Failed to send PRD ready email for task {task_id_str[:8]}...: {email_error}"
             )
+    except Exception as unexpected_prd_error:
+        active_runner_kind_str = get_active_runner_kind()
+        task_log_path = get_task_log_path(task_id_str)
+        if not task_log_path.exists():
+            _write_phase_log_header(
+                task_log_path=task_log_path,
+                task_id_str=task_id_str,
+                phase_log_label_str=f"{active_runner_kind_str}-prd",
+                overwrite_existing_log_bool=True,
+                runner_kind_str=active_runner_kind_str,
+            )
+        unexpected_prd_failure_log_text_str = (
+            f"❌ runner_kind={active_runner_kind_str} PRD 生成在启动阶段发生异常："
+            f"{unexpected_prd_error}"
+        )
+        _append_text_to_task_log(
+            task_log_path,
+            unexpected_prd_failure_log_text_str,
+        )
+        logger.exception(
+            "Unexpected PRD generation error for task %s...",
+            task_id_str[:8],
+        )
+        await _move_task_to_changes_requested(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_title_str=task_title_str,
+            failure_log_text_str=unexpected_prd_failure_log_text_str,
+            failure_reason_str=(
+                f"runner_kind={active_runner_kind_str} "
+                "PRD 生成在启动阶段发生异常，未能进入正式执行。"
+            ),
+        )
     finally:
         clear_task_background_activity(task_id_str)
 

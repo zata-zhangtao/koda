@@ -136,7 +136,7 @@ flowchart TD
 
 当任务真实阶段停在 `self_review_in_progress` 或 `test_in_progress`，且最近一轮 review / post-review lint 已通过、后台自动化也已经空闲时，前端会通过 `GET /api/tasks/card-metadata` 把 badge 展示覆盖为“等待用户”。这只是展示层状态，真实 `workflow_stage` 不会变成新的 `waiting_user`。
 
-对于关联 Git 项目的未关闭任务，后端现在还会返回一个只读 `branch_health` 投影：它基于 canonical branch `task/{task_id[:8]}` 检查本地分支是否存在，并把结果附加到 `TaskResponse` 与 `TaskCardMetadata`。只有任务已经创建过 `worktree_path`、也就是确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片与详情头部统一展示为“缺失分支待确认”。
+对于关联 Git 项目的未关闭任务，后端现在还会返回一个只读 `branch_health` 投影：它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这类真实 worktree 分支名，并把解析结果附加到 `TaskResponse` 与 `TaskCardMetadata`。只有任务已经创建过 `worktree_path`、也就是确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片与详情头部统一展示为“缺失分支待确认”。
 
 这个状态并不会自动关闭任务。前端会先要求用户打开完成检查单，确认时间线、项目代码和 worktree 现状后，才允许调用 `POST /api/tasks/{id}/manual-complete`。该接口会写入一条“检测到分支缺失后由用户人工确认完成”的审计 `DevLog`，然后直接把任务收敛到 `workflow_stage=done` 与 `lifecycle_status=CLOSED`，而不会再次执行普通 `git add / commit / rebase / merge / cleanup` 收尾链路。
 

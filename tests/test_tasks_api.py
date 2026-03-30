@@ -1057,6 +1057,57 @@ def test_complete_task_rejects_missing_branch_manual_completion_candidate(
     assert background_tasks.tasks == []
 
 
+def test_complete_task_accepts_semantic_task_branch_names(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Normal complete should continue when a semantic task branch still exists."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "semantic-complete-repo")
+    project_obj = Project(
+        display_name="Semantic repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-semantic-branch"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Semantic branch complete",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    semantic_branch_name_str = f"task/{task_obj.id[:8]}-complete"
+    _run_git_command(repo_root_path, ["branch", semantic_branch_name_str])
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    background_tasks = BackgroundTasks()
+    returned_task = complete_task(task_obj.id, background_tasks, db_session)
+
+    assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert returned_task.branch_health is not None
+    assert returned_task.branch_health.branch_exists is True
+    assert returned_task.branch_health.expected_branch_name == semantic_branch_name_str
+    assert returned_task.branch_health.manual_completion_candidate is False
+    assert len(background_tasks.tasks) == 1
+
+
 def test_get_task_exposes_runtime_flag(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -1092,6 +1143,75 @@ def test_get_task_exposes_runtime_flag(
     assert returned_task.is_codex_task_running is True
 
 
+def test_start_task_rejects_when_automation_is_already_running(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Start should return 409 while automation is already running."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Already running start reject",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: True)
+
+    with pytest.raises(HTTPException) as raised_error:
+        tasks_api.start_task(task_obj.id, BackgroundTasks(), db_session)
+
+    assert raised_error.value.status_code == 409
+    assert "already running" in str(raised_error.value.detail)
+
+
+def test_start_task_primes_task_log_file_before_background_runner_starts(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Start should create a readable placeholder task log before runner output."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Prime PRD log file",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+    monkeypatch.setattr(codex_runner, "_CODEX_LOG_DIR", tmp_path)
+
+    started_task = tasks_api.start_task(task_obj.id, BackgroundTasks(), db_session)
+    primed_task_log_path = tmp_path / f"koda-{task_obj.id[:8]}.log"
+
+    assert started_task.workflow_stage == WorkflowStage.PRD_GENERATING
+    assert primed_task_log_path.exists() is True
+    assert "已收到 PRD 生成请求" in primed_task_log_path.read_text(encoding="utf-8")
+
+
 def test_get_task_exposes_present_branch_health(
     db_session: Session,
     tmp_path: Path,
@@ -1125,6 +1245,51 @@ def test_get_task_exposes_present_branch_health(
     db_session.commit()
 
     expected_branch_name_str = f"task/{task_obj.id[:8]}"
+    _run_git_command(repo_root_path, ["branch", expected_branch_name_str])
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task = get_task(task_obj.id, db_session)
+
+    assert returned_task.branch_health is not None
+    assert returned_task.branch_health.expected_branch_name == expected_branch_name_str
+    assert returned_task.branch_health.branch_exists is True
+    assert returned_task.branch_health.manual_completion_candidate is False
+
+
+def test_get_task_exposes_semantic_branch_health(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task detail should expose the resolved semantic task branch name."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "semantic-detail-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Semantic branch health present",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    expected_branch_name_str = f"task/{task_obj.id[:8]}-complete"
     _run_git_command(repo_root_path, ["branch", expected_branch_name_str])
 
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
@@ -1263,6 +1428,52 @@ def test_manual_complete_task_rejects_tasks_with_existing_branch(
     db_session.commit()
 
     _run_git_command(repo_root_path, ["branch", f"task/{task_obj.id[:8]}"])
+
+    with pytest.raises(HTTPException) as raised_error:
+        manual_complete_task(task_obj.id, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "Task branch still exists" in str(raised_error.value.detail)
+
+
+def test_manual_complete_task_rejects_tasks_with_existing_semantic_branch(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Manual completion should fail when a semantic task branch still exists."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "semantic-manual-reject-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "task-worktree-existing-semantic-branch"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Manual complete semantic reject",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    _run_git_command(
+        repo_root_path,
+        ["branch", f"task/{task_obj.id[:8]}-complete"],
+    )
 
     with pytest.raises(HTTPException) as raised_error:
         manual_complete_task(task_obj.id, db_session)

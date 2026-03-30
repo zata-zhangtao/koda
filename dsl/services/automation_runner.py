@@ -63,6 +63,7 @@ async def run_task_prd(
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str | None = None,
+    auto_confirm_prd_and_execute_bool: bool | None = None,
 ) -> None:
     """Run PRD generation stage with the active runner.
 
@@ -73,6 +74,9 @@ async def run_task_prd(
         dev_log_text_list: Task context log texts.
         work_dir_path: Working directory.
         worktree_path_str: Optional worktree path.
+        auto_confirm_prd_and_execute_bool: Optional task strategy override for
+            skipping manual PRD confirmation and continuing directly to
+            implementation.
     """
     await run_codex_prd(
         task_id_str=task_id_str,
@@ -81,6 +85,7 @@ async def run_task_prd(
         dev_log_text_list=dev_log_text_list,
         work_dir_path=work_dir_path,
         worktree_path_str=worktree_path_str,
+        auto_confirm_prd_and_execute_bool=auto_confirm_prd_and_execute_bool,
     )
 
 

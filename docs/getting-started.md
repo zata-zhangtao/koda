@@ -160,6 +160,7 @@ just docs-build
 - `KODA_AUTOMATION_RUNNER=claude` 时检查 `claude`
 
 当前实现中，如果找不到对应可执行文件，后端会写入一条带 `runner_kind` 的 `BUG` 类型 DevLog，并把阶段回退到 `changes_requested`。
+同时也会生成对应的本地任务日志文件，因此“打开终端”应能直接看到缺失执行器的原因，而不是只提示“尚无日志文件”。
 
 ### 点击“打开终端”没有反应或报错
 

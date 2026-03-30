@@ -120,7 +120,8 @@ class TaskBranchHealthSchema(DSLResponseSchema):
     """Task 关联 Git 分支的派生健康状态.
 
     Attributes:
-        expected_branch_name: 基于任务 ID 推导出的 canonical branch 名称
+        expected_branch_name: 基于任务 ID 推导出的任务分支名；若探测到语义分支，
+            则返回匹配到的真实本地分支名
         branch_exists: 本地仓库中是否仍存在该 branch；无法确认时为 None
         worktree_exists: 当前记录的 worktree 目录是否仍存在
         manual_completion_candidate: 当前是否满足“缺失分支待人工确认完成”条件
@@ -129,7 +130,10 @@ class TaskBranchHealthSchema(DSLResponseSchema):
 
     expected_branch_name: str = Field(
         ...,
-        description="基于任务 ID 推导出的 canonical branch 名称",
+        description=(
+            "基于任务 ID 推导出的任务分支名；若探测到语义分支，"
+            "则返回匹配到的真实本地分支名"
+        ),
     )
     branch_exists: bool | None = Field(
         None,

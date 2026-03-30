@@ -70,6 +70,67 @@ class GitWorktreeService:
         return f"task/{task_short_id_str}"
 
     @staticmethod
+    def list_local_task_branch_names(
+        git_working_tree_path: Path,
+        task_id: str,
+    ) -> list[str] | None:
+        """List local branch names that belong to one task.
+
+        Args:
+            git_working_tree_path: Repository root or worktree path that belongs to the
+                target Git repository
+            task_id: Task UUID
+
+        Returns:
+            list[str] | None: Matching local branch names for the task. Returns an
+                empty list when no branch exists, and ``None`` when the repository
+                cannot be probed.
+        """
+        if not git_working_tree_path.exists():
+            return None
+
+        canonical_task_branch_name_str = GitWorktreeService.build_task_branch_name(
+            task_id
+        )
+        semantic_task_branch_pattern_str = f"{canonical_task_branch_name_str}-*"
+
+        try:
+            completed_process = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(git_working_tree_path),
+                    "branch",
+                    "--list",
+                    "--format=%(refname:short)",
+                    canonical_task_branch_name_str,
+                    semantic_task_branch_pattern_str,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return None
+
+        if completed_process.returncode != 0:
+            return None
+
+        deduplicated_branch_name_list: list[str] = []
+        for raw_branch_name_str in completed_process.stdout.splitlines():
+            normalized_branch_name_str = raw_branch_name_str.strip()
+            if (
+                not normalized_branch_name_str
+                or normalized_branch_name_str in deduplicated_branch_name_list
+            ):
+                continue
+            deduplicated_branch_name_list.append(normalized_branch_name_str)
+
+        return deduplicated_branch_name_list
+
+    @staticmethod
     def build_task_worktree_path(repo_root_path: Path, task_id: str) -> Path:
         """Build the default worktree path used by Koda.
 

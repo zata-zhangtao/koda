@@ -6,7 +6,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from dsl.services import codex_runner
+from dsl.services import automation_runner, codex_runner
 from dsl.services.runners.registry import (
     get_runner_by_kind,
     list_supported_runner_kind_list,
@@ -155,6 +155,57 @@ def test_run_codex_phase_records_runner_context_when_cli_missing(
         "runner_kind=claude" in log_text and "executable=claude" in log_text
         for log_text, _ in recorded_log_entry_list
     )
+
+
+def test_run_task_prd_forwards_auto_confirm_flag(monkeypatch) -> None:
+    """The runner-agnostic PRD wrapper should preserve the auto-confirm flag."""
+    recorded_call_dict: dict[str, object] = {}
+
+    async def fake_run_codex_prd(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        dev_log_text_list: list[str],
+        work_dir_path: Path,
+        worktree_path_str: str | None = None,
+        auto_confirm_prd_and_execute_bool: bool | None = None,
+    ) -> None:
+        recorded_call_dict.update(
+            {
+                "task_id_str": task_id_str,
+                "run_account_id_str": run_account_id_str,
+                "task_title_str": task_title_str,
+                "dev_log_text_list": dev_log_text_list,
+                "work_dir_path": work_dir_path,
+                "worktree_path_str": worktree_path_str,
+                "auto_confirm_prd_and_execute_bool": (
+                    auto_confirm_prd_and_execute_bool
+                ),
+            }
+        )
+
+    monkeypatch.setattr(automation_runner, "run_codex_prd", fake_run_codex_prd)
+
+    asyncio.run(
+        automation_runner.run_task_prd(
+            task_id_str="12345678-prd-wrapper",
+            run_account_id_str="run-account-1",
+            task_title_str="Forward auto confirm",
+            dev_log_text_list=["ctx line"],
+            work_dir_path=Path("/tmp/prd-wrapper"),
+            worktree_path_str="/tmp/repo-wt-prd-wrapper",
+            auto_confirm_prd_and_execute_bool=True,
+        )
+    )
+
+    assert recorded_call_dict["task_id_str"] == "12345678-prd-wrapper"
+    assert recorded_call_dict["run_account_id_str"] == "run-account-1"
+    assert recorded_call_dict["task_title_str"] == "Forward auto confirm"
+    assert recorded_call_dict["dev_log_text_list"] == ["ctx line"]
+    assert recorded_call_dict["work_dir_path"] == Path("/tmp/prd-wrapper")
+    assert recorded_call_dict["worktree_path_str"] == "/tmp/repo-wt-prd-wrapper"
+    assert recorded_call_dict["auto_confirm_prd_and_execute_bool"] is True
 
 
 def test_run_codex_task_with_claude_runner_keeps_stage_flow(

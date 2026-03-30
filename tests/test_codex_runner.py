@@ -842,6 +842,146 @@ def test_run_codex_prd_moves_to_changes_requested_and_sends_failure_notification
     assert any("PRD 生成失败" in log_text for log_text, _ in recorded_log_entry_list)
 
 
+def test_run_codex_prd_unexpected_preflight_exception_writes_task_log_and_fails(
+    tmp_path: Path,
+) -> None:
+    """Unexpected pre-phase errors should still create a task log and fail cleanly."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_stage_value_list: list[str] = []
+    recorded_failure_notification_list: list[tuple[str, str, str]] = []
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_advance_stage(task_id_str: str, next_stage_value: str) -> None:
+        recorded_stage_value_list.append(next_stage_value)
+
+    def fake_send_task_failed_notification(
+        task_id_str: str,
+        task_title_str: str,
+        failure_reason_str: str = "",
+    ) -> bool:
+        recorded_failure_notification_list.append(
+            (task_id_str, task_title_str, failure_reason_str)
+        )
+        return True
+
+    def fake_list_task_prd_file_paths(
+        worktree_dir_path: Path,
+        task_id_str: str,
+    ) -> list[Path]:
+        raise RuntimeError("preflight exploded")
+
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_advance_stage_in_db = codex_runner._advance_stage_in_db
+    original_send_task_failed_notification = email_service.send_task_failed_notification
+    original_list_task_prd_file_paths = codex_runner.list_task_prd_file_paths
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._advance_stage_in_db = fake_advance_stage
+        email_service.send_task_failed_notification = fake_send_task_failed_notification
+        codex_runner.list_task_prd_file_paths = fake_list_task_prd_file_paths
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        asyncio.run(
+            codex_runner.run_codex_prd(
+                task_id_str="12345678-prd-boom",
+                run_account_id_str="run-account-prd",
+                task_title_str="Generate PRD",
+                dev_log_text_list=["Need a PRD before implementation."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._advance_stage_in_db = original_advance_stage_in_db
+        email_service.send_task_failed_notification = (
+            original_send_task_failed_notification
+        )
+        codex_runner.list_task_prd_file_paths = original_list_task_prd_file_paths
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    task_log_path = tmp_path / "koda-12345678.log"
+    assert task_log_path.exists() is True
+    assert "preflight exploded" in task_log_path.read_text(encoding="utf-8")
+    assert recorded_stage_value_list == ["changes_requested"]
+    assert any(
+        "PRD 生成在启动阶段发生异常" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+    assert recorded_failure_notification_list == [
+        (
+            "12345678-prd-boom",
+            "Generate PRD",
+            "runner_kind=codex PRD 生成在启动阶段发生异常，未能进入正式执行。",
+        )
+    ]
+
+
+def test_run_codex_phase_missing_runner_writes_task_log(
+    tmp_path: Path,
+) -> None:
+    """Missing runner executables should still create a readable task log."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    original_which = codex_runner.shutil.which
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner.shutil.which = lambda _name: None
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        phase_result = asyncio.run(
+            codex_runner._run_codex_phase(
+                task_id_str="12345678-no-cli",
+                run_account_id_str="run-account-prd",
+                codex_prompt_text_str="Generate a PRD",
+                work_dir_path=tmp_path,
+                phase_log_label_str="codex-prd",
+                phase_display_name_str="PRD 生成",
+                cancelled_log_text_str="cancelled",
+                overwrite_existing_log_bool=True,
+            )
+        )
+    finally:
+        codex_runner.shutil.which = original_which
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    task_log_path = tmp_path / "koda-12345678.log"
+    assert phase_result.success is False
+    assert task_log_path.exists() is True
+    assert "未找到目标执行器可执行文件" in task_log_path.read_text(encoding="utf-8")
+    assert any(
+        "未找到目标执行器可执行文件" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+
+
 def test_run_codex_task_moves_to_changes_requested_and_sends_failure_notification_on_initial_exec_failure(
     tmp_path: Path,
 ) -> None:
