@@ -93,6 +93,7 @@
 15. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
 16. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
 17. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
+18. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
 
 ### 调度能力（新增）
 

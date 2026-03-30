@@ -1,8 +1,8 @@
 """任务 Runner 看门狗服务.
 
 负责周期扫描卡在 AI 执行阶段（prd_generating / implementation_in_progress /
-self_review_in_progress / test_in_progress）却没有活跃 runner 进程的任务，
-自动触发 resume 完成补救。
+self_review_in_progress / test_in_progress / pr_preparing）却没有活跃 runner 进程
+的任务，自动触发 resume 完成补救。
 
 典型触发场景：服务器重启后 BackgroundTask 丢失，或 runner 进程意外崩溃后
 状态未能回写到 changes_requested。
@@ -15,6 +15,7 @@ from datetime import timedelta
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
+from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.task import Task
 from utils.database import SessionLocal
@@ -34,10 +35,13 @@ _WATCHED_RUNNING_STAGES = {
     WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
     WorkflowStage.SELF_REVIEW_IN_PROGRESS,
     WorkflowStage.TEST_IN_PROGRESS,
+    WorkflowStage.PR_PREPARING,
 }
 
 # 进程内 resume 计数：task_id -> 本次服务进程已 resume 次数
 _session_resume_counts: dict[str, int] = {}
+
+_COMPLETION_STARTED_LOG_MARKER = "🚀 已收到完成请求"
 
 
 def _run_background_task_in_thread(background_task_callable) -> None:
@@ -101,6 +105,67 @@ def _attempt_resume_stuck_task(
     return True
 
 
+def _has_completion_started_since_stage_entry(task_obj: Task) -> bool:
+    """Return whether a stuck completion task already emitted its start signal.
+
+    Args:
+        task_obj: Candidate stuck task snapshot
+
+    Returns:
+        bool: True when a `pr_preparing` task has already written the
+            completion-start DevLog after entering the current stage
+    """
+    if task_obj.workflow_stage != WorkflowStage.PR_PREPARING:
+        return False
+
+    db_session: Session = SessionLocal()
+    try:
+        completion_started_log_row = (
+            db_session.query(DevLog.id)
+            .filter(
+                DevLog.task_id == task_obj.id,
+                DevLog.created_at >= task_obj.stage_updated_at,
+                DevLog.text_content.contains(_COMPLETION_STARTED_LOG_MARKER),
+            )
+            .first()
+        )
+        return completion_started_log_row is not None
+    finally:
+        db_session.close()
+
+
+def _clear_stale_pr_preparing_runtime_flag_if_needed(task_obj: Task) -> bool:
+    """Clear an orphaned in-memory running flag for completion when safe.
+
+    For `pr_preparing`, a real `run_codex_completion(...)` invocation writes the
+    completion-start DevLog before doing any heavy Git work. If the task has been
+    stuck longer than the watchdog threshold and still has no start log, the
+    process-local running flag is most likely orphaned from a background-task
+    scheduling failure rather than an active completion worker.
+
+    Args:
+        task_obj: Candidate stuck task snapshot
+
+    Returns:
+        bool: True when a stale runtime flag was cleared
+    """
+    if task_obj.workflow_stage != WorkflowStage.PR_PREPARING:
+        return False
+
+    if _has_completion_started_since_stage_entry(task_obj):
+        return False
+
+    from dsl.services.automation_runner import clear_task_background_activity
+
+    clear_task_background_activity(task_obj.id)
+    logger.warning(
+        "Watchdog: cleared stale completion runtime flag for task %s... "
+        "because pr_preparing never emitted the completion-start signal.",
+        task_obj.id[:8],
+    )
+    return True
+
+
 class TaskRunnerWatchdogService:
     """任务 Runner 看门狗服务."""
 
@@ -112,7 +177,8 @@ class TaskRunnerWatchdogService:
         - lifecycle_status == OPEN
         - workflow_stage 属于 _WATCHED_RUNNING_STAGES
         - stage_updated_at 早于 _STUCK_THRESHOLD_MINUTES 分钟前
-        - is_task_automation_running() 返回 False（无活跃 runner 进程）
+        - is_task_automation_running() 返回 False（无活跃 runner 进程），
+          或者 `pr_preparing` 仅残留一个未真正启动 completion 的进程内运行标记
         - 本次服务进程内 resume 次数未超过 _MAX_AUTO_RESUME_PER_SESSION
 
         Returns:
@@ -144,7 +210,14 @@ class TaskRunnerWatchdogService:
         for stuck_task_obj in stuck_task_candidate_list:
             task_id_str = stuck_task_obj.id
 
-            if is_task_automation_running(task_id_str):
+            task_is_running_bool = is_task_automation_running(task_id_str)
+            if (
+                task_is_running_bool
+                and _clear_stale_pr_preparing_runtime_flag_if_needed(stuck_task_obj)
+            ):
+                task_is_running_bool = is_task_automation_running(task_id_str)
+
+            if task_is_running_bool:
                 continue
 
             prior_resume_count_int = _session_resume_counts.get(task_id_str, 0)
