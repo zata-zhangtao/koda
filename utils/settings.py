@@ -279,6 +279,12 @@ class Config:
         20,
     )
 
+    # Runner 看门狗配置
+    RUNNER_WATCHDOG_POLL_INTERVAL_SECONDS: ClassVar[int] = _load_positive_int_env(
+        "RUNNER_WATCHDOG_POLL_INTERVAL_SECONDS",
+        60,
+    )
+
     @classmethod
     def ensure_log_directory(cls) -> None:
         """确保日志目录存在

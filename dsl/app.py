@@ -110,6 +110,33 @@ async def _run_task_schedule_dispatch_loop() -> None:
         await asyncio.sleep(config.SCHEDULER_POLL_INTERVAL_SECONDS)
 
 
+async def _run_task_runner_watchdog_loop() -> None:
+    """后台周期扫描卡死的 AI 执行任务并自动 resume."""
+    from dsl.services.task_runner_watchdog_service import TaskRunnerWatchdogService
+
+    # 首次延迟 60s，等服务器完全启动后再开始扫描
+    await asyncio.sleep(60)
+    while True:
+        try:
+            resumed_task_count_int = await asyncio.to_thread(
+                TaskRunnerWatchdogService.scan_and_resume_stuck_tasks
+            )
+            if resumed_task_count_int > 0:
+                logger.info(
+                    "Watchdog: auto-resumed %s stuck task(s)",
+                    resumed_task_count_int,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as watchdog_error:
+            logger.exception(
+                "Task runner watchdog loop failed: %s",
+                watchdog_error,
+            )
+
+        await asyncio.sleep(config.RUNNER_WATCHDOG_POLL_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理.
@@ -135,6 +162,9 @@ async def lifespan(app: FastAPI):
         if config.SCHEDULER_ENABLE
         else None
     )
+    task_runner_watchdog_task = asyncio.create_task(
+        _run_task_runner_watchdog_loop()
+    )
 
     try:
         yield
@@ -146,6 +176,9 @@ async def lifespan(app: FastAPI):
             task_schedule_dispatch_task.cancel()
             with suppress(asyncio.CancelledError):
                 await task_schedule_dispatch_task
+        task_runner_watchdog_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task_runner_watchdog_task
 
         # 关闭时清理
         logger.info("DSL application shutting down")
