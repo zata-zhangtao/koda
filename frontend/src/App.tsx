@@ -37,6 +37,7 @@ import {
   taskQaApi,
 } from "./api/client";
 import { PrdPendingQuestionsPanel } from "./components/PrdPendingQuestionsPanel";
+import { useInertSubtree } from "./hooks/useInertSubtree";
 import { useSelectedTaskPrdFile } from "./hooks/useSelectedTaskPrdFile";
 import { SettingsModal } from "./components/SettingsModal";
 import {
@@ -54,6 +55,16 @@ import {
   setTaskScopedPrdPendingQuestionAnswerSelectionMap,
 } from "./utils/prd_pending_questions";
 import { reconcileTaskListWithReturnedTaskSnapshot } from "./utils/task_list";
+import {
+  MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS,
+  buildWorkspaceTaskBuckets,
+  resolveAutoWorkspaceSwitchTargetView,
+  resolveWorkspaceDetailSelection,
+  resolveManualWorkspaceSwitch,
+  resolveWorkspaceSelectedTaskId,
+  resolveWorkspaceViewTaskList,
+  type WorkspaceView,
+} from "./utils/workspace_view";
 import {
   AIProcessingStatus,
   DevLogStateTag,
@@ -91,7 +102,6 @@ type CompactTimelineCategory =
   | "delivery"
   | "system"
   | "changes";
-type WorkspaceView = "active" | "completed" | "changes";
 type AttachmentKind = "image" | "video" | "file";
 type ComposerMode = "feedback" | "sidecar_qa";
 
@@ -465,6 +475,8 @@ function App() {
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
+  const [lastManualWorkspaceSwitchAt, setLastManualWorkspaceSwitchAt] =
+    useState<number | null>(null);
   const [activeComposerMode, setActiveComposerMode] =
     useState<ComposerMode>("feedback");
   const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
@@ -675,54 +687,45 @@ function App() {
     () => buildDevLogsByTaskId(allDevLogList),
     [allDevLogList]
   );
-  const activeTaskList = useMemo(
+  const changedTaskIdSet = useMemo(
     () =>
-      taskList.filter(
-        (taskItem) =>
-          taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-          taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
-          !hasRequirementUpdateLog(devLogsByTaskId[taskItem.id] ?? [])
+      new Set(
+        taskList
+          .filter((taskItem) =>
+            hasRequirementUpdateLog(devLogsByTaskId[taskItem.id] ?? [])
+          )
+          .map((taskItem) => taskItem.id)
       ),
     [taskList, devLogsByTaskId]
   );
-  const completedTaskList = useMemo(
+  const workspaceTaskBuckets = useMemo(
     () =>
-      taskList.filter(
-        (taskItem) => taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED
-      ),
-    [taskList]
-  );
-  const changedTaskList = useMemo(
-    () =>
-      taskList.filter((taskItem) => {
-        const taskDevLogList = devLogsByTaskId[taskItem.id] ?? [];
-        return (
-          taskItem.lifecycle_status === TaskLifecycleStatus.DELETED ||
-          (taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-            hasRequirementUpdateLog(taskDevLogList))
-        );
+      buildWorkspaceTaskBuckets({
+        taskList,
+        changedTaskIdSet,
       }),
-    [taskList, devLogsByTaskId]
+    [changedTaskIdSet, taskList]
   );
-  const visibleTaskList = useMemo(() => {
-    if (workspaceView === "completed") {
-      return completedTaskList;
-    }
-
-    if (workspaceView === "changes") {
-      return changedTaskList;
-    }
-
-    return activeTaskList;
-  }, [activeTaskList, changedTaskList, completedTaskList, workspaceView]);
-  const visibleTaskIds = useMemo(
-    () => visibleTaskList.map((taskItem) => taskItem.id).join(","),
-    [visibleTaskList]
+  const activeTaskList = workspaceTaskBuckets.activeTaskList;
+  const completedTaskList = workspaceTaskBuckets.completedTaskList;
+  const changedTaskList = workspaceTaskBuckets.changedTaskList;
+  const visibleTaskList = useMemo(
+    () => resolveWorkspaceViewTaskList(workspaceView, workspaceTaskBuckets),
+    [workspaceTaskBuckets, workspaceView]
   );
   const deferredSelectedTaskId = useDeferredValue(selectedTaskId);
-  const detailTaskId = deferredSelectedTaskId;
-  const isTaskSelectionPending =
-    selectedTaskId !== null && selectedTaskId !== deferredSelectedTaskId;
+  const workspaceDetailSelection = useMemo(
+    () =>
+      resolveWorkspaceDetailSelection({
+        deferredSelectedTaskId,
+        selectedTaskId,
+        visibleTaskList,
+      }),
+    [deferredSelectedTaskId, selectedTaskId, visibleTaskList]
+  );
+  const detailTaskId = workspaceDetailSelection.detailTaskId;
+  const isTaskSelectionPending = workspaceDetailSelection.isTaskSelectionPending;
+  const detailBodyRef = useInertSubtree<HTMLDivElement>(isTaskSelectionPending);
   // Primary: find in current workspace view.
   // Fallback: find in full task list so the timeline never disappears when a task
   // transitions to a different workspace view (e.g. CLOSED → completed tab).
@@ -1178,6 +1181,29 @@ function App() {
   }
 
   useEffect(() => {
+    if (lastManualWorkspaceSwitchAt === null) {
+      return;
+    }
+
+    const elapsedSinceManualWorkspaceSwitchMs =
+      Date.now() - lastManualWorkspaceSwitchAt;
+    const remainingManualWorkspaceGuardMs =
+      MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS -
+      elapsedSinceManualWorkspaceSwitchMs;
+    if (remainingManualWorkspaceGuardMs <= 0) {
+      setLastManualWorkspaceSwitchAt(null);
+      return;
+    }
+
+    const manualWorkspaceGuardTimeoutId = window.setTimeout(() => {
+      setLastManualWorkspaceSwitchAt(null);
+    }, remainingManualWorkspaceGuardMs);
+    return () => {
+      window.clearTimeout(manualWorkspaceGuardTimeoutId);
+    };
+  }, [lastManualWorkspaceSwitchAt]);
+
+  useEffect(() => {
     if (!hasAnyTaskInActiveExecution) {
       return;
     }
@@ -1230,39 +1256,53 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (visibleTaskList.length === 0) {
-      setSelectedTaskId(null);
+    const nextSelectedTaskId = resolveWorkspaceSelectedTaskId({
+      candidateSelectedTaskId: selectedTaskId,
+      visibleTaskList,
+    });
+    if (nextSelectedTaskId === selectedTaskId) {
       return;
     }
 
-    setSelectedTaskId((previousSelectedTaskId) => {
-      if (
-        previousSelectedTaskId &&
-        visibleTaskList.some((taskItem) => taskItem.id === previousSelectedTaskId)
-      ) {
-        return previousSelectedTaskId;
-      }
-
-      return visibleTaskList[0].id;
-    });
-  }, [workspaceView, visibleTaskIds, visibleTaskList]);
+    setSelectedTaskId(nextSelectedTaskId);
+  }, [selectedTaskId, visibleTaskList]);
 
   // Auto-switch workspace view when the selected task moves out of the current view
   // (e.g. task completes its git ops and lifecycle_status becomes CLOSED while the
   // user is still on the "active" tab).
   useEffect(() => {
-    if (!selectedTaskId) return;
-    if (visibleTaskIds.includes(selectedTaskId)) return;
-
-    const missingTask = taskList.find((t) => t.id === selectedTaskId);
-    if (!missingTask) return;
-
-    if (missingTask.lifecycle_status === TaskLifecycleStatus.CLOSED) {
-      setWorkspaceView("completed");
-    } else if (missingTask.lifecycle_status === TaskLifecycleStatus.DELETED) {
-      setWorkspaceView("changes");
+    const nextWorkspaceView = resolveAutoWorkspaceSwitchTargetView({
+      changedTaskIdSet,
+      currentTimestamp: Date.now(),
+      currentWorkspaceView: workspaceView,
+      lastManualWorkspaceSwitchAt,
+      selectedTaskId,
+      taskList,
+      visibleTaskList,
+    });
+    if (!nextWorkspaceView) {
+      return;
     }
-  }, [selectedTaskId, visibleTaskIds, taskList]);
+
+    const nextVisibleTaskList = resolveWorkspaceViewTaskList(
+      nextWorkspaceView,
+      workspaceTaskBuckets
+    );
+    const nextSelectedTaskId = resolveWorkspaceSelectedTaskId({
+      candidateSelectedTaskId: selectedTaskId,
+      visibleTaskList: nextVisibleTaskList,
+    });
+    setWorkspaceView(nextWorkspaceView);
+    setSelectedTaskId(nextSelectedTaskId);
+  }, [
+    changedTaskIdSet,
+    lastManualWorkspaceSwitchAt,
+    selectedTaskId,
+    taskList,
+    visibleTaskList,
+    workspaceTaskBuckets,
+    workspaceView,
+  ]);
 
   useEffect(() => {
     setIsCreatePanelOpen(false);
@@ -1290,7 +1330,7 @@ function App() {
     setTaskScheduleDraftRunAtText("");
     setTaskScheduleDraftCronExprText("");
     setTaskScheduleDraftIsEnabled(true);
-  }, [workspaceView, detailTaskId]);
+  }, [detailTaskId]);
 
   useEffect(() => {
     setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
@@ -3035,6 +3075,26 @@ function App() {
     }
   }
 
+  function handleWorkspaceViewTabClick(targetWorkspaceView: WorkspaceView): void {
+    const nextWorkspaceSwitch = resolveManualWorkspaceSwitch({
+      currentSelectedTaskId: selectedTaskId,
+      targetWorkspaceView,
+      workspaceTaskBuckets,
+    });
+    const shouldIgnoreNoopWorkspaceClick =
+      nextWorkspaceSwitch.nextWorkspaceView === workspaceView &&
+      nextWorkspaceSwitch.nextSelectedTaskId === selectedTaskId;
+    if (shouldIgnoreNoopWorkspaceClick) {
+      return;
+    }
+
+    setLastManualWorkspaceSwitchAt(Date.now());
+    startTransition(() => {
+      setWorkspaceView(nextWorkspaceSwitch.nextWorkspaceView);
+      setSelectedTaskId(nextWorkspaceSwitch.nextSelectedTaskId);
+    });
+  }
+
   return (
     <div className="devflow-app">
       <header className="devflow-header">
@@ -3049,11 +3109,11 @@ function App() {
             <div className="devflow-view-switch" role="tablist" aria-label="Workspace view">
               {(
                 [
-                  ["active", `Active ${activeTaskList.length}`],
-                  ["completed", `Completed ${completedTaskList.length}`],
-                  ["changes", `Changes ${changedTaskList.length}`],
+                  ["active", "Active", activeTaskList.length],
+                  ["completed", "Completed", completedTaskList.length],
+                  ["changes", "Changes", changedTaskList.length],
                 ] as const
-              ).map(([viewName, viewLabel]) => (
+              ).map(([viewName, viewLabel, viewCount]) => (
                 <button
                   key={viewName}
                   type="button"
@@ -3065,12 +3125,11 @@ function App() {
                       "devflow-view-switch__button--selected"
                   )}
                   onClick={() => {
-                    startTransition(() => {
-                      setWorkspaceView(viewName);
-                    });
+                    handleWorkspaceViewTabClick(viewName);
                   }}
                 >
-                  {viewLabel}
+                  <span className="devflow-view-switch__label">{viewLabel}</span>
+                  <span className="devflow-view-switch__count">{viewCount}</span>
                 </button>
               ))}
             </div>
@@ -3502,18 +3561,29 @@ function App() {
           </section>
 
           <section className="devflow-column devflow-column--detail">
-            {isTaskSelectionPending ? (
-              <div className="devflow-empty-detail">
-                <div className="devflow-empty-detail__icon">
-                  <ChevronRightIcon className="devflow-icon devflow-icon--large" />
-                </div>
-                <p className="devflow-empty-detail__text">
-                  正在切换需求详情...
-                </p>
-              </div>
-            ) : selectedTask ? (
-              <div className="devflow-detail">
-                <div className="devflow-detail__body">
+            {selectedTask ? (
+              <div className="devflow-detail" aria-busy={isTaskSelectionPending}>
+                {isTaskSelectionPending ? (
+                  <div
+                    className="devflow-detail__transition-overlay"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <div className="devflow-detail__transition-overlay-card">
+                      <span className="devflow-detail__transition-dot" />
+                      <span>正在切换需求详情...</span>
+                    </div>
+                  </div>
+                ) : null}
+                <div
+                  className={joinClassNames(
+                    "devflow-detail__body",
+                    isTaskSelectionPending &&
+                      "devflow-detail__body--transition-locked"
+                  )}
+                  ref={detailBodyRef}
+                  aria-hidden={isTaskSelectionPending}
+                >
                   <div className="devflow-detail__header">
                     <div className="devflow-detail__copy">
                       <div className="devflow-detail__title-row">
@@ -4899,7 +4969,9 @@ function App() {
                   <ChevronRightIcon className="devflow-icon devflow-icon--large" />
                 </div>
                 <p className="devflow-empty-detail__text">
-                  {getWorkspaceDetailEmptyState(workspaceView)}
+                  {isTaskSelectionPending
+                    ? "正在切换需求详情..."
+                    : getWorkspaceDetailEmptyState(workspaceView)}
                 </p>
               </div>
             )}

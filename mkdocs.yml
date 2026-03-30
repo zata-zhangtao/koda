@@ -75,5 +75,6 @@ nav:
       - PRD 待确认问题下拉 Demo: prototypes/prd-pending-question-dropdown-demo.html
       - 缺失分支完成确认: prototypes/missing-branch-complete-demo.html
       - 确认 Complete 刷新修复: prototypes/manual-complete-refresh-demo.html
+      - 工作区 Tab 稳定性 Demo: prototypes/workspace-view-tab-stability-demo.html
   - API:
       - 参考: api/references.md

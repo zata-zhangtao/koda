@@ -182,8 +182,13 @@ img {
 }
 
 .devflow-view-switch__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 34px;
-  padding: 0 14px;
+  width: 118px;
+  padding: 0 12px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -192,10 +197,33 @@ img {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
   transition:
     background-color 160ms ease,
     color 160ms ease,
     transform 160ms ease;
+}
+
+.devflow-view-switch__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devflow-view-switch__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.6ch;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.06);
+  font-size: 0.68rem;
+  line-height: 1.6;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 .devflow-view-switch__button:hover {
@@ -205,6 +233,11 @@ img {
 
 .devflow-view-switch__button--selected {
   background: var(--devflow-black);
+  color: #ffffff;
+}
+
+.devflow-view-switch__button--selected .devflow-view-switch__count {
+  background: rgba(255, 255, 255, 0.16);
   color: #ffffff;
 }
 
@@ -540,16 +573,57 @@ img {
 }
 
 .devflow-detail {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   gap: 12px;
 }
 
+.devflow-detail__transition-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), transparent 26%);
+  pointer-events: auto;
+}
+
+.devflow-detail__transition-overlay-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--devflow-shadow-soft);
+  color: #57534e;
+  font-size: 0.76rem;
+  font-weight: 700;
+  backdrop-filter: blur(12px);
+}
+
+.devflow-detail__transition-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--devflow-emerald);
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
+}
+
 .devflow-detail__body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.devflow-detail__body--transition-locked {
+  pointer-events: none;
+  user-select: none;
 }
 
 .devflow-detail__header {
@@ -3363,6 +3437,7 @@ img {
   .devflow-view-switch__button {
     flex: 1;
     min-width: 0;
+    width: auto;
     padding: 0 10px;
     font-size: 0.65rem;
     letter-spacing: 0.05em;
