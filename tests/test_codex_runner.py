@@ -62,6 +62,7 @@ class FakeCodexProcess:
         output_line_list: list[str],
         planned_return_code_int: int = 0,
         pid_int: int = 1000,
+        include_stdin_bool: bool = False,
     ) -> None:
         """Initialize the fake process state.
 
@@ -69,8 +70,10 @@ class FakeCodexProcess:
             output_line_list: Stdout lines produced by the fake process
             planned_return_code_int: Exit code returned by wait()
             pid_int: Fake process ID
+            include_stdin_bool: Whether to expose a writable stdin stub
         """
         self.stdout = FakeCodexStdout(output_line_list)
+        self.stdin = FakeCodexStdin() if include_stdin_bool else None
         self.returncode: int | None = None
         self._planned_return_code_int = planned_return_code_int
         self.pid = pid_int
@@ -83,6 +86,35 @@ class FakeCodexProcess:
     def kill(self) -> None:
         """Mark the fake process as killed."""
         self.returncode = -9
+
+
+class FakeCodexStdin:
+    """Async stdin stub for fake subprocesses."""
+
+    def __init__(self) -> None:
+        """Initialize writable buffer state."""
+        self.written_bytes = b""
+        self.closed = False
+        self.wait_closed_called = False
+
+    def write(self, data_bytes: bytes) -> None:
+        """Append prompt bytes to the buffer.
+
+        Args:
+            data_bytes: Prompt bytes written by the caller.
+        """
+        self.written_bytes += data_bytes
+
+    async def drain(self) -> None:
+        """Simulate an asyncio drain call."""
+
+    def close(self) -> None:
+        """Mark the stdin pipe as closed."""
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        """Record that wait_closed was awaited."""
+        self.wait_closed_called = True
 
 
 def build_completed_process(
@@ -565,6 +597,141 @@ def test_build_codex_lint_fix_prompt_preserves_latest_lint_output() -> None:
     assert "uv run pre-commit run --all-files" in lint_fix_prompt_text
     assert "tests/test_codex_runner.py:10:1: F401" in lint_fix_prompt_text
     assert "不要执行 `git commit`" in lint_fix_prompt_text
+
+
+def test_create_codex_subprocess_sends_prompt_via_stdin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Codex subprocess wrapper should avoid prompt argv inflation by using stdin."""
+    recorded_call_dict: dict[str, object] = {}
+    fake_process = FakeCodexProcess(
+        output_line_list=[],
+        include_stdin_bool=True,
+    )
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        recorded_call_dict["args"] = args
+        recorded_call_dict["kwargs"] = kwargs
+        return fake_process
+
+    monkeypatch.setattr(
+        codex_runner.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    created_process = asyncio.run(
+        codex_runner._create_codex_subprocess(
+            codex_executable_path_str="/usr/bin/codex",
+            codex_prompt_text_str="large prompt body",
+            work_dir_path=tmp_path,
+        )
+    )
+
+    assert created_process is fake_process
+    assert recorded_call_dict["args"] == (
+        "/usr/bin/codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-",
+    )
+    recorded_kwargs = recorded_call_dict["kwargs"]
+    assert recorded_kwargs["cwd"] == str(tmp_path)
+    assert recorded_kwargs["stdin"] == asyncio.subprocess.PIPE
+    assert fake_process.stdin is not None
+    assert fake_process.stdin.written_bytes == b"large prompt body"
+    assert fake_process.stdin.closed is True
+    assert fake_process.stdin.wait_closed_called is True
+
+
+def test_create_claude_subprocess_sends_prompt_via_stdin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Claude subprocess wrapper should avoid prompt argv inflation by using stdin."""
+    recorded_call_dict: dict[str, object] = {}
+    fake_process = FakeCodexProcess(
+        output_line_list=[],
+        include_stdin_bool=True,
+    )
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeCodexProcess:
+        recorded_call_dict["args"] = args
+        recorded_call_dict["kwargs"] = kwargs
+        return fake_process
+
+    monkeypatch.setattr(
+        codex_runner.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    created_process = asyncio.run(
+        codex_runner._create_claude_subprocess(
+            claude_executable_path_str="/usr/bin/claude",
+            claude_prompt_text_str="claude prompt body",
+            work_dir_path=tmp_path,
+        )
+    )
+
+    assert created_process is fake_process
+    assert recorded_call_dict["args"] == (
+        "/usr/bin/claude",
+        "-p",
+        "--dangerously-skip-permissions",
+    )
+    recorded_kwargs = recorded_call_dict["kwargs"]
+    assert recorded_kwargs["cwd"] == str(tmp_path)
+    assert recorded_kwargs["stdin"] == asyncio.subprocess.PIPE
+    assert fake_process.stdin is not None
+    assert fake_process.stdin.written_bytes == b"claude prompt body"
+    assert fake_process.stdin.closed is True
+    assert fake_process.stdin.wait_closed_called is True
+
+
+def test_run_logged_runner_conflict_resolution_passes_prompt_via_stdin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Conflict resolution should send large runner prompts through stdin instead of argv."""
+    recorded_run_call_dict: dict[str, object] = {}
+    task_log_path = tmp_path / "task.log"
+
+    def fake_subprocess_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_run_call_dict["args"] = args
+        recorded_run_call_dict["kwargs"] = kwargs
+        return build_completed_process(
+            command_argument_list=list(args[0]),
+            return_code_int=0,
+            stdout_text="resolved conflicts",
+        )
+
+    monkeypatch.setattr(codex_runner.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(codex_runner.subprocess, "run", fake_subprocess_run)
+
+    completed_process = codex_runner._run_logged_runner_conflict_resolution(
+        task_id_str="12345678-conflict",
+        run_account_id_str="run-account-1",
+        task_log_path=task_log_path,
+        task_title_str="ARG_LENGTH_GUARD_TITLE",
+        dev_log_text_list=["recent automation history"],
+        repo_path=tmp_path,
+        operation_kind_str="rebase",
+    )
+
+    assert completed_process is not None
+    recorded_command_argument_list = list(recorded_run_call_dict["args"][0])
+    recorded_run_kwargs = recorded_run_call_dict["kwargs"]
+    assert recorded_command_argument_list == [
+        "/usr/bin/codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-",
+    ]
+    assert recorded_run_kwargs["input"] is not None
+    assert "ARG_LENGTH_GUARD_TITLE" in recorded_run_kwargs["input"]
+    assert "ARG_LENGTH_GUARD_TITLE" not in " ".join(recorded_command_argument_list)
 
 
 def test_run_codex_prd_moves_to_changes_requested_and_sends_failure_notification(

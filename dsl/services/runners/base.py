@@ -27,10 +27,22 @@ class AutomationRunner(Protocol):
         """Build CLI arguments for non-interactive execution.
 
         Args:
-            prompt_text_str: Prompt text passed to the runner CLI.
+            prompt_text_str: Prompt text for the runner CLI.
 
         Returns:
             list[str]: Argument list without the executable itself.
+                Implementations may consume the prompt either via argv or stdin.
+        """
+
+    def build_stdin_prompt_text(self, prompt_text_str: str) -> str | None:
+        """Return prompt text that should be piped to stdin, if any.
+
+        Args:
+            prompt_text_str: Prompt text for the runner CLI.
+
+        Returns:
+            str | None: Prompt text to write to stdin, or ``None`` when argv
+                transport is used instead.
         """
 
     def build_command_preview(self) -> str:

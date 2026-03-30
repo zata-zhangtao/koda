@@ -181,15 +181,16 @@
 
 ```bash
 # codex
-codex exec --dangerously-bypass-approvals-and-sandbox "<prompt>"
+printf '%s' "<prompt>" | codex exec --dangerously-bypass-approvals-and-sandbox -
 
 # claude
-claude -p "<prompt>" --dangerously-skip-permissions
+printf '%s' "<prompt>" | claude -p --dangerously-skip-permissions
 ```
 
 实现细节如下：
 
 - `cwd` 由 Python `asyncio.create_subprocess_exec` 指定为项目根目录或 worktree
+- Prompt 文本通过 `stdin` 发送给 CLI，避免超长上下文触发操作系统的 argv 长度限制
 - `stderr` 被合并到 `stdout`
 - 输出按行读取
 - 每积累 5 行，或等待 1.5 秒，就批量写入一条 `DevLog`

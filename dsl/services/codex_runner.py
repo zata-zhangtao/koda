@@ -1005,6 +1005,9 @@ def _run_logged_runner_conflict_resolution(
     )
 
     _RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
+    runner_stdin_prompt_text = active_runner_obj.build_stdin_prompt_text(
+        runner_prompt_text_str
+    )
 
     try:
         completed_process = subprocess.run(
@@ -1014,6 +1017,7 @@ def _run_logged_runner_conflict_resolution(
             ],
             cwd=str(repo_path),
             capture_output=True,
+            input=runner_stdin_prompt_text,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -1485,16 +1489,22 @@ async def _create_codex_subprocess(
     Returns:
         asyncio.subprocess.Process: 已启动的子进程对象
     """
-    return await asyncio.create_subprocess_exec(
+    codex_process_obj = await asyncio.create_subprocess_exec(
         codex_executable_path_str,
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
-        codex_prompt_text_str,
+        "-",
         cwd=str(work_dir_path),
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
+    await _write_prompt_to_runner_stdin(
+        runner_process_obj=codex_process_obj,
+        prompt_text_str=codex_prompt_text_str,
+    )
+    return codex_process_obj
 
 
 async def _create_claude_subprocess(
@@ -1512,16 +1522,46 @@ async def _create_claude_subprocess(
     Returns:
         asyncio.subprocess.Process: 已启动的子进程对象
     """
-    return await asyncio.create_subprocess_exec(
+    claude_process_obj = await asyncio.create_subprocess_exec(
         claude_executable_path_str,
         "-p",
-        claude_prompt_text_str,
         "--dangerously-skip-permissions",
         cwd=str(work_dir_path),
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
+    await _write_prompt_to_runner_stdin(
+        runner_process_obj=claude_process_obj,
+        prompt_text_str=claude_prompt_text_str,
+    )
+    return claude_process_obj
+
+
+async def _write_prompt_to_runner_stdin(
+    runner_process_obj: asyncio.subprocess.Process,
+    prompt_text_str: str,
+) -> None:
+    """Write UTF-8 prompt text to a runner subprocess stdin pipe.
+
+    Args:
+        runner_process_obj: Started runner subprocess.
+        prompt_text_str: Prompt text to send.
+
+    Raises:
+        RuntimeError: If the subprocess has no stdin pipe.
+    """
+    runner_stdin = runner_process_obj.stdin
+    if runner_stdin is None:
+        raise RuntimeError("Runner subprocess stdin is unavailable.")
+
+    runner_stdin.write(prompt_text_str.encode("utf-8"))
+    await runner_stdin.drain()
+    runner_stdin.close()
+    wait_closed_method = getattr(runner_stdin, "wait_closed", None)
+    if callable(wait_closed_method):
+        await wait_closed_method()
 
 
 async def _create_runner_subprocess(
@@ -1553,15 +1593,26 @@ async def _create_runner_subprocess(
             claude_prompt_text_str=runner_prompt_text_str,
             work_dir_path=work_dir_path,
         )
-
-    return await asyncio.create_subprocess_exec(
+    runner_stdin_prompt_text = runner_obj.build_stdin_prompt_text(
+        runner_prompt_text_str
+    )
+    runner_process_obj = await asyncio.create_subprocess_exec(
         runner_executable_path_str,
         *runner_obj.build_exec_argument_list(runner_prompt_text_str),
         cwd=str(work_dir_path),
+        stdin=(
+            asyncio.subprocess.PIPE if runner_stdin_prompt_text is not None else None
+        ),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
+    if runner_stdin_prompt_text is not None:
+        await _write_prompt_to_runner_stdin(
+            runner_process_obj=runner_process_obj,
+            prompt_text_str=runner_stdin_prompt_text,
+        )
+    return runner_process_obj
 
 
 def build_codex_prompt(

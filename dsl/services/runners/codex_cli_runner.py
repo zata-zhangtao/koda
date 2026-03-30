@@ -23,11 +23,23 @@ class CodexCliRunner:
         Returns:
             list[str]: Codex argument list without executable.
         """
+        del prompt_text_str
         return [
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
-            prompt_text_str,
+            "-",
         ]
+
+    def build_stdin_prompt_text(self, prompt_text_str: str) -> str | None:
+        """Return Codex prompt text for stdin transport.
+
+        Args:
+            prompt_text_str: Prompt text passed to Codex.
+
+        Returns:
+            str | None: Prompt text written to stdin.
+        """
+        return prompt_text_str
 
     def build_command_preview(self) -> str:
         """Return the command preview used in diagnostics.

@@ -26,11 +26,22 @@ class ClaudeCliRunner:
         Returns:
             list[str]: Claude argument list without executable.
         """
+        del prompt_text_str
         return [
             "-p",
-            prompt_text_str,
             "--dangerously-skip-permissions",
         ]
+
+    def build_stdin_prompt_text(self, prompt_text_str: str) -> str | None:
+        """Return Claude prompt text for stdin transport.
+
+        Args:
+            prompt_text_str: Prompt text passed to Claude Code.
+
+        Returns:
+            str | None: Prompt text written to stdin.
+        """
+        return prompt_text_str
 
     def build_command_preview(self) -> str:
         """Return the command preview used in diagnostics.

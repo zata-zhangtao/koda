@@ -60,6 +60,7 @@
 当前 Prompt 不是“只返回一段文本”这么简单，它们会影响真实工作流：
 
 - 决定 runner CLI（`codex` / `claude`）在什么目录运行
+- 决定 Prompt 是通过 argv 还是 `stdin` 传给 CLI（当前内置执行器统一走 `stdin`，以规避超长参数失败）
 - 决定是否会生成 PRD 文件
 - 决定点击 `Complete` 后后台 Git 自动化如何描述 `commit`、`rebase`、Codex 冲突修复与 merge
 - 决定哪些内容被写回 `DevLog`
