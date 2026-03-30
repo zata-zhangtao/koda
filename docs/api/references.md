@@ -71,6 +71,7 @@
         - execute_task
         - resume_task
         - cancel_task
+        - destroy_task
         - get_task_prd_file
         - open_task_in_editor
         - open_task_in_trae
@@ -95,6 +96,12 @@
         - list_task_qa_messages
         - create_task_qa_message
         - convert_task_qa_message_to_feedback_draft
+
+::: dsl.schemas.task_schema.TaskResponseSchema
+    handler: python
+
+::: dsl.schemas.task_schema.TaskDestroySchema
+    handler: python
 
 ::: dsl.api.logs
     handler: python
@@ -216,7 +223,8 @@
         - update_workflow_stage
         - start_task
         - execute_task
-        - update_task_title
+        - update_task
+        - destroy_task
         - get_active_task
 
 ::: dsl.services.task_notification_service.TaskNotificationService

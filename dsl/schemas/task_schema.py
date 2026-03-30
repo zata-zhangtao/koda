@@ -6,7 +6,7 @@
 from datetime import datetime
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.schemas.base import DSLResponseSchema
@@ -63,6 +63,7 @@ class TaskUpdateSchema(BaseModel):
     Attributes:
         task_title: 更新后的任务标题
         requirement_brief: 更新后的需求描述文本（可选）
+        project_id: 更新后的关联项目 ID；仅 backlog 阶段允许改绑
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -71,6 +72,48 @@ class TaskUpdateSchema(BaseModel):
         ..., min_length=1, max_length=200, description="更新后的任务标题"
     )
     requirement_brief: str | None = Field(None, description="更新后的需求描述文本")
+    project_id: str | None = Field(
+        None,
+        description="更新后的关联项目 ID；传 null 表示取消项目绑定",
+    )
+
+
+class TaskDestroySchema(BaseModel):
+    """销毁已启动任务的请求模式.
+
+    Attributes:
+        destroy_reason: 销毁原因；必填，提交后会持久化到 Task
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+    destroy_reason: str = Field(
+        ...,
+        min_length=5,
+        max_length=200,
+        description="销毁原因；去除首尾空白后至少 5 个字符",
+    )
+
+    @field_validator("destroy_reason")
+    @classmethod
+    def validate_destroy_reason(cls, destroy_reason_str: str) -> str:
+        """规范化并校验销毁原因.
+
+        Args:
+            destroy_reason_str: 原始销毁原因输入
+
+        Returns:
+            str: 去除首尾空白后的销毁原因
+
+        Raises:
+            ValueError: 当原因为空白或长度不足时抛出
+        """
+        normalized_destroy_reason = destroy_reason_str.strip()
+        if len(normalized_destroy_reason) < 5:
+            raise ValueError(
+                "destroy_reason must contain at least 5 non-space characters"
+            )
+        return normalized_destroy_reason
 
 
 class TaskResponseSchema(DSLResponseSchema):
@@ -86,6 +129,8 @@ class TaskResponseSchema(DSLResponseSchema):
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
         created_at: 创建时间
         closed_at: 关闭时间
+        destroy_reason: 已启动任务销毁原因（若存在）
+        destroyed_at: 任务进入 deleted history 的时间（若存在）
         log_count: 日志条目数量（计算字段）
         is_codex_task_running: 后台自动化是否仍在运行
     """
@@ -110,6 +155,11 @@ class TaskResponseSchema(DSLResponseSchema):
     auto_confirm_prd_and_execute: bool = Field(
         default=False,
         description="PRD 生成后是否自动确认并直接进入执行",
+    )
+    destroy_reason: str | None = Field(None, description="已启动任务销毁原因")
+    destroyed_at: datetime | None = Field(
+        None,
+        description="任务进入 deleted history 的时间",
     )
     created_at: datetime = Field(..., description="创建时间")
     closed_at: datetime | None = Field(None, description="关闭时间")

@@ -41,6 +41,8 @@ class Task(Base):
         last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         auto_confirm_prd_and_execute (bool): PRD 生成后是否自动确认并直接进入执行
+        destroy_reason (str | None): 已启动任务销毁时记录的原因
+        destroyed_at (datetime | None): 任务进入 deleted history 的时间
         created_at (datetime): 创建时间
         closed_at (datetime | None): 关闭时间
     """
@@ -92,6 +94,14 @@ class Task(Base):
         default=False,
         server_default="0",
         nullable=False,
+    )
+    destroy_reason: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+    destroyed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

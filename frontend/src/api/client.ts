@@ -179,9 +179,23 @@ export const taskApi = {
     }),
 
   /** 更新任务内容 */
-  update: (id: string, data: { task_title: string; requirement_brief?: string | null }) =>
+  update: (
+    id: string,
+    data: {
+      task_title: string;
+      requirement_brief?: string | null;
+      project_id?: string | null;
+    }
+  ) =>
     fetchApi<Task>(`/tasks/${id}`, {
       method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  /** 销毁已启动任务，并要求记录销毁原因 */
+  destroy: (id: string, data: { destroy_reason: string }) =>
+    fetchApi<Task>(`/tasks/${id}/destroy`, {
+      method: "POST",
       body: JSON.stringify(data),
     }),
 

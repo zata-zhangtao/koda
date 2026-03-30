@@ -14,7 +14,13 @@ from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.project import Project
 from dsl.models.run_account import RunAccount
-from dsl.schemas.task_schema import TaskCreateSchema, TaskStageUpdateSchema
+from dsl.models.task import Task
+from dsl.schemas.task_schema import (
+    TaskCreateSchema,
+    TaskStageUpdateSchema,
+    TaskStatusUpdateSchema,
+    TaskUpdateSchema,
+)
 from dsl.services.task_service import TaskService
 from utils.database import Base
 
@@ -207,6 +213,181 @@ def test_create_task_persists_auto_confirm_prd_and_execute_flag(
     )
 
     assert created_task.auto_confirm_prd_and_execute is True
+
+
+def test_update_task_allows_project_rebinding_for_backlog_tasks(
+    db_session: Session,
+) -> None:
+    """Backlog tasks without a worktree should allow project rebinding."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(
+            task_title="Needs rebind",
+            project_id=project_one_obj.id,
+            requirement_brief="old summary",
+        ),
+        run_account_id=run_account_obj.id,
+    )
+
+    updated_task = TaskService.update_task(
+        db_session,
+        created_task.id,
+        TaskUpdateSchema(
+            task_title="Needs rebind (edited)",
+            requirement_brief="new summary",
+            project_id=project_two_obj.id,
+        ),
+    )
+
+    assert updated_task is not None
+    assert updated_task.task_title == "Needs rebind (edited)"
+    assert updated_task.requirement_brief == "new summary"
+    assert updated_task.project_id == project_two_obj.id
+
+
+def test_update_task_rejects_project_rebinding_after_task_start(
+    db_session: Session,
+) -> None:
+    """Started tasks should reject project rebinding requests."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    started_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started task",
+        project_id=project_one_obj.id,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+        worktree_path="/tmp/project-one-wt-12345678",
+    )
+    db_session.add(started_task)
+    db_session.commit()
+
+    with pytest.raises(
+        ValueError,
+        match=r"Only backlog tasks without a worktree can change project_id",
+    ):
+        TaskService.update_task(
+            db_session,
+            started_task.id,
+            TaskUpdateSchema(
+                task_title="Started task",
+                project_id=project_two_obj.id,
+            ),
+        )
+
+
+def test_destroy_task_records_reason_and_clears_worktree_path(
+    db_session: Session,
+) -> None:
+    """Destroying a started task should persist reason metadata."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    started_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Destroy target",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path="/tmp/project-wt-12345678",
+    )
+    db_session.add(started_task)
+    db_session.commit()
+
+    destroyed_task = TaskService.destroy_task(
+        db_session,
+        started_task.id,
+        "Wrong repo binding, recreate from scratch",
+    )
+
+    assert destroyed_task is not None
+    assert destroyed_task.lifecycle_status == TaskLifecycleStatus.DELETED
+    assert destroyed_task.destroy_reason == "Wrong repo binding, recreate from scratch"
+    assert destroyed_task.destroyed_at is not None
+    assert destroyed_task.worktree_path is None
+
+
+def test_update_task_status_rejects_started_task_deletion_via_legacy_status_route(
+    db_session: Session,
+) -> None:
+    """Started tasks should not bypass destroy through the legacy status API."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    started_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started task",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+        worktree_path="/tmp/project-wt-12345678",
+    )
+    db_session.add(started_task)
+    db_session.commit()
+
+    with pytest.raises(
+        ValueError,
+        match="Started tasks must use the destroy flow",
+    ):
+        TaskService.update_task_status(
+            db_session,
+            started_task.id,
+            TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.DELETED),
+        )
+
+    db_session.refresh(started_task)
+    assert started_task.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert started_task.destroyed_at is None
 
 
 def test_update_workflow_stage_refreshes_stage_updated_at_only_on_stage_change(

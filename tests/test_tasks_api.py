@@ -14,6 +14,7 @@ import dsl.api.tasks as tasks_api
 from dsl.api.tasks import (
     complete_task,
     create_task,
+    destroy_task,
     get_task,
     get_task_prd_file,
     list_task_card_metadata,
@@ -22,15 +23,23 @@ from dsl.api.tasks import (
     open_task_in_trae,
     regenerate_task_prd,
     resume_task,
+    update_task,
     update_task_stage,
     update_task_status,
 )
 from dsl.services import codex_runner
 from dsl.models.dev_log import DevLog
 from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
+from dsl.models.project import Project
 from dsl.models.run_account import RunAccount
 from dsl.models.task import Task
-from dsl.schemas.task_schema import TaskStageUpdateSchema, TaskStatusUpdateSchema
+from dsl.schemas.task_schema import (
+    TaskDestroySchema,
+    TaskStageUpdateSchema,
+    TaskStatusUpdateSchema,
+    TaskUpdateSchema,
+)
+from dsl.services.git_worktree_service import GitWorktreeService, WorktreeDestroyResult
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 
@@ -1292,3 +1301,367 @@ def test_cancel_task_sends_manual_interruption_notification(
             WorkflowStage.IMPLEMENTATION_IN_PROGRESS.value,
         )
     ]
+
+
+def test_update_task_rebinds_backlog_project_and_emits_audit_log(
+    db_session: Session,
+) -> None:
+    """Updating a backlog task project should persist the new project and add an audit log."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Backlog requirement",
+        project_id=project_one_obj.id,
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+        requirement_brief="old brief",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    updated_task = update_task(
+        task_obj.id,
+        TaskUpdateSchema(
+            task_title="Backlog requirement (edited)",
+            requirement_brief="new brief",
+            project_id=project_two_obj.id,
+        ),
+        db_session,
+    )
+
+    task_dev_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.project_id == project_two_obj.id
+    assert updated_task.task_title == "Backlog requirement (edited)"
+    assert updated_task.requirement_brief == "new brief"
+    assert len(task_dev_log_list) == 1
+    assert task_dev_log_list[0].state_tag == DevLogStateTag.TRANSFERRED
+    assert "Project Binding Updated" in task_dev_log_list[0].text_content
+    assert "project-one" in task_dev_log_list[0].text_content
+    assert "project-two" in task_dev_log_list[0].text_content
+
+
+def test_update_task_rejects_project_rebinding_when_binding_is_locked(
+    db_session: Session,
+) -> None:
+    """Started tasks should return 422 when project rebinding is attempted."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_one_obj = Project(
+        display_name="project-one",
+        repo_path="/tmp/project-one",
+        description=None,
+    )
+    project_two_obj = Project(
+        display_name="project-two",
+        repo_path="/tmp/project-two",
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started requirement",
+        project_id=project_one_obj.id,
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+        worktree_path="/tmp/project-one-wt-12345678",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        update_task(
+            task_obj.id,
+            TaskUpdateSchema(
+                task_title="Started requirement",
+                project_id=project_two_obj.id,
+            ),
+            db_session,
+        )
+
+    assert raised_http_error.value.status_code == 422
+    assert "Only backlog tasks without a worktree can change project_id" in str(
+        raised_http_error.value.detail
+    )
+
+
+def test_update_task_status_rejects_started_task_deletion_bypass(
+    db_session: Session,
+) -> None:
+    """Legacy status updates should reject direct deletion for started tasks."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started requirement",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+        worktree_path="/tmp/project-one-wt-12345678",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        update_task_status(
+            task_obj.id,
+            TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.DELETED),
+            db_session,
+        )
+
+    db_session.refresh(task_obj)
+    assert raised_http_error.value.status_code == 422
+    assert "Started tasks must use the destroy flow" in str(
+        raised_http_error.value.detail
+    )
+    assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert task_obj.destroyed_at is None
+
+
+def test_destroy_task_records_reason_and_cleans_up_started_task(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Destroy should stop runtime state, clean up worktree, and persist audit fields."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="demo-project",
+        repo_path=str(tmp_path / "repo-root"),
+        description=None,
+    )
+    worktree_path = tmp_path / "repo-wt-12345678"
+    worktree_path.mkdir()
+
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Destroy me",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+        requirement_brief="Need to rebuild this task from the correct repository.",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    recorded_runtime_call_list: list[tuple[str, str]] = []
+    recorded_cleanup_argument_list: list[tuple[Path, str, Path | None]] = []
+
+    monkeypatch.setattr(
+        tasks_api,
+        "cancel_codex_task",
+        lambda task_id: recorded_runtime_call_list.append(("cancel", task_id)) or True,
+    )
+    monkeypatch.setattr(
+        tasks_api,
+        "clear_task_background_activity",
+        lambda task_id: recorded_runtime_call_list.append(("clear", task_id)),
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "resolve_repo_root_path",
+        lambda project_repo_path=None, worktree_path=None: tmp_path / "repo-root",
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "destroy_task_worktree",
+        lambda repo_root_path, task_id, worktree_path=None: (
+            recorded_cleanup_argument_list.append(
+                (repo_root_path, task_id, worktree_path)
+            )
+            or WorktreeDestroyResult(
+                cleanup_succeeded=True,
+                worktree_removed=True,
+                branch_deleted=True,
+                output_line_list=["cleanup ok"],
+            )
+        ),
+    )
+
+    updated_task = destroy_task(
+        task_obj.id,
+        TaskDestroySchema(destroy_reason="Wrong project binding, recreate it."),
+        db_session,
+    )
+
+    destroy_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.DELETED
+    assert updated_task.destroy_reason == "Wrong project binding, recreate it."
+    assert updated_task.destroyed_at is not None
+    assert updated_task.worktree_path is None
+    assert updated_task.is_codex_task_running is False
+    assert recorded_runtime_call_list == [
+        ("cancel", task_obj.id),
+        ("clear", task_obj.id),
+    ]
+    assert recorded_cleanup_argument_list == [
+        (tmp_path / "repo-root", task_obj.id, worktree_path)
+    ]
+    assert len(destroy_log_list) == 1
+    assert destroy_log_list[0].state_tag == DevLogStateTag.TRANSFERRED
+    assert "Requirement Destroyed" in destroy_log_list[0].text_content
+    assert "Task title: Destroy me" in destroy_log_list[0].text_content
+    assert "Wrong project binding, recreate it." in destroy_log_list[0].text_content
+    assert "Need to rebuild this task from the correct repository." in (
+        destroy_log_list[0].text_content
+    )
+
+
+def test_destroy_task_rejects_backlog_tasks(
+    db_session: Session,
+) -> None:
+    """Destroy endpoint should reject backlog tasks and keep the old delete path separate."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Backlog requirement",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        destroy_task(
+            task_obj.id,
+            TaskDestroySchema(destroy_reason="Wrong project binding, recreate it."),
+            db_session,
+        )
+
+    assert raised_http_error.value.status_code == 422
+    assert "Use Delete for backlog tasks" in str(raised_http_error.value.detail)
+
+
+def test_destroy_task_rejects_partial_cleanup_results(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Destroy should fail if cleanup metadata says artifacts remain."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="demo-project",
+        repo_path=str(tmp_path / "repo-root"),
+        description=None,
+    )
+    worktree_path = tmp_path / "repo-wt-12345678"
+    worktree_path.mkdir()
+
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Destroy me",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+        requirement_brief="Need to rebuild this task from the correct repository.",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "cancel_codex_task", lambda task_id: True)
+    monkeypatch.setattr(
+        tasks_api,
+        "clear_task_background_activity",
+        lambda task_id: None,
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "resolve_repo_root_path",
+        lambda project_repo_path=None, worktree_path=None: tmp_path / "repo-root",
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "destroy_task_worktree",
+        lambda repo_root_path, task_id, worktree_path=None: WorktreeDestroyResult(
+            cleanup_succeeded=True,
+            worktree_removed=False,
+            branch_deleted=True,
+            output_line_list=["cleanup script exited 0"],
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        destroy_task(
+            task_obj.id,
+            TaskDestroySchema(destroy_reason="Wrong project binding, recreate it."),
+            db_session,
+        )
+
+    db_session.refresh(task_obj)
+    assert raised_http_error.value.status_code == 422
+    assert "task worktree directory still exists" in str(raised_http_error.value.detail)
+    assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert task_obj.destroyed_at is None

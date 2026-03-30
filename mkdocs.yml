@@ -57,6 +57,7 @@ nav:
   - 原型:
       - 需求工作流示意: prototypes/requirement-workflow-demo.html
       - 独立问答侧通道: prototypes/task-sidecar-qa-demo.html
+      - 任务项目改绑与销毁: prototypes/task-project-rebinding-and-destroy-demo.html
   - 核心:
       - AI 资产: core/ai-assets.md
       - Prompt 管理: core/prompt-management.md

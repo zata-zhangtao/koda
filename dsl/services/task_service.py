@@ -129,6 +129,37 @@ class TaskService:
         task_obj.workflow_stage = next_workflow_stage
 
     @staticmethod
+    def can_rebind_project(task_obj: Task) -> bool:
+        """判断任务是否仍允许改绑项目.
+
+        Args:
+            task_obj: 待判断的任务对象
+
+        Returns:
+            bool: 仅当任务仍在 backlog 且尚未创建 worktree 时返回 True
+        """
+        return (
+            task_obj.lifecycle_status
+            not in {TaskLifecycleStatus.CLOSED, TaskLifecycleStatus.DELETED}
+            and task_obj.workflow_stage == WorkflowStage.BACKLOG
+            and not task_obj.worktree_path
+        )
+
+    @staticmethod
+    def has_task_started(task_obj: Task) -> bool:
+        """判断任务是否已经进入受控启动态.
+
+        Args:
+            task_obj: 待判断的任务对象
+
+        Returns:
+            bool: 当任务已离开 backlog 或已经生成 worktree 时返回 True
+        """
+        return task_obj.workflow_stage != WorkflowStage.BACKLOG or bool(
+            task_obj.worktree_path
+        )
+
+    @staticmethod
     def create_task(
         db_session: Session,
         task_create_schema: TaskCreateSchema,
@@ -264,10 +295,22 @@ class TaskService:
 
         Returns:
             Task | None: 更新后的任务对象或 None
+
+        Raises:
+            ValueError: 当 started task 试图通过旧状态接口直接删除时抛出
         """
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:
             return None
+
+        if (
+            status_update.lifecycle_status == TaskLifecycleStatus.DELETED
+            and TaskService.has_task_started(task_obj)
+        ):
+            raise ValueError(
+                "Started tasks must use the destroy flow. "
+                "Direct status deletion is only available for backlog tasks."
+            )
 
         task_obj.lifecycle_status = status_update.lifecycle_status
 
@@ -275,6 +318,11 @@ class TaskService:
         if status_update.lifecycle_status == TaskLifecycleStatus.CLOSED:
             task_obj.closed_at = utc_now_naive()
             TaskService._apply_workflow_stage_transition(task_obj, WorkflowStage.DONE)
+        elif status_update.lifecycle_status == TaskLifecycleStatus.DELETED:
+            task_obj.closed_at = None
+            task_obj.destroy_reason = None
+            if task_obj.destroyed_at is None:
+                task_obj.destroyed_at = utc_now_naive()
         else:
             task_obj.closed_at = None
 
@@ -539,12 +587,12 @@ class TaskService:
         return task_obj
 
     @staticmethod
-    def update_task_title(
+    def update_task(
         db_session: Session,
         task_id: str,
         task_update_schema: TaskUpdateSchema,
     ) -> Task | None:
-        """更新任务标题.
+        """更新任务内容.
 
         Args:
             db_session: 数据库会话
@@ -553,6 +601,9 @@ class TaskService:
 
         Returns:
             Task | None: 更新后的任务对象或 None
+
+        Raises:
+            ValueError: 当目标项目不存在，或项目绑定已锁定时抛出
         """
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:
@@ -561,10 +612,84 @@ class TaskService:
         task_obj.task_title = task_update_schema.task_title
         if task_update_schema.requirement_brief is not None:
             task_obj.requirement_brief = task_update_schema.requirement_brief
+
+        if "project_id" in task_update_schema.model_fields_set:
+            normalized_next_project_id: str | None = None
+            if task_update_schema.project_id:
+                from dsl.services.project_service import ProjectService
+
+                linked_project_obj = ProjectService.get_project_by_id(
+                    db_session,
+                    task_update_schema.project_id,
+                )
+                if linked_project_obj is None:
+                    raise ValueError(
+                        f"Project with id {task_update_schema.project_id} not found"
+                    )
+                normalized_next_project_id = linked_project_obj.id
+
+            if normalized_next_project_id != task_obj.project_id:
+                if not TaskService.can_rebind_project(task_obj):
+                    raise ValueError(
+                        "Task project is locked after start. "
+                        "Only backlog tasks without a worktree can change project_id."
+                    )
+                task_obj.project_id = normalized_next_project_id
+
         db_session.commit()
         db_session.refresh(task_obj)
 
-        logger.info(f"Updated Task {task_id[:8]}... title to {task_obj.task_title}")
+        logger.info(f"Updated Task {task_id[:8]}... content")
+        return task_obj
+
+    @staticmethod
+    def destroy_task(
+        db_session: Session,
+        task_id: str,
+        destroy_reason: str,
+        *,
+        clear_worktree_path: bool = True,
+    ) -> Task | None:
+        """将已启动任务归档到 deleted history，并记录销毁原因.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+            destroy_reason: 必填销毁原因
+            clear_worktree_path: 是否在销毁后清空 worktree_path
+
+        Returns:
+            Task | None: 更新后的任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当任务尚未启动，或已经关闭/删除时抛出
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status == TaskLifecycleStatus.CLOSED:
+            raise ValueError("Closed tasks cannot be destroyed.")
+        if task_obj.lifecycle_status == TaskLifecycleStatus.DELETED:
+            raise ValueError("Task is already deleted.")
+
+        if not TaskService.has_task_started(task_obj):
+            raise ValueError(
+                "Task destroy is only available after the task has started. "
+                "Use Delete for backlog tasks."
+            )
+
+        task_obj.lifecycle_status = TaskLifecycleStatus.DELETED
+        task_obj.destroy_reason = destroy_reason
+        task_obj.destroyed_at = utc_now_naive()
+        task_obj.closed_at = None
+        if clear_worktree_path:
+            task_obj.worktree_path = None
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(f"Destroyed Task {task_id[:8]}... with recorded reason")
         return task_obj
 
     @staticmethod

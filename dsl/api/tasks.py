@@ -19,6 +19,7 @@ from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskCardMetadataSchema,
+    TaskDestroySchema,
     TaskResponseSchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
@@ -748,6 +749,121 @@ def _format_workflow_stage_label(workflow_stage: WorkflowStage) -> str:
     )
 
 
+def _resolve_project_display_name(
+    db_session: Session,
+    project_id: str | None,
+) -> str:
+    """Resolve a user-facing project label for task audit logs.
+
+    Args:
+        db_session: 数据库会话
+        project_id: 关联项目 ID，可为空
+
+    Returns:
+        str: 适合写入日志的项目展示名称
+    """
+    if not project_id:
+        return "未关联项目"
+
+    from dsl.models.project import Project
+
+    project_obj = db_session.query(Project).filter(Project.id == project_id).first()
+    if project_obj and project_obj.display_name.strip():
+        return project_obj.display_name.strip()
+    return f"未知项目（{project_id[:8]}...）"
+
+
+def _build_task_project_rebind_log_text(
+    *,
+    previous_project_label_str: str,
+    next_project_label_str: str,
+) -> str:
+    """Build the audit log for backlog project rebinding.
+
+    Args:
+        previous_project_label_str: 修改前项目名称
+        next_project_label_str: 修改后项目名称
+
+    Returns:
+        str: 标准化日志正文
+    """
+    return "\n".join(
+        [
+            "## Project Binding Updated",
+            "",
+            f"- Previous project: {previous_project_label_str}",
+            f"- Current project: {next_project_label_str}",
+            (
+                "- Note: project rebinding is only allowed while the task "
+                "stays in backlog and has no worktree yet."
+            ),
+        ]
+    )
+
+
+def _build_task_destroy_log_text(
+    *,
+    task_title_str: str,
+    destroyed_stage_label_str: str,
+    project_label_str: str,
+    destroy_reason_str: str,
+    requirement_summary_str: str,
+    worktree_path_snapshot_str: str | None,
+    cleanup_summary_str: str,
+) -> str:
+    """Build the audit log for started-task destroy.
+
+    Args:
+        task_title_str: 任务标题
+        destroyed_stage_label_str: 销毁前阶段文案
+        project_label_str: 当前项目展示名称
+        destroy_reason_str: 销毁原因
+        requirement_summary_str: 销毁前持久化需求摘要
+        worktree_path_snapshot_str: 销毁前 worktree 路径快照
+        cleanup_summary_str: 清理结果摘要
+
+    Returns:
+        str: 标准化日志正文
+    """
+    audit_line_list = [
+        "## Requirement Destroyed",
+        "",
+        f"- Task title: {task_title_str}",
+        f"- Stage before destroy: {destroyed_stage_label_str}",
+        f"- Linked project: {project_label_str}",
+        f"- Destroy reason: {destroy_reason_str}",
+        f"- Cleanup: {cleanup_summary_str}",
+        "",
+        "Final Summary:",
+        requirement_summary_str,
+    ]
+    if worktree_path_snapshot_str:
+        audit_line_list.append(f"- Worktree snapshot: `{worktree_path_snapshot_str}`")
+    return "\n".join(audit_line_list)
+
+
+def _build_destroy_cleanup_failure_reason(
+    *,
+    worktree_removed: bool,
+    branch_deleted: bool,
+) -> str:
+    """Build a stable destroy-cleanup failure message.
+
+    Args:
+        worktree_removed: worktree 目录是否已被移除
+        branch_deleted: 任务分支是否已被删除
+
+    Returns:
+        str: 标准化清理失败文案
+    """
+    cleanup_gap_list: list[str] = []
+    if not worktree_removed:
+        cleanup_gap_list.append("task worktree directory still exists")
+    if not branch_deleted:
+        cleanup_gap_list.append("task branch still exists locally")
+    return "Destroy cleanup did not finish completely: " + "; ".join(cleanup_gap_list)
+
+
 def _build_task_card_metadata(
     task_obj: Task,
     ordered_task_dev_log_list: list[DevLog],
@@ -970,7 +1086,7 @@ def update_task_status(
         Task: 更新后的任务
 
     Raises:
-        HTTPException: 当任务不存在时返回 404
+        HTTPException: 当任务不存在时返回 404；状态变更不合法时返回 422
     """
     existing_task_obj = TaskService.get_task_by_id(db_session, task_id)
     if not existing_task_obj:
@@ -980,7 +1096,15 @@ def update_task_status(
         )
 
     previous_lifecycle_status = existing_task_obj.lifecycle_status
-    updated_task = TaskService.update_task_status(db_session, task_id, status_update)
+    try:
+        updated_task = TaskService.update_task_status(
+            db_session, task_id, status_update
+        )
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(validation_error),
+        ) from validation_error
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1589,6 +1713,153 @@ def cancel_task(
     return _hydrate_task_response(updated_task, is_task_running_override=False)
 
 
+@router.post("/{task_id}/destroy", response_model=TaskResponseSchema)
+def destroy_task(
+    task_id: str,
+    destroy_payload: TaskDestroySchema,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """销毁已启动任务，并记录原因与清理结果.
+
+    销毁只适用于已经启动过的任务：系统会先停止后台自动化，再尝试清理
+    worktree / 分支，最后把任务归档到 deleted history。
+
+    Args:
+        task_id: 任务 ID
+        destroy_payload: 销毁原因请求体
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已写入销毁元数据的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在、尚未启动或清理失败时抛出
+    """
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    if task_obj.lifecycle_status == TaskLifecycleStatus.CLOSED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Closed tasks cannot be destroyed.",
+        )
+    if task_obj.lifecycle_status == TaskLifecycleStatus.DELETED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Task is already deleted.",
+        )
+
+    if not TaskService.has_task_started(task_obj):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Task destroy is only available after the task has started. "
+                "Use Delete for backlog tasks."
+            ),
+        )
+
+    destroyed_stage_label_str = _format_workflow_stage_label(task_obj.workflow_stage)
+    project_label_str = _resolve_project_display_name(db_session, task_obj.project_id)
+    worktree_path_snapshot_str = task_obj.worktree_path
+    cleanup_summary_str = (
+        "background automation stopped; no worktree cleanup was needed."
+    )
+
+    cancel_codex_task(task_id)
+    clear_task_background_activity(task_id)
+
+    if worktree_path_snapshot_str:
+        from dsl.models.project import Project
+        from dsl.services.git_worktree_service import GitWorktreeService
+
+        project_repo_path_obj: Path | None = None
+        if task_obj.project_id:
+            project_obj = (
+                db_session.query(Project)
+                .filter(Project.id == task_obj.project_id)
+                .first()
+            )
+            if project_obj:
+                project_repo_path_obj = Path(project_obj.repo_path)
+
+        try:
+            repo_root_path = GitWorktreeService.resolve_repo_root_path(
+                project_repo_path=project_repo_path_obj,
+                worktree_path=Path(worktree_path_snapshot_str),
+            )
+            cleanup_result = GitWorktreeService.destroy_task_worktree(
+                repo_root_path=repo_root_path,
+                task_id=task_id,
+                worktree_path=Path(worktree_path_snapshot_str),
+            )
+        except ValueError as cleanup_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(cleanup_error),
+            ) from cleanup_error
+
+        cleanup_completed_fully = (
+            cleanup_result.cleanup_succeeded
+            and cleanup_result.worktree_removed
+            and cleanup_result.branch_deleted
+        )
+        if not cleanup_completed_fully:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=cleanup_result.failure_reason_text
+                or _build_destroy_cleanup_failure_reason(
+                    worktree_removed=cleanup_result.worktree_removed,
+                    branch_deleted=cleanup_result.branch_deleted,
+                ),
+            )
+        cleanup_summary_str = (
+            "background automation stopped and task worktree cleanup completed."
+        )
+
+    try:
+        updated_task = TaskService.destroy_task(
+            db_session,
+            task_id,
+            destroy_payload.destroy_reason,
+        )
+    except ValueError as destroy_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(destroy_error),
+        ) from destroy_error
+
+    if not updated_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    LogService.create_internal_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_id,
+            text_content=_build_task_destroy_log_text(
+                task_title_str=task_obj.task_title,
+                destroyed_stage_label_str=destroyed_stage_label_str,
+                project_label_str=project_label_str,
+                destroy_reason_str=destroy_payload.destroy_reason,
+                requirement_summary_str=(
+                    task_obj.requirement_brief or "No requirement brief captured yet."
+                ),
+                worktree_path_snapshot_str=worktree_path_snapshot_str,
+                cleanup_summary_str=cleanup_summary_str,
+            ),
+            state_tag=DevLogStateTag.TRANSFERRED,
+        ),
+        updated_task.run_account_id,
+    )
+    return _hydrate_task_response(updated_task, is_task_running_override=False)
+
+
 @router.get("/{task_id}/prd-file")
 def get_task_prd_file(
     task_id: str,
@@ -1783,13 +2054,49 @@ def update_task(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    updated_task = TaskService.update_task_title(
-        db_session, task_id, task_update_schema
+    existing_task = TaskService.get_task_by_id(db_session, task_id)
+    if not existing_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    previous_project_id_str = existing_task.project_id
+    previous_project_label_str = _resolve_project_display_name(
+        db_session,
+        previous_project_id_str,
     )
+
+    try:
+        updated_task = TaskService.update_task(db_session, task_id, task_update_schema)
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(validation_error),
+        ) from validation_error
+
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
+        )
+
+    if previous_project_id_str != updated_task.project_id:
+        next_project_label_str = _resolve_project_display_name(
+            db_session,
+            updated_task.project_id,
+        )
+        LogService.create_log(
+            db_session,
+            DevLogCreateSchema(
+                task_id=task_id,
+                text_content=_build_task_project_rebind_log_text(
+                    previous_project_label_str=previous_project_label_str,
+                    next_project_label_str=next_project_label_str,
+                ),
+                state_tag=DevLogStateTag.TRANSFERRED,
+            ),
+            updated_task.run_account_id,
         )
     return _hydrate_task_response(updated_task)
 

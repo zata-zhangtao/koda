@@ -129,6 +129,8 @@ export interface Task {
   worktree_path: string | null;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
+  destroy_reason: string | null;
+  destroyed_at: string | null;
   created_at: string;
   closed_at: string | null;
   log_count: number;

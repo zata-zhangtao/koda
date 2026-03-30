@@ -319,6 +319,40 @@ git worktree add "$target_path" -b "$branch_name" main >/dev/null
     assert (repo_root_path.parent / "task").exists() is True
 
 
+def test_destroy_task_worktree_falls_back_when_cleanup_script_leaves_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Destroy cleanup should force-clean leftovers even when a script exits 0."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+    )
+    _write_shell_script(
+        repo_root_path / "scripts" / "git_worktree_merge.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+echo "noop cleanup"
+""",
+    )
+
+    destroy_result = GitWorktreeService.destroy_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+        worktree_path=created_worktree_path,
+    )
+
+    assert destroy_result.cleanup_succeeded is True
+    assert destroy_result.worktree_removed is True
+    assert destroy_result.branch_deleted is True
+    assert created_worktree_path.exists() is False
+    assert _run_git_command(repo_root_path, ["branch", "--list", "task/12345678"]) == ""
+    assert any(
+        "falling back to force cleanup" in output_line
+        for output_line in destroy_result.output_line_list
+    )
+
+
 def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
     tmp_path: Path,
 ) -> None:

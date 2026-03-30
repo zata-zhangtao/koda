@@ -69,9 +69,14 @@
 
 1. 创建 `Project`
 2. 将任务绑定到该项目
-3. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
-4. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-5. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+3. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
+4. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
+5. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
+6. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
+7. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+8. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
+9. 提交 destroy 后，确认任务进入 deleted history，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+10. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，且后台运行态已清除
 
 ### 媒体与导出
 

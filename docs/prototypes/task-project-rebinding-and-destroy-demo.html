@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Koda Prototype - Task Project Rebinding and Destroy</title>
+  <style>
+    :root {
+      --paper: #f6f0e5;
+      --paper-strong: #efe5d6;
+      --ink: #1d2a24;
+      --ink-soft: #59645d;
+      --forest: #1f3a31;
+      --forest-soft: #36594d;
+      --sage: #8aa187;
+      --rust: #b65c3a;
+      --rust-soft: #f4d5c7;
+      --gold: #b48a37;
+      --gold-soft: #f0e3bc;
+      --line: rgba(29, 42, 36, 0.12);
+      --white: #fffdf8;
+      --shadow: 0 18px 48px rgba(32, 43, 38, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(180, 138, 55, 0.18), transparent 28%),
+        radial-gradient(circle at right, rgba(182, 92, 58, 0.16), transparent 24%),
+        linear-gradient(180deg, #fbf7f0 0%, var(--paper) 100%);
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .hero-card,
+    .panel,
+    .timeline-card,
+    .preview-card {
+      background: rgba(255, 253, 248, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero-card {
+      padding: 28px;
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--paper-strong);
+      color: var(--forest);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hero h1 {
+      margin: 14px 0 10px;
+      font-size: clamp(30px, 5vw, 46px);
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 58ch;
+      color: var(--ink-soft);
+      font-size: 15px;
+    }
+
+    .summary-card {
+      padding: 22px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .summary-metric {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+    }
+
+    .summary-metric span {
+      display: block;
+      font-size: 12px;
+      color: var(--ink-soft);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .summary-metric strong {
+      display: block;
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 20px;
+    }
+
+    .panel {
+      padding: 24px;
+    }
+
+    .panel h2 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .panel-subtitle {
+      margin: 0 0 22px;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .stage-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .stage-switcher button,
+    .action-row button,
+    .modal-actions button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+    }
+
+    .stage-switcher button {
+      padding: 10px 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .stage-switcher button.is-active {
+      background: var(--forest);
+      color: var(--white);
+      box-shadow: 0 12px 28px rgba(31, 58, 49, 0.25);
+    }
+
+    .card-frame {
+      display: grid;
+      gap: 18px;
+      padding: 20px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(239, 229, 214, 0.52), rgba(255, 253, 248, 0.86));
+      border: 1px solid var(--line);
+    }
+
+    .task-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .task-head h3 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }
+
+    .task-head p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .pill--backlog {
+      background: var(--gold-soft);
+      color: #7a5e1a;
+    }
+
+    .pill--started {
+      background: rgba(54, 89, 77, 0.14);
+      color: var(--forest);
+    }
+
+    .pill--destroyed {
+      background: var(--rust-soft);
+      color: var(--rust);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .meta-box {
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+    }
+
+    .meta-box span {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .meta-box strong {
+      font-size: 15px;
+    }
+
+    .field-group {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field-group label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-soft);
+      font-weight: 700;
+    }
+
+    select,
+    textarea {
+      width: 100%;
+      border-radius: 18px;
+      border: 1px solid rgba(29, 42, 36, 0.18);
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ink);
+      font: inherit;
+      padding: 14px 16px;
+      outline: none;
+    }
+
+    select:disabled,
+    textarea:disabled {
+      background: rgba(233, 228, 218, 0.82);
+      color: var(--ink-soft);
+      cursor: not-allowed;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .field-help {
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+
+    .field-help strong {
+      color: var(--forest);
+    }
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .btn-primary,
+    .btn-danger,
+    .btn-ghost {
+      padding: 12px 18px;
+      font-weight: 700;
+    }
+
+    .btn-primary {
+      background: var(--forest);
+      color: var(--white);
+      box-shadow: 0 12px 26px rgba(31, 58, 49, 0.22);
+    }
+
+    .btn-danger {
+      background: var(--rust);
+      color: var(--white);
+      box-shadow: 0 12px 26px rgba(182, 92, 58, 0.24);
+    }
+
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.6);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    .timeline-card,
+    .preview-card {
+      padding: 24px;
+    }
+
+    .timeline-card h3,
+    .preview-card h3 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      letter-spacing: -0.03em;
+    }
+
+    .timeline-card p,
+    .preview-card p {
+      margin: 0 0 16px;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .timeline-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .timeline-item {
+      position: relative;
+      padding-left: 18px;
+    }
+
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 7px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--forest-soft);
+    }
+
+    .timeline-item--danger::before {
+      background: var(--rust);
+    }
+
+    .timeline-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .timeline-item span {
+      display: block;
+      color: var(--ink-soft);
+      font-size: 13px;
+    }
+
+    .preview-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .preview-chip {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    .preview-chip strong {
+      color: var(--ink-soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .callout {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(180, 138, 55, 0.13);
+      border: 1px solid rgba(180, 138, 55, 0.24);
+      color: #6c5519;
+      font-size: 13px;
+    }
+
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(21, 29, 25, 0.36);
+      backdrop-filter: blur(8px);
+    }
+
+    .modal-shell.is-open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(520px, 100%);
+      padding: 24px;
+      border-radius: 24px;
+      background: var(--white);
+      border: 1px solid var(--line);
+      box-shadow: 0 24px 64px rgba(19, 28, 23, 0.24);
+    }
+
+    .modal h3 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: -0.04em;
+    }
+
+    .modal p {
+      margin: 0 0 16px;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      display: none;
+      max-width: 320px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      color: var(--white);
+      background: var(--forest);
+      box-shadow: 0 14px 34px rgba(31, 58, 49, 0.28);
+    }
+
+    .toast.is-visible {
+      display: block;
+      animation: rise 180ms ease;
+    }
+
+    @keyframes rise {
+      from {
+        transform: translateY(8px);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 920px) {
+      .hero,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <article class="hero-card">
+        <div class="hero-eyebrow">Prototype / PRD Support</div>
+        <h1>任务项目改绑与销毁原因</h1>
+        <p>
+          这个原型聚焦两个规则：任务处于 <strong>Backlog</strong> 时可以改绑定项目；
+          一旦任务开始，项目立即锁定，只能走“销毁任务 + 填写原因”的回收路径。
+        </p>
+      </article>
+      <aside class="summary-card hero-card">
+        <div class="summary-metric">
+          <span>Backlog</span>
+          <strong>允许改绑定项目</strong>
+        </div>
+        <div class="summary-metric">
+          <span>Started</span>
+          <strong>项目锁定 + 允许销毁</strong>
+        </div>
+        <div class="summary-metric">
+          <span>Destroyed</span>
+          <strong>保留原因与时间线审计</strong>
+        </div>
+      </aside>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>任务详情演示</h2>
+        <p class="panel-subtitle">
+          先切换状态，再观察项目选择框、动作按钮和时间线如何变化。
+        </p>
+
+        <div class="stage-switcher">
+          <button type="button" data-stage="backlog" class="is-active">Backlog</button>
+          <button type="button" data-stage="started">Started</button>
+          <button type="button" data-stage="destroyed">Destroyed</button>
+        </div>
+
+        <div class="card-frame">
+          <div class="task-head">
+            <div>
+              <h3>我选错项目就不能改了</h3>
+              <p>模拟需求详情页中“编辑需求 / 开始任务 / 销毁任务”的交互状态。</p>
+            </div>
+            <div id="stagePill" class="pill pill--backlog">Backlog</div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-box">
+              <span>生命周期</span>
+              <strong id="lifecycleValue">OPEN</strong>
+            </div>
+            <div class="meta-box">
+              <span>工作流阶段</span>
+              <strong id="workflowValue">backlog</strong>
+            </div>
+            <div class="meta-box">
+              <span>Worktree</span>
+              <strong id="worktreeValue">未创建</strong>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label for="projectSelect">关联项目</label>
+            <select id="projectSelect">
+              <option value="">-- 不关联项目 --</option>
+              <option value="proj-koda">Koda 主仓库</option>
+              <option value="proj-client">Client Portal</option>
+              <option value="proj-agent">Agent Sandbox</option>
+            </select>
+            <div id="projectHelp" class="field-help">
+              <strong>Backlog 阶段：</strong> 可以重新选择项目，开始任务后锁定。
+            </div>
+          </div>
+
+          <div class="action-row" id="actionRow">
+            <button type="button" class="btn-primary" id="saveProjectButton">保存项目绑定</button>
+            <button type="button" class="btn-ghost" id="startButton">开始任务（演示）</button>
+          </div>
+        </div>
+      </article>
+
+      <div style="display:grid; gap:20px;">
+        <aside class="preview-card">
+          <h3>归档侧写</h3>
+          <p>销毁后要留下结构化结果，便于左侧卡片和详情页读取。</p>
+          <div class="preview-grid">
+            <div class="preview-chip">
+              <div>
+                <strong>project_id</strong>
+                <div id="previewProject">proj-koda</div>
+              </div>
+              <div>
+                <strong>editable</strong>
+                <div id="previewEditable">yes</div>
+              </div>
+            </div>
+            <div class="preview-chip">
+              <div>
+                <strong>destroy_reason</strong>
+                <div id="previewReason">未填写</div>
+              </div>
+              <div>
+                <strong>destroyed_at</strong>
+                <div id="previewTime">--</div>
+              </div>
+            </div>
+          </div>
+          <div class="callout">
+            推荐语义：<strong>Backlog 删除</strong> 继续保持轻量；<strong>Started 销毁</strong>
+            强制填写原因，并在清理 worktree 后进入 deleted history。
+          </div>
+        </aside>
+
+        <aside class="timeline-card">
+          <h3>时间线</h3>
+          <p>模拟前端 Timeline 中的系统事件追加。</p>
+          <div id="timelineList" class="timeline-list"></div>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <div id="destroyModal" class="modal-shell" aria-hidden="true">
+    <div class="modal">
+      <h3>销毁任务</h3>
+      <p>请输入销毁原因。未填写原因时，不允许提交销毁。</p>
+      <textarea id="reasonInput" placeholder="例如：PRD 已过时，误绑到了错误仓库，需要回收并重新建卡。"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="cancelDestroyButton">取消</button>
+        <button type="button" class="btn-danger" id="confirmDestroyButton">确认销毁</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const timelineListElement = document.getElementById("timelineList");
+    const stagePillElement = document.getElementById("stagePill");
+    const lifecycleValueElement = document.getElementById("lifecycleValue");
+    const workflowValueElement = document.getElementById("workflowValue");
+    const worktreeValueElement = document.getElementById("worktreeValue");
+    const projectSelectElement = document.getElementById("projectSelect");
+    const projectHelpElement = document.getElementById("projectHelp");
+    const actionRowElement = document.getElementById("actionRow");
+    const previewProjectElement = document.getElementById("previewProject");
+    const previewEditableElement = document.getElementById("previewEditable");
+    const previewReasonElement = document.getElementById("previewReason");
+    const previewTimeElement = document.getElementById("previewTime");
+    const destroyModalElement = document.getElementById("destroyModal");
+    const reasonInputElement = document.getElementById("reasonInput");
+    const toastElement = document.getElementById("toast");
+
+    const state = {
+      stage: "backlog",
+      selectedProjectId: "proj-koda",
+      destroyReason: "",
+      destroyedAt: "",
+      timeline: [
+        {
+          title: "需求创建",
+          copy: "任务已创建，当前处于 backlog，可重新选择关联项目。"
+        }
+      ]
+    };
+
+    const stageConfig = {
+      backlog: {
+        pillClass: "pill pill--backlog",
+        pillText: "Backlog",
+        lifecycle: "OPEN",
+        workflow: "backlog",
+        worktree: "未创建",
+        editable: true,
+        helpText: "<strong>Backlog 阶段：</strong> 可以重新选择项目，开始任务后锁定。"
+      },
+      started: {
+        pillClass: "pill pill--started",
+        pillText: "Started",
+        lifecycle: "OPEN",
+        workflow: "prd_generating",
+        worktree: "/repo/task/koda-wt-demo1234",
+        editable: false,
+        helpText: "<strong>已开始：</strong> worktree 已与当前项目绑定，项目选择框只读，避免仓库与 worktree 脱钩。"
+      },
+      destroyed: {
+        pillClass: "pill pill--destroyed",
+        pillText: "Destroyed",
+        lifecycle: "DELETED",
+        workflow: "changes_requested",
+        worktree: "已清理",
+        editable: false,
+        helpText: "<strong>已销毁：</strong> 任务进入 deleted history，只读展示销毁原因。"
+      }
+    };
+
+    function nowLabel() {
+      const nowDate = new Date();
+      return nowDate.toLocaleString("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    function showToast(messageText) {
+      toastElement.textContent = messageText;
+      toastElement.classList.add("is-visible");
+      window.clearTimeout(showToast.timeoutId);
+      showToast.timeoutId = window.setTimeout(() => {
+        toastElement.classList.remove("is-visible");
+      }, 2200);
+    }
+
+    function openDestroyModal() {
+      destroyModalElement.classList.add("is-open");
+      destroyModalElement.setAttribute("aria-hidden", "false");
+      reasonInputElement.focus();
+    }
+
+    function closeDestroyModal() {
+      destroyModalElement.classList.remove("is-open");
+      destroyModalElement.setAttribute("aria-hidden", "true");
+      reasonInputElement.value = "";
+    }
+
+    function renderTimeline() {
+      timelineListElement.innerHTML = state.timeline
+        .map((timelineItem) => {
+          const isDanger = timelineItem.kind === "danger";
+          return `
+            <div class="timeline-item ${isDanger ? "timeline-item--danger" : ""}">
+              <strong>${timelineItem.title}</strong>
+              <span>${timelineItem.copy}</span>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    function renderActionRow() {
+      if (state.stage === "backlog") {
+        actionRowElement.innerHTML = `
+          <button type="button" class="btn-primary" id="saveProjectButton">保存项目绑定</button>
+          <button type="button" class="btn-ghost" id="startButton">开始任务（演示）</button>
+        `;
+        document.getElementById("saveProjectButton").addEventListener("click", () => {
+          state.timeline = [
+            {
+              title: "项目绑定已更新",
+              copy: `任务仍处于 backlog，已将 project_id 改为 ${state.selectedProjectId || "null"}。`
+            },
+            ...state.timeline
+          ];
+          render();
+          showToast("已保存项目绑定");
+        });
+        document.getElementById("startButton").addEventListener("click", () => {
+          state.stage = "started";
+          state.timeline = [
+            {
+              title: "任务开始",
+              copy: "系统基于当前 project_id 创建 worktree，后续不再允许改绑项目。"
+            },
+            ...state.timeline
+          ];
+          render();
+          showToast("任务已开始，项目已锁定");
+        });
+        return;
+      }
+
+      if (state.stage === "started") {
+        actionRowElement.innerHTML = `
+          <button type="button" class="btn-danger" id="destroyButton">销毁任务</button>
+          <button type="button" class="btn-ghost" id="backlogButton">回看 Backlog 规则</button>
+        `;
+        document.getElementById("destroyButton").addEventListener("click", openDestroyModal);
+        document.getElementById("backlogButton").addEventListener("click", () => {
+          state.stage = "backlog";
+          state.destroyReason = "";
+          state.destroyedAt = "";
+          state.timeline = [
+            {
+              title: "回到 backlog 演示",
+              copy: "这里只是原型态切换，用于对比“可改绑”和“已锁定”的差异。"
+            },
+            ...state.timeline
+          ];
+          render();
+        });
+        return;
+      }
+
+      actionRowElement.innerHTML = `
+        <button type="button" class="btn-ghost" id="restartDemoButton">重新开始演示</button>
+      `;
+      document.getElementById("restartDemoButton").addEventListener("click", () => {
+        state.stage = "backlog";
+        state.selectedProjectId = "proj-koda";
+        state.destroyReason = "";
+        state.destroyedAt = "";
+        state.timeline = [
+          {
+            title: "需求创建",
+            copy: "任务已创建，当前处于 backlog，可重新选择关联项目。"
+          }
+        ];
+        render();
+      });
+    }
+
+    function renderStageButtons() {
+      document.querySelectorAll("[data-stage]").forEach((buttonElement) => {
+        buttonElement.classList.toggle(
+          "is-active",
+          buttonElement.getAttribute("data-stage") === state.stage
+        );
+      });
+    }
+
+    function render() {
+      const currentStageConfig = stageConfig[state.stage];
+      stagePillElement.className = currentStageConfig.pillClass;
+      stagePillElement.textContent = currentStageConfig.pillText;
+      lifecycleValueElement.textContent = currentStageConfig.lifecycle;
+      workflowValueElement.textContent = currentStageConfig.workflow;
+      worktreeValueElement.textContent = currentStageConfig.worktree;
+      projectSelectElement.value = state.selectedProjectId;
+      projectSelectElement.disabled = !currentStageConfig.editable;
+      projectHelpElement.innerHTML = currentStageConfig.helpText;
+      previewProjectElement.textContent = state.selectedProjectId || "null";
+      previewEditableElement.textContent = currentStageConfig.editable ? "yes" : "no";
+      previewReasonElement.textContent = state.destroyReason || "未填写";
+      previewTimeElement.textContent = state.destroyedAt || "--";
+      renderTimeline();
+      renderActionRow();
+      renderStageButtons();
+    }
+
+    projectSelectElement.addEventListener("change", (event) => {
+      state.selectedProjectId = event.target.value;
+      previewProjectElement.textContent = state.selectedProjectId || "null";
+    });
+
+    document.querySelectorAll("[data-stage]").forEach((buttonElement) => {
+      buttonElement.addEventListener("click", () => {
+        const nextStage = buttonElement.getAttribute("data-stage");
+        if (!nextStage) {
+          return;
+        }
+        if (nextStage === "destroyed" && !state.destroyReason) {
+          openDestroyModal();
+          return;
+        }
+        state.stage = nextStage;
+        render();
+      });
+    });
+
+    document.getElementById("cancelDestroyButton").addEventListener("click", closeDestroyModal);
+    document.getElementById("confirmDestroyButton").addEventListener("click", () => {
+      const nextDestroyReason = reasonInputElement.value.trim();
+      if (!nextDestroyReason) {
+        showToast("请输入销毁原因");
+        reasonInputElement.focus();
+        return;
+      }
+
+      state.stage = "destroyed";
+      state.destroyReason = nextDestroyReason;
+      state.destroyedAt = nowLabel();
+      state.timeline = [
+        {
+          kind: "danger",
+          title: "任务已销毁",
+          copy: `已停止自动化并归档。销毁原因：${nextDestroyReason}`
+        },
+        ...state.timeline
+      ];
+      closeDestroyModal();
+      render();
+      showToast("已记录销毁原因并归档任务");
+    });
+
+    destroyModalElement.addEventListener("click", (event) => {
+      if (event.target === destroyModalElement) {
+        closeDestroyModal();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

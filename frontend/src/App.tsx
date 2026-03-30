@@ -141,7 +141,9 @@ type MutationName =
   | "update"
   | "complete"
   | "delete"
+  | "destroy"
   | "open_editor"
+  | "open_trae"
   | "open_terminal"
   | "cancel"
   | null;
@@ -149,6 +151,7 @@ type MutationName =
 const GUEST_USER_LABEL = "Guest User";
 const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
+const DESTROY_REASON_MIN_LENGTH = 5;
 
 const CONTINUE_COMMAND_PATTERNS = [
   /^go\s+on$/i,
@@ -472,6 +475,7 @@ function App() {
   ] = useState(false);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
+  const [editRequirementProjectId, setEditRequirementProjectId] = useState<string | null>(null);
   const [editRequirementAttachmentDraft, setEditRequirementAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
   const [feedbackInputText, setFeedbackInputText] = useState("");
@@ -480,6 +484,8 @@ function App() {
   const [taskQaInputText, setTaskQaInputText] = useState("");
   const [selectedTaskQaContextScope, setSelectedTaskQaContextScope] =
     useState<TaskQaContextScope>(TaskQaContextScope.PRD_CONFIRMATION);
+  const [isDestroyModalOpen, setIsDestroyModalOpen] = useState(false);
+  const [destroyReasonInputText, setDestroyReasonInputText] = useState("");
   const [activeMutationName, setActiveMutationName] = useState<MutationName>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -552,6 +558,7 @@ function App() {
   function resetEditRequirementDraft(): void {
     setEditRequirementTitle("");
     setEditRequirementDescription("");
+    setEditRequirementProjectId(null);
     setEditRequirementAttachmentDraft((previousAttachmentDraft) => {
       if (previousAttachmentDraft?.previewUrl) {
         URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
@@ -566,6 +573,13 @@ function App() {
   function closeRequirementEditor(): void {
     setIsEditPanelOpen(false);
     resetEditRequirementDraft();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function closeDestroyTaskModal(): void {
+    setIsDestroyModalOpen(false);
+    setDestroyReasonInputText("");
     setErrorMessage(null);
     setSuccessMessage(null);
   }
@@ -624,6 +638,15 @@ function App() {
       setNewRequirementProjectId(null);
     }
   }, [newRequirementProjectId, projectList]);
+
+  useEffect(() => {
+    if (
+      editRequirementProjectId &&
+      !projectList.some((projectItem) => projectItem.id === editRequirementProjectId)
+    ) {
+      setEditRequirementProjectId(null);
+    }
+  }, [editRequirementProjectId, projectList]);
 
   useEffect(() => {
     if (
@@ -706,6 +729,14 @@ function App() {
       ? selectedTaskLogList
       : devLogsByTaskId[selectedTask.id] ?? [];
   }, [devLogsByTaskId, selectedTask, selectedTaskLogList]);
+  const selectedTaskProject = useMemo(
+    () =>
+      selectedTask?.project_id
+        ? projectList.find((projectItem) => projectItem.id === selectedTask.project_id) ??
+          null
+        : null,
+    [projectList, selectedTask]
+  );
   const selectedTaskCardMetadata = useMemo(
     () =>
       selectedTask
@@ -722,6 +753,10 @@ function App() {
   );
   const selectedTaskSummaryText =
     selectedTaskSnapshot?.summary || "No requirement brief captured yet.";
+  const selectedTaskProjectLabel = useMemo(
+    () => getTaskProjectDisplayName(selectedTask, selectedTaskProject),
+    [selectedTask, selectedTaskProject]
+  );
   const isSelectedTaskSummaryExpandable = useMemo(
     () => shouldAllowRequirementSummaryExpansion(selectedTaskSummaryText),
     [selectedTaskSummaryText]
@@ -898,6 +933,12 @@ function App() {
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
     : false;
   const canRenderComposer = selectedTask !== null;
+  const canRebindSelectedTaskProject = selectedTask
+    ? canRebindTaskProject(selectedTask)
+    : false;
+  const canDestroySelectedTask = selectedTask
+    ? canDestroyTask(selectedTask)
+    : false;
   const canSendFeedback = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
@@ -1115,6 +1156,28 @@ function App() {
       window.removeEventListener("keydown", handlePrdFullscreenKeydown);
     };
   }, [isPrdFullscreenOpen]);
+
+  useEffect(() => {
+    if (!isDestroyModalOpen) {
+      return;
+    }
+
+    function handleDestroyModalKeydown(
+      keyboardEvent: globalThis.KeyboardEvent
+    ): void {
+      if (keyboardEvent.key !== "Escape" || activeMutationName === "destroy") {
+        return;
+      }
+
+      keyboardEvent.preventDefault();
+      closeDestroyTaskModal();
+    }
+
+    window.addEventListener("keydown", handleDestroyModalKeydown);
+    return () => {
+      window.removeEventListener("keydown", handleDestroyModalKeydown);
+    };
+  }, [activeMutationName, isDestroyModalOpen]);
 
   // 仅在切换任务时清空 PRD 内容，避免 taskList 每秒刷新触发闪烁
   useEffect(() => {
@@ -1942,7 +2005,19 @@ function App() {
     resetEditRequirementDraft();
     setEditRequirementTitle(selectedTask.task_title);
     setEditRequirementDescription(selectedTaskSnapshot.summary);
+    setEditRequirementProjectId(selectedTask.project_id);
     setIsEditPanelOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleOpenDestroyTaskModal(): void {
+    if (!selectedTask || !canDestroyTask(selectedTask)) {
+      return;
+    }
+
+    setDestroyReasonInputText("");
+    setIsDestroyModalOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
   }
@@ -1969,8 +2044,9 @@ function App() {
     const titleChanged = nextRequirementTitle !== selectedTask.task_title;
     const summaryChanged = nextRequirementBrief !== selectedTaskSnapshot.summary;
     const attachmentChanged = editRequirementAttachmentDraft !== null;
+    const projectChanged = editRequirementProjectId !== selectedTask.project_id;
 
-    if (!titleChanged && !summaryChanged && !attachmentChanged) {
+    if (!titleChanged && !summaryChanged && !attachmentChanged && !projectChanged) {
       closeRequirementEditor();
       return;
     }
@@ -1988,6 +2064,7 @@ function App() {
       await taskApi.update(selectedTask.id, {
         task_title: nextRequirementTitle,
         requirement_brief: nextRequirementBrief,
+        project_id: projectChanged ? editRequirementProjectId : undefined,
       });
 
       const requirementUpdateLogText = buildRequirementUpdateLog(
@@ -2043,6 +2120,44 @@ function App() {
         didPersistRequirementChange && shouldAttemptPrdRegeneration
           ? "Requirement changes were saved, but PRD regeneration failed."
           : "Failed to update requirement."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleConfirmDestroyTask(): Promise<void> {
+    if (!selectedTask) {
+      return;
+    }
+
+    const normalizedDestroyReason = destroyReasonInputText.trim();
+    if (normalizedDestroyReason.length < DESTROY_REASON_MIN_LENGTH) {
+      setErrorMessage(
+        `Destroy reason must be at least ${DESTROY_REASON_MIN_LENGTH} characters.`
+      );
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("destroy");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.destroy(selectedTask.id, {
+        destroy_reason: normalizedDestroyReason,
+      });
+      closeDestroyTaskModal();
+      setWorkspaceView("changes");
+      setSuccessMessage("Started task destroyed and moved to deleted history.");
+      await loadDashboardData(true);
+    } catch (destroyError) {
+      console.error(destroyError);
+      setErrorMessage(
+        destroyError instanceof Error
+          ? destroyError.message
+          : "Failed to destroy task."
       );
     } finally {
       setActiveMutationName(null);
@@ -3124,6 +3239,35 @@ function App() {
                           </button>
                         ) : null}
                       </div>
+
+                      <div className="devflow-detail__fact-list">
+                        <div className="devflow-detail__fact-card">
+                          <span className="devflow-detail__fact-label">关联项目</span>
+                          <span className="devflow-detail__fact-value">
+                            {selectedTaskProjectLabel}
+                          </span>
+                          <p className="devflow-detail__fact-hint">
+                            {canRebindSelectedTaskProject
+                              ? "Backlog 阶段且尚未生成 worktree 时，可在编辑面板中改绑项目。"
+                              : "任务开始后项目绑定会锁定，避免 project_id 与 worktree / 运行上下文脱钩。"}
+                          </p>
+                        </div>
+
+                        {selectedTask.destroyed_at || selectedTask.destroy_reason ? (
+                          <div className="devflow-detail__fact-card devflow-detail__fact-card--danger">
+                            <span className="devflow-detail__fact-label">销毁记录</span>
+                            <span className="devflow-detail__fact-value">
+                              {selectedTask.destroyed_at
+                                ? formatDateTime(selectedTask.destroyed_at)
+                                : "已进入 deleted history"}
+                            </span>
+                            <p className="devflow-detail__fact-hint">
+                              {selectedTask.destroy_reason ||
+                                "该任务已归档到 deleted history。"}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div className="devflow-detail__actions">
@@ -3292,13 +3436,20 @@ function App() {
                           ) : null}
                           <ActionButton
                             variant="ghost"
-                            busy={activeMutationName === "delete"}
+                            busy={
+                              activeMutationName ===
+                              (canDestroySelectedTask ? "destroy" : "delete")
+                            }
                             onClick={() => {
+                              if (canDestroySelectedTask) {
+                                handleOpenDestroyTaskModal();
+                                return;
+                              }
                               void handleDeleteRequirement(selectedTask);
                             }}
                           >
                             <TrashIcon className="devflow-icon devflow-icon--small" />
-                            <span>Delete</span>
+                            <span>{canDestroySelectedTask ? "Destroy" : "Delete"}</span>
                           </ActionButton>
                         </>
                       ) : null}
@@ -3326,6 +3477,37 @@ function App() {
                           setEditRequirementTitle(changeEvent.target.value)
                         }
                       />
+
+                      <select
+                        className="devflow-input devflow-input--select"
+                        value={editRequirementProjectId ?? ""}
+                        onChange={(changeEvent) =>
+                          setEditRequirementProjectId(changeEvent.target.value || null)
+                        }
+                        disabled={
+                          !canRebindSelectedTaskProject ||
+                          activeMutationName === "update"
+                        }
+                      >
+                        <option value="">-- 不关联项目 --</option>
+                        {projectList.map((projectItem) => (
+                          <option
+                            key={projectItem.id}
+                            value={projectItem.id}
+                            disabled={!isProjectSelectable(projectItem)}
+                          >
+                            {isProjectSelectable(projectItem)
+                              ? projectItem.display_name
+                              : `${projectItem.display_name} (${getProjectHealthState(projectItem).statusLabel.toLowerCase()})`}
+                          </option>
+                        ))}
+                      </select>
+
+                      <p className="devflow-create-panel__hint">
+                        {canRebindSelectedTaskProject
+                          ? "Only backlog tasks without a worktree can rebind project_id."
+                          : "Project binding is locked after task start so the stored project stays aligned with the worktree and runtime context."}
+                      </p>
 
                       <div className="devflow-create-panel__composer">
                         <textarea
@@ -4215,6 +4397,22 @@ function App() {
           </div>
         </div>
       </footer>
+
+      {isDestroyModalOpen && selectedTask ? (
+        <DestroyTaskModal
+          taskTitle={selectedTask.task_title}
+          stageLabel={selectedTaskStageLabel ?? formatStageLabel(selectedTask.workflow_stage)}
+          projectLabel={selectedTaskProjectLabel}
+          destroyReasonInputText={destroyReasonInputText}
+          onDestroyReasonChange={setDestroyReasonInputText}
+          onClose={closeDestroyTaskModal}
+          onConfirm={() => {
+            void handleConfirmDestroyTask();
+          }}
+          isSubmitting={activeMutationName === "destroy"}
+          minimumReasonLength={DESTROY_REASON_MIN_LENGTH}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4419,6 +4617,121 @@ function PrdFullscreenModal({
               enableMermaid
             />
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface DestroyTaskModalProps {
+  taskTitle: string;
+  stageLabel: string;
+  projectLabel: string;
+  destroyReasonInputText: string;
+  onDestroyReasonChange: Dispatch<SetStateAction<string>>;
+  onClose: () => void;
+  onConfirm: () => void;
+  isSubmitting: boolean;
+  minimumReasonLength: number;
+}
+
+function DestroyTaskModal({
+  taskTitle,
+  stageLabel,
+  projectLabel,
+  destroyReasonInputText,
+  onDestroyReasonChange,
+  onClose,
+  onConfirm,
+  isSubmitting,
+  minimumReasonLength,
+}: DestroyTaskModalProps) {
+  const remainingCharacterCount = Math.max(
+    0,
+    minimumReasonLength - destroyReasonInputText.trim().length
+  );
+
+  return (
+    <div
+      className="devflow-prd-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${taskTitle} destroy task dialog`}
+      onClick={onClose}
+    >
+      <div
+        className="devflow-destroy-modal"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+        }}
+      >
+        <div className="devflow-destroy-modal__header">
+          <div className="devflow-destroy-modal__copy">
+            <span className="devflow-destroy-modal__eyebrow">Destroy Task</span>
+            <h4 className="devflow-destroy-modal__title">{taskTitle}</h4>
+            <p className="devflow-destroy-modal__hint">
+              该动作会停止后台自动化，并尝试清理任务 worktree / 分支。销毁后任务会进入 deleted history。
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="devflow-prd-modal__close"
+            onClick={onClose}
+            disabled={isSubmitting}
+          >
+            <XIcon className="devflow-icon devflow-icon--small" />
+            <span>关闭</span>
+          </button>
+        </div>
+
+        <div className="devflow-destroy-modal__body">
+          <div className="devflow-destroy-modal__meta-grid">
+            <div className="devflow-destroy-modal__meta-card">
+              <span className="devflow-destroy-modal__meta-label">当前阶段</span>
+              <span className="devflow-destroy-modal__meta-value">{stageLabel}</span>
+            </div>
+            <div className="devflow-destroy-modal__meta-card">
+              <span className="devflow-destroy-modal__meta-label">关联项目</span>
+              <span className="devflow-destroy-modal__meta-value">
+                {projectLabel}
+              </span>
+            </div>
+          </div>
+
+          <label className="devflow-destroy-modal__reason-label" htmlFor="destroy-reason">
+            销毁原因
+          </label>
+          <textarea
+            id="destroy-reason"
+            className="devflow-destroy-modal__textarea"
+            placeholder="例如：误绑到错误仓库，当前 worktree 不再可信，需要销毁后重新创建。"
+            value={destroyReasonInputText}
+            onChange={(changeEvent) =>
+              onDestroyReasonChange(changeEvent.target.value)
+            }
+            disabled={isSubmitting}
+          />
+          <p className="devflow-destroy-modal__reason-hint">
+            {remainingCharacterCount > 0
+              ? `请至少再输入 ${remainingCharacterCount} 个字符。`
+              : "销毁原因会写入任务详情和时间线，便于后续审计。"}
+          </p>
+
+          <div className="devflow-destroy-modal__actions">
+            <ActionButton variant="ghost" onClick={onClose} disabled={isSubmitting}>
+              取消
+            </ActionButton>
+            <ActionButton
+              variant="primary"
+              busy={isSubmitting}
+              disabled={destroyReasonInputText.trim().length < minimumReasonLength}
+              onClick={onConfirm}
+              className="devflow-destroy-modal__confirm"
+            >
+              确认销毁
+            </ActionButton>
+          </div>
         </div>
       </div>
     </div>
@@ -5927,6 +6240,39 @@ function canCompleteTask(
     taskStage === WorkflowStage.PR_PREPARING ||
     taskStage === WorkflowStage.ACCEPTANCE_IN_PROGRESS
   );
+}
+
+function canRebindTaskProject(taskItem: Task): boolean {
+  return (
+    taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+    taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+    taskItem.workflow_stage === WorkflowStage.BACKLOG &&
+    !taskItem.worktree_path
+  );
+}
+
+function canDestroyTask(taskItem: Task): boolean {
+  return (
+    taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+    taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+    (taskItem.workflow_stage !== WorkflowStage.BACKLOG ||
+      Boolean(taskItem.worktree_path))
+  );
+}
+
+function getTaskProjectDisplayName(
+  taskItem: Task | null,
+  projectItem: Project | null
+): string {
+  if (!taskItem?.project_id) {
+    return "未关联项目";
+  }
+
+  if (projectItem?.display_name) {
+    return projectItem.display_name;
+  }
+
+  return `未知项目（${taskItem.project_id.slice(0, 8)}...）`;
 }
 
 function hasLatestSelfReviewCyclePassed(taskDevLogList: DevLog[]): boolean {
