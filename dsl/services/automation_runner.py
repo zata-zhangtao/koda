@@ -177,7 +177,8 @@ async def run_task_completion(
     task_id_str: str,
     run_account_id_str: str,
     task_title_str: str,
-    task_summary_str: str | None,
+    commit_information_text_str: str | None,
+    commit_information_source_str: str,
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str,
@@ -188,7 +189,8 @@ async def run_task_completion(
         task_id_str: Task UUID string.
         run_account_id_str: Run account UUID string.
         task_title_str: Task title.
-        task_summary_str: Task summary.
+        commit_information_text_str: Resolved commit information text.
+        commit_information_source_str: Commit information source label.
         dev_log_text_list: Task context log texts.
         work_dir_path: Working directory.
         worktree_path_str: Worktree path.
@@ -197,7 +199,8 @@ async def run_task_completion(
         task_id_str=task_id_str,
         run_account_id_str=run_account_id_str,
         task_title_str=task_title_str,
-        task_summary_str=task_summary_str,
+        commit_information_text_str=commit_information_text_str,
+        commit_information_source_str=commit_information_source_str,
         dev_log_text_list=dev_log_text_list,
         work_dir_path=work_dir_path,
         worktree_path_str=worktree_path_str,

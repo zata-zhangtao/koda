@@ -208,6 +208,68 @@ def test_run_task_prd_forwards_auto_confirm_flag(monkeypatch) -> None:
     assert recorded_call_dict["auto_confirm_prd_and_execute_bool"] is True
 
 
+def test_run_task_completion_forwards_commit_information_contract(
+    monkeypatch,
+) -> None:
+    """The runner-agnostic completion wrapper should preserve commit information."""
+    recorded_call_dict: dict[str, object] = {}
+
+    async def fake_run_codex_completion(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        commit_information_text_str: str,
+        commit_information_source_str: str,
+        dev_log_text_list: list[str],
+        work_dir_path: Path,
+        worktree_path_str: str,
+    ) -> None:
+        recorded_call_dict.update(
+            {
+                "task_id_str": task_id_str,
+                "run_account_id_str": run_account_id_str,
+                "task_title_str": task_title_str,
+                "commit_information_text_str": commit_information_text_str,
+                "commit_information_source_str": commit_information_source_str,
+                "dev_log_text_list": dev_log_text_list,
+                "work_dir_path": work_dir_path,
+                "worktree_path_str": worktree_path_str,
+            }
+        )
+
+    monkeypatch.setattr(
+        automation_runner,
+        "run_codex_completion",
+        fake_run_codex_completion,
+    )
+
+    asyncio.run(
+        automation_runner.run_task_completion(
+            task_id_str="12345678-complete-wrapper",
+            run_account_id_str="run-account-1",
+            task_title_str="Forward completion info",
+            commit_information_text_str="Summarize the completed branch behavior",
+            commit_information_source_str="ai_summary",
+            dev_log_text_list=["ctx line"],
+            work_dir_path=Path("/tmp/complete-wrapper"),
+            worktree_path_str="/tmp/repo-wt-complete-wrapper",
+        )
+    )
+
+    assert recorded_call_dict["task_id_str"] == "12345678-complete-wrapper"
+    assert recorded_call_dict["run_account_id_str"] == "run-account-1"
+    assert recorded_call_dict["task_title_str"] == "Forward completion info"
+    assert (
+        recorded_call_dict["commit_information_text_str"]
+        == "Summarize the completed branch behavior"
+    )
+    assert recorded_call_dict["commit_information_source_str"] == "ai_summary"
+    assert recorded_call_dict["dev_log_text_list"] == ["ctx line"]
+    assert recorded_call_dict["work_dir_path"] == Path("/tmp/complete-wrapper")
+    assert recorded_call_dict["worktree_path_str"] == "/tmp/repo-wt-complete-wrapper"
+
+
 def test_run_codex_task_with_claude_runner_keeps_stage_flow(
     tmp_path: Path,
     monkeypatch,
