@@ -172,7 +172,7 @@ export const taskApi = {
       method: "POST",
     }),
 
-  /** 触发任务进入完成收尾阶段（summary commit + rebase + Codex conflict fix + merge + cleanup） */
+  /** 触发任务进入完成收尾阶段（AI-summary-first commit + rebase + Codex conflict fix + merge + cleanup） */
   complete: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/complete`, {
       method: "POST",

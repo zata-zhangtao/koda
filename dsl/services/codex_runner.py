@@ -536,23 +536,22 @@ def _append_output_block_to_task_log(task_log_path: Path, output_text_str: str) 
 def _build_completion_commit_message(
     task_id_str: str,
     task_title_str: str,
-    task_summary_str: str | None,
-    dev_log_text_list: list[str],
+    commit_information_text_str: str | None,
 ) -> str:
-    """Build a short compliant commit subject from the task summary first.
+    """Build a short compliant commit subject from resolved commit information.
 
     Args:
         task_id_str: Task UUID
         task_title_str: Task title, used only as a last-resort fallback
-        task_summary_str: Task summary / requirement brief
-        dev_log_text_list: Recent task logs, used as secondary fallback context
+        commit_information_text_str: Resolved commit information text
 
     Returns:
         str: Sanitized commit subject
     """
-    commit_subject_candidate_list = [task_summary_str or ""]
-    commit_subject_candidate_list.extend(reversed(dev_log_text_list))
-    commit_subject_candidate_list.append(task_title_str)
+    commit_subject_candidate_list = [
+        commit_information_text_str or "",
+        task_title_str,
+    ]
 
     for raw_commit_subject_candidate_str in commit_subject_candidate_list:
         summary_subject_line_str = raw_commit_subject_candidate_str.splitlines()[
@@ -564,7 +563,7 @@ def _build_completion_commit_message(
         if normalized_commit_subject_str:
             return normalized_commit_subject_str[:72].rstrip()
 
-    return f"Task summary update {task_id_str[:8]}"
+    return f"Task update {task_id_str[:8]}"
 
 
 def _resolve_primary_repo_root_from_worktree(worktree_path: Path) -> Path:
@@ -1130,7 +1129,7 @@ def _execute_git_completion_flow(
     task_id_str: str,
     run_account_id_str: str,
     task_title_str: str,
-    task_summary_str: str | None,
+    commit_information_text_str: str | None,
     dev_log_text_list: list[str],
     worktree_path_str: str,
 ) -> GitCompletionExecutionResult:
@@ -1140,8 +1139,8 @@ def _execute_git_completion_flow(
         task_id_str: Task UUID
         run_account_id_str: Run account UUID
         task_title_str: Task title used as fallback context
-        task_summary_str: Task summary / requirement brief used for the commit subject
-        dev_log_text_list: Recent task history for commit-message fallback and conflict resolution
+        commit_information_text_str: Resolved commit information used for the commit subject
+        dev_log_text_list: Recent task history used for conflict resolution context
         worktree_path_str: Task worktree path
 
     Returns:
@@ -1302,8 +1301,7 @@ def _execute_git_completion_flow(
     commit_message_str = _build_completion_commit_message(
         task_id_str=task_id_str,
         task_title_str=task_title_str,
-        task_summary_str=task_summary_str,
-        dev_log_text_list=dev_log_text_list,
+        commit_information_text_str=commit_information_text_str,
     )
     command_plan = [
         ("worktree-status", ["git", "status", "--short"], worktree_path),
@@ -1975,8 +1973,8 @@ def build_codex_completion_prompt(
 
 ## 执行要求
 1. 先查看当前 `git status`，确认本次任务的工作区状态。
-2. 严格按顺序执行：`git add .`、`git commit -m "<task summary>"`、`git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
-3. `git commit` 的提交消息要使用任务摘要 / requirement brief，而不是直接复用任务标题。
+2. 严格按顺序执行：`git add .`、`git commit -m "<resolved commit information>"`、`git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
+3. `git commit` 的提交消息要优先使用最近一轮通过的 AI summary；若缺失则回退到 requirement brief，再缺失时回退到任务标题。
 4. 如果 `git rebase main` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
 5. 如果工作区没有可提交的变更、缺少 `main`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
 6. merge 成功后，需要清理 task worktree 与本地任务分支；不要 push。
@@ -3299,7 +3297,8 @@ async def run_codex_completion(
     task_id_str: str,
     run_account_id_str: str,
     task_title_str: str,
-    task_summary_str: str | None,
+    commit_information_text_str: str,
+    commit_information_source_str: str,
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str,
@@ -3307,7 +3306,7 @@ async def run_codex_completion(
     """在任务 worktree 中执行确定性的 Git 收尾与合并动作.
 
     完成阶段会在后台按顺序执行：
-    `git add .` -> `git commit -m "<task summary>"` -> `git rebase main`
+    `git add .` -> `git commit -m "<resolved commit information>"` -> `git rebase main`
     -> 复用承载 `main` 的工作区执行 `git merge <task branch>` -> 清理 worktree/分支。
     若 `git rebase main` 发生冲突，会自动调用 Codex 修复冲突并继续 rebase。
     若合并成功，任务自动推进到 `done`；若在合并前失败，任务回退到 `changes_requested`。
@@ -3316,12 +3315,14 @@ async def run_codex_completion(
         task_id_str: 任务 UUID 字符串
         run_account_id_str: 运行账户 UUID 字符串
         task_title_str: 任务标题，用于补充上下文
-        task_summary_str: 任务摘要 / requirement brief，用于 commit message
-        dev_log_text_list: 历史日志文本列表，用于 commit message 回退和冲突修复上下文
+        commit_information_text_str: 已解析的 commit information 文本
+        commit_information_source_str: commit information 来源标签，仅用于可观测性
+        dev_log_text_list: 历史日志文本列表，用于冲突修复上下文
         work_dir_path: 保留参数；当前应为任务 worktree
         worktree_path_str: 任务对应的 git worktree 绝对路径
     """
     del work_dir_path
+    del commit_information_source_str
 
     active_runner_kind_str = get_active_runner_kind()
     register_task_background_activity(task_id_str)
@@ -3342,7 +3343,7 @@ async def run_codex_completion(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
             task_title_str=task_title_str,
-            task_summary_str=task_summary_str,
+            commit_information_text_str=commit_information_text_str,
             dev_log_text_list=dev_log_text_list,
             worktree_path_str=worktree_path_str,
         )

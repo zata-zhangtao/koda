@@ -343,7 +343,7 @@ def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
             task_id_str="12345678-task-id",
             run_account_id_str="run-account-1",
             task_title_str="Finalize branch",
-            task_summary_str="Summarize the completed branch behavior",
+            commit_information_text_str="Summarize the completed branch behavior",
             dev_log_text_list=["Implementation already passed review."],
             worktree_path_str=str(created_worktree_path),
         )

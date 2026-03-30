@@ -58,7 +58,7 @@
 
 1. 前端点击“Complete”
 2. 后端将任务推进到 `pr_preparing`
-3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`、`git commit -m "<task summary>"`、`git rebase main`
+3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`、`git commit -m "<resolved commit information>"`、`git rebase main`
 4. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
 5. 后端会复用当前持有 `main` 分支的工作区完成 `git merge <task branch>`
 6. merge 成功后继续清理 task worktree 与本地任务分支
@@ -170,7 +170,7 @@
 
 它描述的真实后台行为是：
 
-- 当前 task worktree 中执行 `git add .`、基于任务摘要的 `git commit -m ...`、`git rebase main`
+- 当前 task worktree 中执行 `git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`；若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`
 - 优先复用已经持有 `main` 分支的工作区，而不是假定可以随时 `checkout main`
 - 若 `rebase` / `merge` 冲突，则自动调用 Codex 修复并继续
 - merge 成功后清理 worktree 与本地任务分支，不会 push

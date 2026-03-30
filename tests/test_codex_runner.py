@@ -300,7 +300,8 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
     assert "`git add .`" in completion_prompt_text
     assert "承载 `main` 的工作区" in completion_prompt_text
     assert "`git merge <task branch>`" in completion_prompt_text
-    assert "任务摘要 / requirement brief" in completion_prompt_text
+    assert "AI summary" in completion_prompt_text
+    assert "requirement brief" in completion_prompt_text
     assert "不要 push" in completion_prompt_text
 
 
@@ -321,6 +322,28 @@ def test_output_contains_interruption_matches_positive_phrase() -> None:
         ["Execution interrupted by user cancellation."],
         CLAUDE_CLI_RUNNER.interruption_marker_tuple,
     )
+
+
+def test_build_completion_commit_message_prefers_resolved_commit_information() -> None:
+    """Commit subject generation should use resolved commit information first."""
+    commit_message_text = codex_runner._build_completion_commit_message(
+        task_id_str="12345678-commit-case",
+        task_title_str="Fallback task title",
+        commit_information_text_str="  Refine completion commit source. \nMore detail.",
+    )
+
+    assert commit_message_text == "Refine completion commit source"
+
+
+def test_build_completion_commit_message_falls_back_to_task_title() -> None:
+    """Blank commit information should fall back to the task title."""
+    commit_message_text = codex_runner._build_completion_commit_message(
+        task_id_str="12345678-title-fallback",
+        task_title_str="Fallback task title",
+        commit_information_text_str="   \n   ",
+    )
+
+    assert commit_message_text == "Fallback task title"
 
 
 def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
@@ -1719,14 +1742,14 @@ def test_run_codex_completion_advances_task_to_done_on_success(
         task_id_str: str,
         run_account_id_str: str,
         task_title_str: str,
-        task_summary_str: str | None,
+        commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
     ) -> codex_runner.GitCompletionExecutionResult:
         assert task_id_str == "12345678-done-case"
         assert run_account_id_str == "run-account-3"
         assert task_title_str == "Finalize branch"
-        assert task_summary_str == "Implement the reviewed branch flow"
+        assert commit_information_text_str == "Implement the reviewed branch flow"
         assert dev_log_text_list == ["Implementation already passed review."]
         assert worktree_path_str == str(tmp_path / "repo-wt-12345678")
         return codex_runner.GitCompletionExecutionResult(
@@ -1770,7 +1793,8 @@ def test_run_codex_completion_advances_task_to_done_on_success(
                 task_id_str="12345678-done-case",
                 run_account_id_str="run-account-3",
                 task_title_str="Finalize branch",
-                task_summary_str="Implement the reviewed branch flow",
+                commit_information_text_str="Implement the reviewed branch flow",
+                commit_information_source_str="ai_summary",
                 dev_log_text_list=["Implementation already passed review."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path / "repo-wt-12345678"),
@@ -1804,10 +1828,11 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
         task_id_str: str,
         run_account_id_str: str,
         task_title_str: str,
-        task_summary_str: str | None,
+        commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
     ) -> codex_runner.GitCompletionExecutionResult:
+        assert commit_information_text_str == "Implement the reviewed branch flow"
         return codex_runner.GitCompletionExecutionResult(
             merged_to_main=True,
             cleanup_succeeded=False,
@@ -1850,7 +1875,8 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
                 task_id_str="12345678-clean-warn",
                 run_account_id_str="run-account-5",
                 task_title_str="Finalize branch",
-                task_summary_str="Implement the reviewed branch flow",
+                commit_information_text_str="Implement the reviewed branch flow",
+                commit_information_source_str="requirement_brief",
                 dev_log_text_list=["Implementation already passed review."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path / "repo-wt-12345678"),
@@ -1886,10 +1912,11 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
         task_id_str: str,
         run_account_id_str: str,
         task_title_str: str,
-        task_summary_str: str | None,
+        commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
     ) -> codex_runner.GitCompletionExecutionResult:
+        assert commit_information_text_str == "Implement the reviewed branch flow"
         return codex_runner.GitCompletionExecutionResult(
             merged_to_main=False,
             cleanup_succeeded=False,
@@ -1943,7 +1970,8 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
                 task_id_str="12345678-finish-fail",
                 run_account_id_str="run-account-4",
                 task_title_str="Finalize branch",
-                task_summary_str="Implement the reviewed branch flow",
+                commit_information_text_str="Implement the reviewed branch flow",
+                commit_information_source_str="task_title",
                 dev_log_text_list=["Implementation already passed review."],
                 work_dir_path=tmp_path,
                 worktree_path_str=str(tmp_path / "repo-wt-12345678"),

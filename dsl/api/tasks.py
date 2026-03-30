@@ -3,6 +3,7 @@
 提供任务的创建、查询、状态更新、工作流阶段管理和执行触发功能.
 """
 
+from dataclasses import dataclass
 import re
 from pathlib import Path
 from typing import Annotated
@@ -67,6 +68,7 @@ _SELF_REVIEW_PASSED_LOG_MARKER_LIST = [
 _SELF_REVIEW_STARTED_LOG_MARKER_LIST = [
     "开始第 1 轮代码评审",
     "开始执行代码评审",
+    "开始重新执行 AI 自检",
 ]
 _POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST = [
     "post-review lint 闭环完成：pre-commit 已通过",
@@ -76,6 +78,10 @@ _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST = [
     "post-review lint 未通过，开始第 ",
     "轮 AI lint 定向修复完成，开始重新执行 pre-commit lint。",
 ]
+_SELF_REVIEW_SUMMARY_LINE_PREFIX = "摘要："
+_COMMIT_INFORMATION_SOURCE_AI_SUMMARY = "ai_summary"
+_COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF = "requirement_brief"
+_COMMIT_INFORMATION_SOURCE_TASK_TITLE = "task_title"
 _ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
 _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
@@ -92,6 +98,19 @@ _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.DONE: "Done",
 }
 _REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->"
+
+
+@dataclass(frozen=True)
+class CompletionCommitInformationResolution:
+    """描述 Complete 阶段解析出的 commit information.
+
+    Attributes:
+        commit_information_text: 传给完成链路的原始 commit information 文本
+        commit_information_source: commit information 的来源标签
+    """
+
+    commit_information_text: str
+    commit_information_source: str
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -499,6 +518,152 @@ def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> boo
             return False
 
     return False
+
+
+def _extract_self_review_summary_from_log_text(log_text_str: str) -> str | None:
+    """从单条 self-review 日志中提取摘要正文.
+
+    Args:
+        log_text_str: 日志文本
+
+    Returns:
+        str | None: 若存在 `摘要：...` 行则返回正文，否则返回 None
+    """
+    for raw_log_line_str in log_text_str.splitlines():
+        stripped_log_line_str = raw_log_line_str.strip()
+        if not stripped_log_line_str.startswith(_SELF_REVIEW_SUMMARY_LINE_PREFIX):
+            continue
+
+        extracted_summary_str = stripped_log_line_str.removeprefix(
+            _SELF_REVIEW_SUMMARY_LINE_PREFIX
+        ).strip()
+        return extracted_summary_str or None
+
+    return None
+
+
+def _extract_latest_passed_self_review_summary(
+    task_dev_log_list: list[DevLog],
+) -> str | None:
+    """提取最近一轮通过的 self-review 摘要.
+
+    逆序扫描日志；若先遇到新一轮 self-review 开始标记但尚未通过，
+    则不会继续误用更旧轮次的通过摘要。
+
+    Args:
+        task_dev_log_list: 已按时间正序排列的任务日志列表
+
+    Returns:
+        str | None: 最近一轮通过的 self-review 摘要；若不存在则返回 None
+    """
+    for dev_log_item in reversed(task_dev_log_list):
+        log_text = dev_log_item.text_content
+        if any(
+            marker_text in log_text
+            for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST
+        ):
+            return _extract_self_review_summary_from_log_text(log_text)
+        if any(
+            marker_text in log_text
+            for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
+        ):
+            return None
+
+    return None
+
+
+def _resolve_completion_commit_information(
+    task_obj: Task,
+    ordered_task_dev_log_list: list[DevLog],
+) -> CompletionCommitInformationResolution:
+    """解析 Complete 阶段使用的 commit information 与来源.
+
+    优先级固定为：最近一轮通过的 self-review AI summary ->
+    `Task.requirement_brief` -> `Task.task_title`。
+
+    Args:
+        task_obj: 任务对象
+        ordered_task_dev_log_list: 已按时间正序排列的任务日志列表
+
+    Returns:
+        CompletionCommitInformationResolution: 已解析的 commit information 结果
+    """
+    latest_self_review_summary_str = _extract_latest_passed_self_review_summary(
+        ordered_task_dev_log_list
+    )
+    if latest_self_review_summary_str:
+        return CompletionCommitInformationResolution(
+            commit_information_text=latest_self_review_summary_str,
+            commit_information_source=_COMMIT_INFORMATION_SOURCE_AI_SUMMARY,
+        )
+
+    requirement_brief_text = (task_obj.requirement_brief or "").strip()
+    if requirement_brief_text:
+        return CompletionCommitInformationResolution(
+            commit_information_text=requirement_brief_text,
+            commit_information_source=_COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF,
+        )
+
+    return CompletionCommitInformationResolution(
+        commit_information_text=task_obj.task_title,
+        commit_information_source=_COMMIT_INFORMATION_SOURCE_TASK_TITLE,
+    )
+
+
+def _build_completion_commit_information_source_log_text(
+    commit_information_source_str: str,
+) -> str:
+    """构造 Complete 阶段 commit information 来源留痕文本.
+
+    Args:
+        commit_information_source_str: commit information 来源标签
+
+    Returns:
+        str: 可写入 DevLog 的来源说明文本
+    """
+    if commit_information_source_str == _COMMIT_INFORMATION_SOURCE_AI_SUMMARY:
+        return "📝 已解析 Complete 阶段的 commit information 来源：最近一轮通过的 AI summary。"
+    if commit_information_source_str == _COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF:
+        return (
+            "📝 已解析 Complete 阶段的 commit information 来源：requirement summary fallback。"
+            "\n当前没有可用的最近一轮通过 AI summary，系统将回退使用 `requirement_brief`。"
+        )
+    return (
+        "📝 已解析 Complete 阶段的 commit information 来源：task title fallback。"
+        "\n当前没有可用的最近一轮通过 AI summary，也没有 requirement summary，系统将回退使用 `task_title`。"
+    )
+
+
+def _create_completion_commit_information_source_log(
+    db_session: Session,
+    task_obj: Task,
+    commit_information_resolution: CompletionCommitInformationResolution,
+) -> str:
+    """写入 Complete 阶段 commit information 来源留痕.
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 任务对象
+        commit_information_resolution: 已解析的 commit information 结果
+
+    Returns:
+        str: 已写入的日志文本
+    """
+    commit_information_source_log_text = (
+        _build_completion_commit_information_source_log_text(
+            commit_information_resolution.commit_information_source
+        )
+    )
+    LogService.create_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_obj.id,
+            text_content=commit_information_source_log_text,
+            state_tag=DevLogStateTag.OPTIMIZATION,
+        ),
+        task_obj.run_account_id,
+    )
+    return commit_information_source_log_text
 
 
 def _has_latest_post_review_lint_cycle_passed(task_dev_log_list: list[DevLog]) -> bool:
@@ -1208,6 +1373,10 @@ def resume_task(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
             )
+        commit_information_resolution = _resolve_completion_commit_information(
+            task_obj=resumable_task,
+            ordered_task_dev_log_list=ordered_task_dev_log_list,
+        )
 
         register_task_background_activity(task_id)
         background_tasks.add_task(
@@ -1215,7 +1384,12 @@ def resume_task(
             task_id_str=task_id,
             run_account_id_str=resumable_task.run_account_id,
             task_title_str=resumable_task.task_title,
-            task_summary_str=resumable_task.requirement_brief,
+            commit_information_text_str=(
+                commit_information_resolution.commit_information_text
+            ),
+            commit_information_source_str=(
+                commit_information_resolution.commit_information_source
+            ),
             dev_log_text_list=dev_log_text_snapshot_list,
             work_dir_path=worktree_dir_path,
             worktree_path_str=resumable_task.worktree_path,
@@ -1234,7 +1408,7 @@ def complete_task(
 
     顺序固定为：
     1. 在任务 worktree 中执行 `git add .`
-    2. 在任务 worktree 中执行 `git commit -m "<task summary>"`
+    2. 在任务 worktree 中执行 `git commit -m "<resolved commit information>"`
     3. 在任务 worktree 中执行 `git rebase main`
     4. 若 rebase 冲突，自动调用 Codex 修复冲突并继续 rebase
     5. 在当前持有 `main` 分支的工作区执行 `git merge <task branch>`
@@ -1302,13 +1476,30 @@ def complete_task(
         source_workflow_stage=source_workflow_stage,
         ordered_task_dev_log_list=ordered_task_dev_log_list,
     )
+    commit_information_resolution = _resolve_completion_commit_information(
+        task_obj=completion_task,
+        ordered_task_dev_log_list=ordered_task_dev_log_list,
+    )
+    commit_information_source_log_text = (
+        _create_completion_commit_information_source_log(
+            db_session=db_session,
+            task_obj=completion_task,
+            commit_information_resolution=commit_information_resolution,
+        )
+    )
     dev_log_text_snapshot_list: list[str] = [
         dev_log_item.text_content for dev_log_item in ordered_task_dev_log_list
     ]
     if manual_override_log_text:
         dev_log_text_snapshot_list.append(manual_override_log_text)
+    dev_log_text_snapshot_list.append(commit_information_source_log_text)
     task_title_snapshot_str: str = completion_task.task_title
-    task_summary_snapshot_str: str | None = completion_task.requirement_brief
+    commit_information_snapshot_str: str = (
+        commit_information_resolution.commit_information_text
+    )
+    commit_information_source_snapshot_str: str = (
+        commit_information_resolution.commit_information_source
+    )
     run_account_id_snapshot_str: str = completion_task.run_account_id
     worktree_path_snapshot_str: str = completion_task.worktree_path
 
@@ -1318,14 +1509,15 @@ def complete_task(
         task_id_str=task_id,
         run_account_id_str=run_account_id_snapshot_str,
         task_title_str=task_title_snapshot_str,
-        task_summary_str=task_summary_snapshot_str,
+        commit_information_text_str=commit_information_snapshot_str,
+        commit_information_source_str=commit_information_source_snapshot_str,
         dev_log_text_list=dev_log_text_snapshot_list,
         work_dir_path=worktree_dir_path,
         worktree_path_str=worktree_path_snapshot_str,
     )
 
-    completion_task.log_count = len(ordered_task_dev_log_list) + (
-        1 if manual_override_log_text else 0
+    completion_task.log_count = (
+        len(ordered_task_dev_log_list) + (1 if manual_override_log_text else 0) + 1
     )
     completion_task.is_codex_task_running = True
     return completion_task

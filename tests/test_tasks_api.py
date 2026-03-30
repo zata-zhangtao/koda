@@ -793,7 +793,8 @@ def test_complete_task_skips_manual_override_log_after_self_review_passed(
                 run_account_id=run_account_obj.id,
                 text_content=(
                     "✅ AI 自检闭环完成：第 1 轮评审通过，未发现阻塞性问题。\n"
-                    "当前阶段保持在：AI 自检中（self_review_in_progress）。"
+                    "当前阶段保持在：AI 自检中（self_review_in_progress）。\n"
+                    "摘要：Refine the completion flow commit source."
                 ),
                 state_tag=DevLogStateTag.FIXED,
             ),
@@ -812,10 +813,83 @@ def test_complete_task_skips_manual_override_log_after_self_review_passed(
         .order_by(DevLog.created_at.asc(), DevLog.id.asc())
         .all()
     )
+    scheduled_completion_task = background_tasks.tasks[0]
 
     assert len(background_tasks.tasks) == 1
+    assert scheduled_completion_task.func is tasks_api.run_codex_completion
+    assert (
+        scheduled_completion_task.kwargs["commit_information_text_str"]
+        == "Refine the completion flow commit source."
+    )
+    assert (
+        scheduled_completion_task.kwargs["commit_information_source_str"]
+        == tasks_api._COMMIT_INFORMATION_SOURCE_AI_SUMMARY
+    )
     assert not any(
         "已记录人工接管" in log_item.text_content for log_item in recorded_log_list
+    )
+    assert any(
+        "最近一轮通过的 AI summary" in log_item.text_content
+        for log_item in recorded_log_list
+    )
+
+
+def test_resolve_completion_commit_information_falls_back_to_requirement_brief_after_new_review_restart() -> (
+    None
+):
+    """A newer review restart should invalidate older passed summaries."""
+    task_obj = Task(
+        task_title="Task title fallback",
+        requirement_brief="Requirement brief fallback",
+    )
+    ordered_task_dev_log_list = [
+        DevLog(
+            task_id="task-1",
+            run_account_id="run-1",
+            text_content=(
+                "✅ AI 自检闭环完成：第 1 轮评审通过，未发现阻塞性问题。\n"
+                "摘要：Older review summary."
+            ),
+            state_tag=DevLogStateTag.FIXED,
+        ),
+        DevLog(
+            task_id="task-1",
+            run_account_id="run-1",
+            text_content="✅ 第 1 轮自动回改完成，开始重新执行 AI 自检（2/3）。",
+            state_tag=DevLogStateTag.FIXED,
+        ),
+    ]
+
+    resolution = tasks_api._resolve_completion_commit_information(
+        task_obj=task_obj,
+        ordered_task_dev_log_list=ordered_task_dev_log_list,
+    )
+
+    assert resolution.commit_information_text == "Requirement brief fallback"
+    assert (
+        resolution.commit_information_source
+        == tasks_api._COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF
+    )
+
+
+def test_resolve_completion_commit_information_falls_back_to_task_title_when_no_other_source_exists() -> (
+    None
+):
+    """Task title should remain the last-resort commit information source."""
+    task_obj = Task(
+        task_title="Task title fallback",
+        requirement_brief="   ",
+    )
+
+    resolution = tasks_api._resolve_completion_commit_information(
+        task_obj=task_obj,
+        ordered_task_dev_log_list=[],
+    )
+
+    assert resolution.commit_information_text == "Task title fallback"
+    assert (
+        resolution.commit_information_source
+        == tasks_api._COMMIT_INFORMATION_SOURCE_TASK_TITLE
     )
 
 
@@ -1058,6 +1132,70 @@ def test_resume_task_rejects_parked_test_stage_after_lint_pass(
     assert raised_error.value.status_code == 422
     assert "Post-review lint already passed" in str(raised_error.value.detail)
     assert len(background_tasks.tasks) == 0
+
+
+def test_resume_task_schedules_pr_preparing_completion_with_resolved_commit_information(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Completion resume should keep using the resolved AI-summary-first source."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-pr-preparing"
+    worktree_path.mkdir()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Resume interrupted completion",
+        requirement_brief="Requirement brief fallback",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PR_PREPARING,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content=(
+                "✅ AI 自检闭环完成：第 1 轮评审通过，未发现阻塞性问题。\n"
+                "摘要：Resume the completion flow from AI summary."
+            ),
+            state_tag=DevLogStateTag.FIXED,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    resumed_task = resume_task(task_obj.id, background_tasks, db_session)
+
+    scheduled_completion_task = background_tasks.tasks[0]
+
+    assert resumed_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert resumed_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert scheduled_completion_task.func is tasks_api.run_codex_completion
+    assert (
+        scheduled_completion_task.kwargs["commit_information_text_str"]
+        == "Resume the completion flow from AI summary."
+    )
+    assert (
+        scheduled_completion_task.kwargs["commit_information_source_str"]
+        == tasks_api._COMMIT_INFORMATION_SOURCE_AI_SUMMARY
+    )
 
 
 def test_list_tasks_uses_precomputed_log_counts(
