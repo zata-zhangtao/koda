@@ -729,6 +729,55 @@ def test_latest_waiting_user_signal_map_uses_latest_relevant_marker_only(
     )
 
 
+def test_list_task_card_metadata_defaults_missing_waiting_user_markers_to_false(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card metadata should not require full task-log history when markers are absent."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    review_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Review without markers",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    )
+    lint_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint without markers",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    db_session.add_all([review_task, lint_task])
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    task_card_metadata_list = list_task_card_metadata(db_session)
+    task_card_metadata_by_task_id = {
+        task_card_metadata.task_id: task_card_metadata
+        for task_card_metadata in task_card_metadata_list
+    }
+
+    review_metadata = task_card_metadata_by_task_id[review_task.id]
+    lint_metadata = task_card_metadata_by_task_id[lint_task.id]
+
+    assert (
+        review_metadata.display_stage_key == WorkflowStage.SELF_REVIEW_IN_PROGRESS.value
+    )
+    assert review_metadata.is_waiting_for_user is False
+    assert lint_metadata.display_stage_key == WorkflowStage.TEST_IN_PROGRESS.value
+    assert lint_metadata.is_waiting_for_user is False
+
+
 def test_regenerate_task_prd_schedules_background_job_with_media_context(
     db_session: Session,
     tmp_path: Path,

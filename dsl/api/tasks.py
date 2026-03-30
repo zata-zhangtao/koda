@@ -155,38 +155,6 @@ def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
     )
 
 
-def _get_ordered_task_dev_logs_by_task_id(
-    db_session: Session,
-    task_id_list: list[str],
-) -> dict[str, list[DevLog]]:
-    """批量返回按时间排序的任务日志列表.
-
-    Args:
-        db_session: 数据库会话
-        task_id_list: 需要查询日志的任务 ID 列表
-
-    Returns:
-        dict[str, list[DevLog]]: `task_id -> ordered dev logs` 映射
-    """
-    ordered_task_dev_logs_by_task_id: dict[str, list[DevLog]] = {
-        task_id_str: [] for task_id_str in task_id_list
-    }
-    if not task_id_list:
-        return ordered_task_dev_logs_by_task_id
-
-    ordered_dev_log_list = (
-        db_session.query(DevLog)
-        .filter(DevLog.task_id.in_(task_id_list))
-        .order_by(DevLog.task_id.asc(), DevLog.created_at.asc(), DevLog.id.asc())
-        .all()
-    )
-    for dev_log_item in ordered_dev_log_list:
-        ordered_task_dev_logs_by_task_id.setdefault(dev_log_item.task_id, []).append(
-            dev_log_item
-        )
-    return ordered_task_dev_logs_by_task_id
-
-
 def _get_latest_waiting_user_signal_map_by_task_id(
     db_session: Session,
     task_id_list: list[str],
@@ -883,18 +851,16 @@ def _build_destroy_cleanup_failure_reason(
 
 def _build_task_card_metadata(
     task_obj: Task,
-    ordered_task_dev_log_list: list[DevLog],
     task_branch_health: TaskBranchHealthSchema | None,
     *,
     is_task_running: bool,
-    self_review_passed_override: bool | None = None,
-    post_review_lint_passed_override: bool | None = None,
+    latest_self_review_passed: bool = False,
+    latest_post_review_lint_passed: bool = False,
 ) -> TaskCardMetadataSchema:
     """构建单个任务的卡片展示元数据.
 
     Args:
         task_obj: 任务对象
-        ordered_task_dev_log_list: 该任务按时间正序排列的日志列表
         is_task_running: 当前后台自动化是否仍在运行
 
     Returns:
@@ -909,16 +875,6 @@ def _build_task_card_metadata(
             last_ai_activity_at=task_obj.last_ai_activity_at,
             branch_health=task_branch_health,
         )
-    latest_self_review_passed = (
-        self_review_passed_override
-        if self_review_passed_override is not None
-        else _has_latest_self_review_cycle_passed(ordered_task_dev_log_list)
-    )
-    latest_post_review_lint_passed = (
-        post_review_lint_passed_override
-        if post_review_lint_passed_override is not None
-        else _has_latest_post_review_lint_cycle_passed(ordered_task_dev_log_list)
-    )
     waiting_for_user_after_self_review = (
         task_obj.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS
         and not is_task_running
@@ -1070,16 +1026,25 @@ def list_task_card_metadata(
     """
     run_account_id = _get_current_run_account_id(db_session)
     task_list = TaskService.get_tasks(db_session, run_account_id)
-    task_id_list = [task_item.id for task_item in task_list]
+    waiting_user_candidate_task_id_list = [
+        task_item.id
+        for task_item in task_list
+        if task_item.lifecycle_status
+        not in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }
+        and task_item.workflow_stage
+        in {
+            WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+            WorkflowStage.TEST_IN_PROGRESS,
+        }
+    ]
     latest_waiting_user_signal_map_by_task_id = (
         _get_latest_waiting_user_signal_map_by_task_id(
             db_session,
-            task_id_list,
+            waiting_user_candidate_task_id_list,
         )
-    )
-    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
-        db_session,
-        task_id_list,
     )
     task_branch_health_map = TaskService.build_task_branch_health_map(
         db_session,
@@ -1098,15 +1063,14 @@ def list_task_card_metadata(
         task_card_metadata_list.append(
             _build_task_card_metadata(
                 task_item,
-                ordered_task_dev_logs_by_task_id.get(task_item.id, []),
                 task_branch_health_map.get(task_item.id),
                 is_task_running=is_codex_task_running(task_item.id),
-                self_review_passed_override=waiting_user_signal_map[
-                    "self_review_passed"
-                ],
-                post_review_lint_passed_override=waiting_user_signal_map[
-                    "post_review_lint_passed"
-                ],
+                latest_self_review_passed=bool(
+                    waiting_user_signal_map["self_review_passed"]
+                ),
+                latest_post_review_lint_passed=bool(
+                    waiting_user_signal_map["post_review_lint_passed"]
+                ),
             )
         )
 
