@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Koda Prototype - Missing Branch Completion</title>
+  <style>
+    :root {
+      --paper: #f4efe6;
+      --paper-strong: #fffaf2;
+      --ink: #172033;
+      --ink-soft: #52607a;
+      --line: #d8cdb8;
+      --navy: #1f3158;
+      --navy-soft: #e7eefb;
+      --orange: #c2511a;
+      --orange-soft: #fff1e8;
+      --green: #17603a;
+      --green-soft: #e7f7ee;
+      --gray-soft: #eef2f7;
+      --shadow: 0 18px 45px rgba(23, 32, 51, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(194, 81, 26, 0.08), transparent 28%),
+        radial-gradient(circle at top right, rgba(31, 49, 88, 0.08), transparent 22%),
+        var(--paper);
+      min-height: 100vh;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      padding: 28px 22px;
+      background: linear-gradient(180deg, #1f3158 0%, #172033 100%);
+      color: #f7f9fd;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .brand {
+      margin-bottom: 24px;
+    }
+
+    .brand__eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(247, 249, 253, 0.65);
+      margin-bottom: 8px;
+    }
+
+    .brand__title {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.1;
+      margin: 0 0 8px;
+    }
+
+    .brand__desc {
+      font-size: 13px;
+      line-height: 1.6;
+      color: rgba(247, 249, 253, 0.72);
+      margin: 0;
+    }
+
+    .sidebar-group {
+      margin-top: 26px;
+    }
+
+    .sidebar-group__label {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(247, 249, 253, 0.55);
+    }
+
+    .task-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .task-card {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      padding: 14px 14px 15px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+
+    .task-card--selected {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .task-card__title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.45;
+      margin: 0 0 10px;
+    }
+
+    .task-card__meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: rgba(247, 249, 253, 0.72);
+    }
+
+    .stage-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .stage-pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .stage-pill--flow {
+      background: rgba(255, 255, 255, 0.09);
+      color: #f8d49d;
+    }
+
+    .stage-pill--missing {
+      background: rgba(194, 81, 26, 0.18);
+      color: #ffd0b5;
+    }
+
+    .stage-pill--done {
+      background: rgba(23, 96, 58, 0.22);
+      color: #b9f0cb;
+    }
+
+    .main {
+      padding: 34px;
+      display: grid;
+      gap: 22px;
+      align-content: start;
+    }
+
+    .hero,
+    .control-panel,
+    .status-grid,
+    .checklist-card,
+    .timeline-card {
+      background: var(--paper-strong);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px 28px 24px;
+    }
+
+    .hero__eyebrow {
+      margin: 0 0 12px;
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+
+    .hero__title {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+    }
+
+    .hero__desc {
+      margin: 0;
+      max-width: 780px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: var(--ink-soft);
+    }
+
+    .hero__chips {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .hero-chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--gray-soft);
+      color: var(--ink);
+    }
+
+    .control-panel {
+      padding: 18px 20px;
+    }
+
+    .control-panel__title {
+      margin: 0 0 12px;
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      border: none;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .btn {
+      padding: 11px 16px;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    .btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn--secondary {
+      background: var(--navy-soft);
+      color: var(--navy);
+      border-color: #cfd8f0;
+    }
+
+    .btn--warn {
+      background: var(--orange-soft);
+      color: var(--orange);
+      border-color: #f3c3a4;
+    }
+
+    .btn--primary {
+      background: var(--navy);
+      color: #fff;
+    }
+
+    .btn--success {
+      background: var(--green);
+      color: #fff;
+    }
+
+    .btn--ghost {
+      background: transparent;
+      color: var(--ink-soft);
+      border-color: var(--line);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .status-pane,
+    .probe-pane {
+      padding: 24px 24px 26px;
+    }
+
+    .status-pane {
+      border-right: 1px solid var(--line);
+    }
+
+    .status-pane__title,
+    .probe-pane__title,
+    .checklist-card__title,
+    .timeline-card__title {
+      margin: 0 0 12px;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
+    }
+
+    .status-pane__copy,
+    .probe-row__note,
+    .timeline-event__copy,
+    .checklist-card__desc {
+      color: var(--ink-soft);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .status-banner {
+      margin-top: 16px;
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .status-banner--normal {
+      background: var(--navy-soft);
+      border-color: #cfd8f0;
+      color: var(--navy);
+    }
+
+    .status-banner--missing {
+      background: var(--orange-soft);
+      border-color: #f3c3a4;
+      color: #8f3b12;
+    }
+
+    .status-banner--done {
+      background: var(--green-soft);
+      border-color: #bfdcc8;
+      color: var(--green);
+    }
+
+    .probe-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .probe-row {
+      padding: 14px 15px;
+      border-radius: 16px;
+      background: var(--gray-soft);
+      border: 1px solid #dbe3ee;
+    }
+
+    .probe-row__label {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin-bottom: 6px;
+    }
+
+    .probe-row__value {
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .probe-row__value code {
+      font-size: 15px;
+    }
+
+    .checklist-card {
+      padding: 24px 24px 22px;
+    }
+
+    .checklist-card[hidden] {
+      display: none;
+    }
+
+    .checklist {
+      margin: 14px 0 0;
+      padding-left: 20px;
+      color: var(--ink);
+      line-height: 1.8;
+      font-size: 14px;
+    }
+
+    .timeline-card {
+      padding: 24px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .timeline-event {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .timeline-event:first-child {
+      padding-top: 0;
+      border-top: none;
+    }
+
+    .timeline-event__time {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+
+    .timeline-event__title {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .status-pane {
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .main {
+        padding: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand__eyebrow">Prototype</div>
+        <h1 class="brand__title">缺失分支完成确认</h1>
+        <p class="brand__desc">
+          演示当任务分支已被人工 merge 并删除后，Koda 如何把需求保留在可见列表中，
+          并引导用户先查看状态，再手动确认是否应转为 Complete。
+        </p>
+      </div>
+
+      <section class="sidebar-group">
+        <span class="sidebar-group__label">Active Workspace</span>
+        <div class="task-stack" id="activeList"></div>
+      </section>
+
+      <section class="sidebar-group">
+        <span class="sidebar-group__label">Completed Archive</span>
+        <div class="task-stack" id="completedList"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="hero">
+        <p class="hero__eyebrow">Koda Requirement Detail</p>
+        <h2 class="hero__title">手动 merge 后缺失分支的完成确认</h2>
+        <p class="hero__desc" id="heroCopy"></p>
+        <div class="hero__chips">
+          <span class="hero-chip">期望分支：<code>task/0fd7ed62</code></span>
+          <span class="hero-chip">项目仓库：<code>/repo/main-project</code></span>
+          <span class="hero-chip">Worktree：<code>/repo/task/main-project-wt-0fd7ed62</code></span>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <h3 class="control-panel__title">Demo Controls</h3>
+        <div class="controls">
+          <button class="btn btn--secondary" id="presentButton">1. 分支仍存在</button>
+          <button class="btn btn--warn" id="missingButton">2. 检测到分支缺失</button>
+          <button class="btn btn--primary" id="inspectButton">查看完成检查单</button>
+          <button class="btn btn--success" id="completeButton">确认 Complete</button>
+          <button class="btn btn--ghost" id="resetButton">重置场景</button>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <div class="status-pane">
+          <h3 class="status-pane__title" id="statusTitle"></h3>
+          <p class="status-pane__copy" id="statusCopy"></p>
+          <div class="status-banner" id="statusBanner"></div>
+        </div>
+        <div class="probe-pane">
+          <h3 class="probe-pane__title">Git 分支探针</h3>
+          <div class="probe-list">
+            <div class="probe-row">
+              <div class="probe-row__label">期望任务分支</div>
+              <div class="probe-row__value"><code>task/0fd7ed62</code></div>
+              <div class="probe-row__note">由 `task_id[:8]` 推导出的 canonical branch name。</div>
+            </div>
+            <div class="probe-row">
+              <div class="probe-row__label">Branch Presence</div>
+              <div class="probe-row__value" id="branchPresence"></div>
+              <div class="probe-row__note" id="branchPresenceNote"></div>
+            </div>
+            <div class="probe-row">
+              <div class="probe-row__label">Recommended Next Step</div>
+              <div class="probe-row__value" id="nextStep"></div>
+              <div class="probe-row__note" id="nextStepNote"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="checklist-card" id="checklistCard" hidden>
+        <h3 class="checklist-card__title">完成检查单</h3>
+        <p class="checklist-card__desc">
+          用户需要先看一眼这些确认项，系统才允许“确认 Complete”。
+          这能避免把“分支缺失”误判成“肯定已完成”。
+        </p>
+        <ol class="checklist">
+          <li>检查最近一次时间线记录，确认需求已经进入可交付阶段。</li>
+          <li>必要时点“打开项目”或“打开 Worktree”查看本地代码现状。</li>
+          <li>确认分支缺失是人工 merge/cleanup 的结果，而不是误删或未提交变更。</li>
+          <li>确认后再把需求切到 `Complete / Done`，并写入一条人工确认日志。</li>
+        </ol>
+      </section>
+
+      <section class="timeline-card">
+        <h3 class="timeline-card__title">交互结果时间线</h3>
+        <div class="timeline" id="timeline"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const demoState = {
+      scenario: "present",
+      hasViewedChecklist: false,
+      isCompleted: false,
+    };
+
+    const baseActiveTaskList = [
+      {
+        id: "requirement-demo",
+        title: "手动 merge 后缺失分支的完成确认",
+      },
+      {
+        id: "other-1",
+        title: "PRD 反馈回写整理",
+        stageLabel: "PRD Ready",
+        stageTone: "flow",
+        meta: "等待用户确认",
+      },
+      {
+        id: "other-2",
+        title: "附件编年史归档",
+        stageLabel: "Coding",
+        stageTone: "flow",
+        meta: "AI 正在执行",
+      },
+    ];
+
+    const baseCompletedTaskList = [
+      {
+        id: "done-1",
+        title: "Git Worktree 路径收口",
+        stageLabel: "Done",
+        stageTone: "done",
+        meta: "已归档",
+      },
+    ];
+
+    function buildScenarioSnapshot() {
+      if (demoState.isCompleted) {
+        return {
+          cardLabel: "Done",
+          cardTone: "done",
+          cardMeta: "已确认完成并归档",
+          heroCopy:
+            "任务分支已经缺失，用户也完成了人工检查。系统将需求安全地收敛到 completed archive，而不是继续留在 active workspace 中悬挂。",
+          statusTitle: "用户已确认该需求可以完成归档",
+          statusCopy:
+            "此时系统不再尝试执行正常的 `git add / commit / rebase / merge / cleanup` 收尾流，而是记录一条人工确认日志，并把任务转为 `workflow_stage=done`、`lifecycle_status=CLOSED`。",
+          bannerClass: "status-banner status-banner--done",
+          bannerText:
+            "任务已进入 Completed Archive。后续仍可查看时间线和需求文档，但不会继续阻塞 Active 视图。",
+          branchPresence: "Missing",
+          branchPresenceNote:
+            "探针确认 `refs/heads/task/0fd7ed62` 不存在；该状态已被人工审核并吸收到完成确认流程中。",
+          nextStep: "Archive Complete",
+          nextStepNote:
+            "显示详情只读视图；保留日志和 PRD，可追溯人工确认动作。",
+          timelineEventList: [
+            {
+              time: "T-2m",
+              title: "检测到分支缺失",
+              copy:
+                "系统刷新任务卡片时发现 canonical branch 已不存在，因此显示“查看完成状态”入口。",
+            },
+            {
+              time: "T-1m",
+              title: "用户打开完成检查单",
+              copy:
+                "用户先核对日志、代码和最近状态，确认这是人工 merge/cleanup，而不是异常丢失。",
+            },
+            {
+              time: "Now",
+              title: "手动确认 Complete",
+              copy:
+                "系统写入人工确认日志，把需求切换到 Done，并从 Active Workspace 收口到 Completed Archive。",
+            },
+          ],
+        };
+      }
+
+      if (demoState.scenario === "missing") {
+        return {
+          cardLabel: "Branch Missing",
+          cardTone: "missing",
+          cardMeta: "等待用户检查后确认",
+          heroCopy:
+            "当后台轮询或详情刷新发现任务分支已消失时，需求不应直接消失，也不应假定已经完成。系统需要保留卡片，并提供一个明确的“查看完成状态”动作。",
+          statusTitle: "检测到 canonical task branch 不存在",
+          statusCopy:
+            "这里的关键不是自动关单，而是进入一个人工确认路径。用户先查看时间线和代码，再决定是否标记为 Complete。",
+          bannerClass: "status-banner status-banner--missing",
+          bannerText:
+            demoState.hasViewedChecklist
+              ? "完成检查单已展开。现在允许点击“确认 Complete”，把任务收口到 completed archive。"
+              : "请先点击“查看完成检查单”。系统必须要求一次显式确认，避免误把异常删分支当作已完成。",
+          branchPresence: "Missing",
+          branchPresenceNote:
+            "分支探针未找到 `refs/heads/task/0fd7ed62`。这通常发生在用户已手动 merge 并清理本地分支之后。",
+          nextStep: demoState.hasViewedChecklist ? "Allow Manual Complete" : "Open Checklist",
+          nextStepNote:
+            demoState.hasViewedChecklist
+              ? "用户已查看确认项，前端可以解锁 manual-complete CTA。"
+              : "先打开检查单，再允许人工确认完成。",
+          timelineEventList: [
+            {
+              time: "T-5m",
+              title: "需求仍处于 PR Prep / Acceptance 边缘状态",
+              copy:
+                "数据库里还有 worktree_path 和未关闭状态，所以它仍会出现在 Active Workspace。",
+            },
+            {
+              time: "T-1m",
+              title: "Git 分支探针返回 Missing",
+              copy:
+                "系统识别到分支已不存在，于是把详情面板切到“缺失分支待确认”模式。",
+            },
+            {
+              time: "Next",
+              title: "等待用户查看并确认",
+              copy:
+                "此时最重要的 CTA 不是普通 Complete，而是“查看完成检查单”。",
+            },
+          ],
+        };
+      }
+
+      return {
+        cardLabel: "PR Prep",
+        cardTone: "flow",
+        cardMeta: "仍可正常走 Git Complete",
+        heroCopy:
+          "这是正常路径：任务分支仍存在，Koda 可以继续执行标准 Git 完成流。只有在 branch probe 发现缺失时，才会切到人工确认分支。",
+        statusTitle: "任务仍可使用标准 Git Complete 流程",
+        statusCopy:
+          "当前无需人工确认。点击 Complete 时，系统仍会走现有的 `git add . -> git commit -> git rebase main -> merge -> cleanup` 自动收尾链路。",
+        bannerClass: "status-banner status-banner--normal",
+        bannerText:
+          "分支和 worktree 都存在，所以系统保留现有自动化完成流，不应误显示“缺失分支待确认”。",
+        branchPresence: "Present",
+        branchPresenceNote:
+          "探针能解析到 `task/0fd7ed62`，说明当前仍应走现有完成接口，而不是人工确认接口。",
+        nextStep: "Use Existing Complete Flow",
+        nextStepNote:
+          "维持现有 `/api/tasks/{id}/complete` 行为，不引入额外确认负担。",
+        timelineEventList: [
+          {
+            time: "T-4m",
+            title: "任务处于可完成阶段",
+            copy:
+              "系统允许显示现有 Complete 按钮，用户可以继续使用自动化 Git 收尾。",
+          },
+          {
+            time: "T-1m",
+            title: "定时刷新通过",
+            copy:
+              "任务卡片元数据刷新时确认 branch probe 为 Present，没有触发异常状态。",
+          },
+          {
+            time: "Next",
+            title: "继续正常完成",
+            copy:
+              "只有当 branch probe 变成 Missing 时，才切换到人工确认路径。",
+          },
+        ],
+      };
+    }
+
+    function renderTaskCard(taskSnapshot, isSelected) {
+      return `
+        <article class="task-card ${isSelected ? "task-card--selected" : ""}">
+          <h3 class="task-card__title">${taskSnapshot.title}</h3>
+          <div class="task-card__meta">
+            <span class="stage-pill stage-pill--${taskSnapshot.stageTone}">${taskSnapshot.stageLabel}</span>
+            <span>${taskSnapshot.meta}</span>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderSidebar(snapshot) {
+      const activeListElement = document.getElementById("activeList");
+      const completedListElement = document.getElementById("completedList");
+
+      const dynamicTaskSnapshot = {
+        id: "requirement-demo",
+        title: "手动 merge 后缺失分支的完成确认",
+        stageLabel: snapshot.cardLabel,
+        stageTone: snapshot.cardTone,
+        meta: snapshot.cardMeta,
+      };
+
+      const activeTaskList = demoState.isCompleted
+        ? baseActiveTaskList.slice(1)
+        : [dynamicTaskSnapshot, ...baseActiveTaskList.slice(1)];
+      const completedTaskList = demoState.isCompleted
+        ? [dynamicTaskSnapshot, ...baseCompletedTaskList]
+        : baseCompletedTaskList;
+
+      activeListElement.innerHTML = activeTaskList
+        .map((taskSnapshot) => renderTaskCard(taskSnapshot, taskSnapshot.id === "requirement-demo"))
+        .join("");
+      completedListElement.innerHTML = completedTaskList
+        .map((taskSnapshot) => renderTaskCard(taskSnapshot, taskSnapshot.id === "requirement-demo"))
+        .join("");
+    }
+
+    function renderTimeline(snapshot) {
+      const timelineElement = document.getElementById("timeline");
+      timelineElement.innerHTML = snapshot.timelineEventList
+        .map(
+          (timelineEvent) => `
+            <article class="timeline-event">
+              <div class="timeline-event__time">${timelineEvent.time}</div>
+              <div>
+                <h4 class="timeline-event__title">${timelineEvent.title}</h4>
+                <div class="timeline-event__copy">${timelineEvent.copy}</div>
+              </div>
+            </article>
+          `
+        )
+        .join("");
+    }
+
+    function render() {
+      const snapshot = buildScenarioSnapshot();
+
+      document.getElementById("heroCopy").textContent = snapshot.heroCopy;
+      document.getElementById("statusTitle").textContent = snapshot.statusTitle;
+      document.getElementById("statusCopy").textContent = snapshot.statusCopy;
+
+      const statusBannerElement = document.getElementById("statusBanner");
+      statusBannerElement.className = snapshot.bannerClass;
+      statusBannerElement.textContent = snapshot.bannerText;
+
+      document.getElementById("branchPresence").textContent = snapshot.branchPresence;
+      document.getElementById("branchPresenceNote").textContent = snapshot.branchPresenceNote;
+      document.getElementById("nextStep").textContent = snapshot.nextStep;
+      document.getElementById("nextStepNote").textContent = snapshot.nextStepNote;
+
+      document.getElementById("checklistCard").hidden =
+        !(demoState.scenario === "missing" && demoState.hasViewedChecklist && !demoState.isCompleted);
+
+      const inspectButtonElement = document.getElementById("inspectButton");
+      const completeButtonElement = document.getElementById("completeButton");
+
+      inspectButtonElement.disabled = demoState.scenario !== "missing" || demoState.isCompleted;
+      completeButtonElement.disabled = !(demoState.scenario === "missing" && demoState.hasViewedChecklist && !demoState.isCompleted);
+
+      renderSidebar(snapshot);
+      renderTimeline(snapshot);
+    }
+
+    document.getElementById("presentButton").addEventListener("click", () => {
+      demoState.scenario = "present";
+      demoState.hasViewedChecklist = false;
+      demoState.isCompleted = false;
+      render();
+    });
+
+    document.getElementById("missingButton").addEventListener("click", () => {
+      demoState.scenario = "missing";
+      demoState.hasViewedChecklist = false;
+      demoState.isCompleted = false;
+      render();
+    });
+
+    document.getElementById("inspectButton").addEventListener("click", () => {
+      if (demoState.scenario !== "missing" || demoState.isCompleted) {
+        return;
+      }
+      demoState.hasViewedChecklist = !demoState.hasViewedChecklist;
+      render();
+    });
+
+    document.getElementById("completeButton").addEventListener("click", () => {
+      if (!(demoState.scenario === "missing" && demoState.hasViewedChecklist)) {
+        return;
+      }
+      demoState.isCompleted = true;
+      render();
+    });
+
+    document.getElementById("resetButton").addEventListener("click", () => {
+      demoState.scenario = "present";
+      demoState.hasViewedChecklist = false;
+      demoState.isCompleted = false;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

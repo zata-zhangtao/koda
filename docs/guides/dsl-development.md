@@ -90,6 +90,9 @@
 12. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
 13. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
 14. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+15. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态，基于 canonical branch `task/{task_id[:8]}` 检查本地分支是否仍存在
+16. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
+17. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
 
 ### 调度能力（新增）
 
@@ -137,6 +140,7 @@
 - 把 `workflow_stage` 视为业务阶段事实来源，但不要再把它等同为“后台自动化仍在运行”
 - 后端和前端要同时更新 `WorkflowStage` 相关逻辑
 - 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`
+- 若前端需要处理“分支已被人工 merge/删除”的异常收口，优先使用 `TaskResponse.branch_health` / `TaskCardMetadata.branch_health`，不要再把 worktree 是否存在当成唯一依据
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
 - `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名
 - 任何会改变 `workflow_stage` 的新逻辑，都要同步考虑 `stage_updated_at` 是否应该刷新，以及是否需要进入统一通知服务

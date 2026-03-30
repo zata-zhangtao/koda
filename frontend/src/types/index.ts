@@ -54,7 +54,7 @@ export enum TaskScheduleRunStatus {
 }
 
 /** 任务卡片展示态 key */
-export type TaskDisplayStageKey = WorkflowStage | "waiting_user";
+export type TaskDisplayStageKey = WorkflowStage | "waiting_user" | "branch_missing";
 
 /** AI 处理状态 */
 export enum AIProcessingStatus {
@@ -118,6 +118,15 @@ export interface Project {
 }
 
 /** Task 类型 */
+export interface TaskBranchHealth {
+  expected_branch_name: string;
+  branch_exists: boolean | null;
+  worktree_exists: boolean;
+  manual_completion_candidate: boolean;
+  status_message: string | null;
+}
+
+/** Task 类型 */
 export interface Task {
   id: string;
   run_account_id: string;
@@ -136,6 +145,7 @@ export interface Task {
   closed_at: string | null;
   log_count: number;
   is_codex_task_running: boolean;
+  branch_health: TaskBranchHealth | null;
 }
 
 /** TaskSchedule 类型 */
@@ -194,6 +204,7 @@ export interface TaskCardMetadata {
   display_stage_label: string;
   is_waiting_for_user: boolean;
   last_ai_activity_at: string | null;
+  branch_health: TaskBranchHealth | null;
 }
 
 /** 提问接口返回值 */

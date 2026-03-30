@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -21,6 +22,7 @@ from dsl.api.tasks import (
     list_tasks,
     open_task_in_editor,
     open_task_in_trae,
+    manual_complete_task,
     regenerate_task_prd,
     resume_task,
     update_task,
@@ -76,6 +78,53 @@ def clear_codex_runtime_state() -> None:
     codex_runner._running_background_task_ids.clear()
     codex_runner._running_codex_processes.clear()
     codex_runner._user_cancelled_tasks.clear()
+
+
+def _run_git_command(repo_root_path: Path, git_argument_list: list[str]) -> str:
+    """Run a Git command inside a temporary repository.
+
+    Args:
+        repo_root_path: Repository root path
+        git_argument_list: Git argument list
+
+    Returns:
+        str: Trimmed stdout output
+    """
+    completed_process = subprocess.run(
+        ["git", "-C", str(repo_root_path), *git_argument_list],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return completed_process.stdout.strip()
+
+
+def _create_git_repo(repo_root_path: Path) -> Path:
+    """Create a real Git repository on `main` with one commit.
+
+    Args:
+        repo_root_path: Repository root path
+
+    Returns:
+        Path: Created repository root path
+    """
+    repo_root_path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-b", "main", str(repo_root_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    _run_git_command(repo_root_path, ["config", "user.email", "tester@example.com"])
+    _run_git_command(repo_root_path, ["config", "user.name", "Tester"])
+
+    tracked_file_path = repo_root_path / "README.md"
+    tracked_file_path.write_text("hello\n", encoding="utf-8")
+    _run_git_command(repo_root_path, ["add", "README.md"])
+    _run_git_command(repo_root_path, ["commit", "-m", "init"])
+    return repo_root_path
 
 
 def test_get_task_prd_file_reads_fixed_task_specific_path(
@@ -962,6 +1011,52 @@ def test_resolve_completion_commit_information_falls_back_to_task_title_when_no_
     )
 
 
+def test_complete_task_rejects_missing_branch_manual_completion_candidate(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Normal complete should reject missing-branch candidates."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-missing-branch"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Missing branch should not use /complete",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    background_tasks = BackgroundTasks()
+    with pytest.raises(HTTPException) as raised_error:
+        complete_task(task_obj.id, background_tasks, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "/manual-complete" in str(raised_error.value.detail)
+    assert background_tasks.tasks == []
+
+
 def test_get_task_exposes_runtime_flag(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -995,6 +1090,276 @@ def test_get_task_exposes_runtime_flag(
     returned_task = get_task(task_obj.id, db_session)
 
     assert returned_task.is_codex_task_running is True
+
+
+def test_get_task_exposes_present_branch_health(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task detail should expose branch health when the canonical branch exists."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Branch health present",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    expected_branch_name_str = f"task/{task_obj.id[:8]}"
+    _run_git_command(repo_root_path, ["branch", expected_branch_name_str])
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    returned_task = get_task(task_obj.id, db_session)
+
+    assert returned_task.branch_health is not None
+    assert returned_task.branch_health.expected_branch_name == expected_branch_name_str
+    assert returned_task.branch_health.branch_exists is True
+    assert returned_task.branch_health.manual_completion_candidate is False
+
+
+def test_list_task_card_metadata_exposes_branch_missing_display_state(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card metadata should expose the branch-missing manual-confirmation state."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "task-worktree-missing"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Branch health missing",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    task_card_metadata = list_task_card_metadata(db_session)[0]
+
+    assert task_card_metadata.display_stage_key == "branch_missing"
+    assert task_card_metadata.display_stage_label == "缺失分支待确认"
+    assert task_card_metadata.branch_health is not None
+    assert task_card_metadata.branch_health.branch_exists is False
+    assert task_card_metadata.branch_health.manual_completion_candidate is True
+
+
+def test_list_task_card_metadata_keeps_unstarted_linked_task_out_of_branch_missing(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linked backlog tasks should not surface the branch-missing completion state."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Backlog task without worktree",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    task_card_metadata = list_task_card_metadata(db_session)[0]
+
+    assert task_card_metadata.display_stage_key == WorkflowStage.BACKLOG.value
+    assert task_card_metadata.branch_health is not None
+    assert task_card_metadata.branch_health.branch_exists is False
+    assert task_card_metadata.branch_health.manual_completion_candidate is False
+    assert "尚未进入 worktree-backed Git 流程" in (
+        task_card_metadata.branch_health.status_message or ""
+    )
+
+
+def test_manual_complete_task_rejects_tasks_with_existing_branch(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Manual completion should fail when the canonical task branch still exists."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "task-worktree-existing-branch"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Manual complete reject",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    _run_git_command(repo_root_path, ["branch", f"task/{task_obj.id[:8]}"])
+
+    with pytest.raises(HTTPException) as raised_error:
+        manual_complete_task(task_obj.id, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "Task branch still exists" in str(raised_error.value.detail)
+
+
+def test_manual_complete_task_rejects_tasks_without_worktree_backed_git_flow(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Manual completion should fail for linked tasks that never created a worktree."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Manual complete reject before start",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_error:
+        manual_complete_task(task_obj.id, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "worktree-backed Git flow" in str(raised_error.value.detail)
+
+
+def test_manual_complete_task_closes_task_and_records_audit_log(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Manual completion should close the task and add a missing-branch audit log."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "task-worktree-success"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Manual complete success",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    updated_task = manual_complete_task(task_obj.id, db_session)
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.workflow_stage == WorkflowStage.DONE
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.CLOSED
+    assert updated_task.closed_at is not None
+    assert updated_task.branch_health is not None
+    assert updated_task.branch_health.branch_exists is False
+    assert updated_task.branch_health.manual_completion_candidate is False
+    assert any(
+        "已记录人工确认完成" in log_item.text_content for log_item in recorded_log_list
+    )
 
 
 def test_resume_task_schedules_interrupted_self_review(

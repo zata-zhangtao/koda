@@ -116,6 +116,33 @@ class TaskDestroySchema(BaseModel):
         return normalized_destroy_reason
 
 
+class TaskBranchHealthSchema(DSLResponseSchema):
+    """Task 关联 Git 分支的派生健康状态.
+
+    Attributes:
+        expected_branch_name: 基于任务 ID 推导出的 canonical branch 名称
+        branch_exists: 本地仓库中是否仍存在该 branch；无法确认时为 None
+        worktree_exists: 当前记录的 worktree 目录是否仍存在
+        manual_completion_candidate: 当前是否满足“缺失分支待人工确认完成”条件
+        status_message: 面向 UI 的状态说明文案
+    """
+
+    expected_branch_name: str = Field(
+        ...,
+        description="基于任务 ID 推导出的 canonical branch 名称",
+    )
+    branch_exists: bool | None = Field(
+        None,
+        description="本地仓库中是否仍存在该 branch；无法确认时为 None",
+    )
+    worktree_exists: bool = Field(..., description="当前记录的 worktree 目录是否仍存在")
+    manual_completion_candidate: bool = Field(
+        ...,
+        description="当前是否满足缺失分支后的人工确认完成条件",
+    )
+    status_message: str | None = Field(None, description="面向 UI 的状态说明文案")
+
+
 class TaskResponseSchema(DSLResponseSchema):
     """Task 响应模式.
 
@@ -134,6 +161,7 @@ class TaskResponseSchema(DSLResponseSchema):
         destroyed_at: 任务进入 deleted history 的时间（若存在）
         log_count: 日志条目数量（计算字段）
         is_codex_task_running: 后台自动化是否仍在运行
+        branch_health: 任务关联 Git 分支的派生健康状态
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -173,6 +201,10 @@ class TaskResponseSchema(DSLResponseSchema):
         default=False,
         description="该任务的后台自动化是否仍在运行",
     )
+    branch_health: TaskBranchHealthSchema | None = Field(
+        None,
+        description="任务关联 Git 分支的派生健康状态",
+    )
 
 
 class TaskCardMetadataSchema(DSLResponseSchema):
@@ -187,6 +219,7 @@ class TaskCardMetadataSchema(DSLResponseSchema):
         display_stage_label: 直接给前端 badge 使用的文案
         is_waiting_for_user: 当前是否处于“等待用户”展示态
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
+        branch_health: 任务关联 Git 分支的派生健康状态
     """
 
     task_id: str = Field(..., description="对应任务 ID")
@@ -202,4 +235,8 @@ class TaskCardMetadataSchema(DSLResponseSchema):
     last_ai_activity_at: datetime | None = Field(
         None,
         description="最近一次 Codex 自动化输出写入时间",
+    )
+    branch_health: TaskBranchHealthSchema | None = Field(
+        None,
+        description="任务关联 Git 分支的派生健康状态",
     )

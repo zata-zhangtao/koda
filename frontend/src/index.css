@@ -716,6 +716,129 @@ img {
   line-height: 1.5;
 }
 
+.devflow-branch-health-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-color: rgba(17, 17, 17, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 248, 244, 0.94) 100%);
+}
+
+.devflow-branch-health-banner--warning {
+  border-color: rgba(245, 158, 11, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 251, 235, 0.98) 0%, rgba(255, 247, 237, 0.94) 100%);
+}
+
+.devflow-branch-health-banner__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.devflow-branch-health-banner__eyebrow {
+  margin: 0 0 6px;
+  color: #a16207;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.devflow-branch-health-banner__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+}
+
+.devflow-branch-health-banner__copy {
+  margin: 0;
+  color: #57534e;
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.devflow-branch-health-banner__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.devflow-branch-health-banner__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #292524;
+  font-size: 0.82rem;
+}
+
+.devflow-branch-health-banner__fact strong {
+  color: #a8a29e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.devflow-branch-health-banner__fact code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.devflow-branch-health-banner__checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed rgba(180, 83, 9, 0.28);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.devflow-branch-health-banner__checklist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #92400e;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.devflow-branch-health-banner__toggle {
+  border: none;
+  background: transparent;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.devflow-branch-health-banner__checklist-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #44403c;
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+
+.devflow-branch-health-banner__hint {
+  margin: 0;
+  color: #b45309;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .devflow-edit-panel {
   padding: 18px;
   border-color: rgba(17, 17, 17, 0.08);
@@ -2994,6 +3117,11 @@ img {
   color: #b45309;
 }
 
+.devflow-badge--branch_missing {
+  background: rgba(251, 191, 36, 0.18);
+  color: #92400e;
+}
+
 .devflow-badge--pr_preparing {
   background: rgba(124, 58, 237, 0.1);
   color: #6d28d9;
@@ -3094,6 +3222,16 @@ img {
 @media (max-width: 1100px) {
   .devflow-layout,
   .devflow-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .devflow-branch-health-banner__header,
+  .devflow-branch-health-banner__checklist-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .devflow-branch-health-banner__facts {
     grid-template-columns: 1fr;
   }
 
@@ -3252,6 +3390,9 @@ img {
     flex-direction: column;
   }
 
+  .devflow-branch-health-banner {
+    padding: 16px;
+  }
   .devflow-footer__left {
     gap: 14px;
     flex-direction: column;

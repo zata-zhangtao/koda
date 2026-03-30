@@ -17,6 +17,7 @@ from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
 from dsl.models.task import Task
 from dsl.schemas.dev_log_schema import DevLogCreateSchema
 from dsl.schemas.task_schema import (
+    TaskBranchHealthSchema,
     TaskCreateSchema,
     TaskCardMetadataSchema,
     TaskDestroySchema,
@@ -86,6 +87,8 @@ _COMMIT_INFORMATION_SOURCE_TASK_TITLE = "task_title"
 _ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
 _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
+_BRANCH_MISSING_DISPLAY_STAGE_KEY = "branch_missing"
+_BRANCH_MISSING_DISPLAY_STAGE_LABEL = "缺失分支待确认"
 _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.BACKLOG: "Backlog",
     WorkflowStage.PRD_GENERATING: "Drafting PRD",
@@ -493,7 +496,11 @@ def _schedule_prd_generation(
         worktree_path_str=task_obj.worktree_path,
         auto_confirm_prd_and_execute_bool=task_obj.auto_confirm_prd_and_execute,
     )
-    return _hydrate_task_response(task_obj, is_task_running_override=True)
+    return _hydrate_task_response(
+        task_obj,
+        db_session=db_session,
+        is_task_running_override=True,
+    )
 
 
 def _has_latest_self_review_cycle_passed(task_dev_log_list: list[DevLog]) -> bool:
@@ -867,6 +874,7 @@ def _build_destroy_cleanup_failure_reason(
 def _build_task_card_metadata(
     task_obj: Task,
     ordered_task_dev_log_list: list[DevLog],
+    task_branch_health: TaskBranchHealthSchema | None,
     *,
     is_task_running: bool,
     self_review_passed_override: bool | None = None,
@@ -882,6 +890,15 @@ def _build_task_card_metadata(
     Returns:
         TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
     """
+    if task_branch_health and task_branch_health.manual_completion_candidate:
+        return TaskCardMetadataSchema(
+            task_id=task_obj.id,
+            display_stage_key=_BRANCH_MISSING_DISPLAY_STAGE_KEY,
+            display_stage_label=_BRANCH_MISSING_DISPLAY_STAGE_LABEL,
+            is_waiting_for_user=False,
+            last_ai_activity_at=task_obj.last_ai_activity_at,
+            branch_health=task_branch_health,
+        )
     latest_self_review_passed = (
         self_review_passed_override
         if self_review_passed_override is not None
@@ -921,12 +938,15 @@ def _build_task_card_metadata(
         display_stage_label=display_stage_label,
         is_waiting_for_user=is_waiting_for_user,
         last_ai_activity_at=task_obj.last_ai_activity_at,
+        branch_health=task_branch_health,
     )
 
 
 def _hydrate_task_response(
     task_obj: Task,
     *,
+    db_session: Session | None = None,
+    branch_health_override: TaskBranchHealthSchema | None = None,
     is_task_running_override: bool | None = None,
     log_count_override: int | None = None,
 ) -> Task:
@@ -934,12 +954,19 @@ def _hydrate_task_response(
 
     Args:
         task_obj: 任务对象
+        db_session: 可选数据库会话；传入时会在缺少 override 的情况下计算分支健康状态
+        branch_health_override: 可选的分支健康覆盖值
         is_task_running_override: 可选的运行态覆盖值
         log_count_override: 可选的日志数量覆盖值
 
     Returns:
-        Task: 填充了 `log_count` 和 `is_codex_task_running` 的任务对象
+        Task: 填充了 `log_count`、`is_codex_task_running` 与 `branch_health` 的任务对象
     """
+    resolved_branch_health = branch_health_override
+    if resolved_branch_health is None and db_session is not None:
+        resolved_branch_health = TaskService.build_task_branch_health(task_obj)
+
+    task_obj.branch_health = resolved_branch_health
     resolved_log_count = log_count_override
     if resolved_log_count is None:
         existing_log_count = getattr(task_obj, "log_count", None)
@@ -956,6 +983,31 @@ def _hydrate_task_response(
         else is_task_running_override
     )
     return task_obj
+
+
+def _build_manual_branch_missing_completion_log_text(
+    task_branch_health: TaskBranchHealthSchema,
+) -> str:
+    """Build the audit log text for a missing-branch manual completion.
+
+    Args:
+        task_branch_health: 当前任务的分支健康快照
+
+    Returns:
+        str: 人工完成审计日志文本
+    """
+    expected_branch_name_str = task_branch_health.expected_branch_name
+    worktree_status_hint_str = (
+        "当前 worktree 目录仍保留，可继续作为人工核对入口。"
+        if task_branch_health.worktree_exists
+        else "当前 worktree 目录已不存在。"
+    )
+    return (
+        "✅ 已记录人工确认完成：系统检测到任务分支 "
+        f"`{expected_branch_name_str}` 缺失，用户在查看时间线/代码后确认该需求已人工完成。\n"
+        "系统将直接把任务收敛到 `done / CLOSED`，不会重复执行普通 Git 收尾链路。\n"
+        f"{worktree_status_hint_str}"
+    )
 
 
 @router.get("", response_model=list[TaskResponseSchema])
@@ -976,9 +1028,14 @@ def list_tasks(
         db_session,
         [task_item.id for task_item in task_list],
     )
+    task_branch_health_map = TaskService.build_task_branch_health_map(
+        db_session,
+        task_list,
+    )
     return [
         _hydrate_task_response(
             task_item,
+            branch_health_override=task_branch_health_map.get(task_item.id),
             log_count_override=task_log_count_map.get(task_item.id, 0),
         )
         for task_item in task_list
@@ -1010,6 +1067,14 @@ def list_task_card_metadata(
             task_id_list,
         )
     )
+    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
+        db_session,
+        task_id_list,
+    )
+    task_branch_health_map = TaskService.build_task_branch_health_map(
+        db_session,
+        task_list,
+    )
 
     task_card_metadata_list: list[TaskCardMetadataSchema] = []
     for task_item in task_list:
@@ -1023,14 +1088,15 @@ def list_task_card_metadata(
         task_card_metadata_list.append(
             _build_task_card_metadata(
                 task_item,
-                [],
+                ordered_task_dev_logs_by_task_id.get(task_item.id, []),
+                task_branch_health_map.get(task_item.id),
                 is_task_running=is_codex_task_running(task_item.id),
-                self_review_passed_override=(
-                    waiting_user_signal_map["self_review_passed"] is True
-                ),
-                post_review_lint_passed_override=(
-                    waiting_user_signal_map["post_review_lint_passed"] is True
-                ),
+                self_review_passed_override=waiting_user_signal_map[
+                    "self_review_passed"
+                ],
+                post_review_lint_passed_override=waiting_user_signal_map[
+                    "post_review_lint_passed"
+                ],
             )
         )
 
@@ -1066,7 +1132,7 @@ def create_task(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(validation_error),
         ) from validation_error
-    return _hydrate_task_response(new_task)
+    return _hydrate_task_response(new_task, db_session=db_session)
 
 
 @router.put("/{task_id}/status", response_model=TaskResponseSchema)
@@ -1110,7 +1176,6 @@ def update_task_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-
     if (
         status_update.lifecycle_status == TaskLifecycleStatus.CLOSED
         and previous_lifecycle_status != TaskLifecycleStatus.CLOSED
@@ -1131,7 +1196,7 @@ def update_task_status(
             log_text_content=_build_requirement_delete_audit_log(updated_task),
             log_state_tag=DevLogStateTag.NONE,
         )
-    return _hydrate_task_response(updated_task)
+    return _hydrate_task_response(updated_task, db_session=db_session)
 
 
 @router.put("/{task_id}/stage", response_model=TaskResponseSchema)
@@ -1170,7 +1235,6 @@ def update_task_stage(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-
     if (
         stage_update.workflow_stage == WorkflowStage.DONE
         and previous_workflow_stage != WorkflowStage.DONE
@@ -1181,7 +1245,7 @@ def update_task_stage(
             log_text_content="需求验收通过，已标记为完成。",
             log_state_tag=DevLogStateTag.FIXED,
         )
-    return _hydrate_task_response(updated_task)
+    return _hydrate_task_response(updated_task, db_session=db_session)
 
 
 @router.post("/{task_id}/start", response_model=TaskResponseSchema)
@@ -1360,7 +1424,11 @@ def execute_task(
         worktree_path_str=executed_task.worktree_path,
     )
 
-    return _hydrate_task_response(executed_task, is_task_running_override=True)
+    return _hydrate_task_response(
+        executed_task,
+        db_session=db_session,
+        is_task_running_override=True,
+    )
 
 
 @router.post("/{task_id}/resume", response_model=TaskResponseSchema)
@@ -1519,7 +1587,11 @@ def resume_task(
             worktree_path_str=resumable_task.worktree_path,
         )
 
-    return _hydrate_task_response(resumable_task, is_task_running_override=True)
+    return _hydrate_task_response(
+        resumable_task,
+        db_session=db_session,
+        is_task_running_override=True,
+    )
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)
@@ -1552,8 +1624,9 @@ def complete_task(
         Task: 已更新为 `pr_preparing` 的任务对象
 
     Raises:
-        HTTPException: 当任务不存在时返回 404；阶段不合法、worktree 缺失或目录不存在时返回 422；
-            若当前任务已存在运行中的后台执行则返回 409
+        HTTPException: 当任务不存在时返回 404；阶段不合法、worktree 缺失、任务已转入
+            缺失分支人工确认路径或目录不存在时返回 422；若当前任务已存在运行中的
+            后台执行则返回 409
     """
     if is_codex_task_running(task_id):
         raise HTTPException(
@@ -1644,7 +1717,75 @@ def complete_task(
         len(ordered_task_dev_log_list) + (1 if manual_override_log_text else 0) + 1
     )
     completion_task.is_codex_task_running = True
+    completion_task.branch_health = TaskService.build_task_branch_health(
+        completion_task
+    )
     return completion_task
+
+
+@router.post("/{task_id}/manual-complete", response_model=TaskResponseSchema)
+def manual_complete_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """Manually close a task after a missing-branch confirmation.
+
+    This endpoint is reserved for the case where the canonical task branch has
+    already been merged and deleted outside Koda, so rerunning the standard Git
+    completion flow would no longer make sense.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已收敛到 `done / CLOSED` 的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；当后台自动化仍在运行时返回 409；
+            当任务不满足人工完成条件时返回 422
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if task_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    task_branch_health = TaskService.build_task_branch_health(task_obj)
+    try:
+        TaskService.validate_manual_completion_candidate(
+            task_obj,
+            task_branch_health,
+        )
+    except ValueError as manual_completion_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(manual_completion_error),
+        ) from manual_completion_error
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=task_obj.run_account_id,
+            text_content=_build_manual_branch_missing_completion_log_text(
+                task_branch_health
+            ),
+            state_tag=DevLogStateTag.FIXED,
+        )
+    )
+
+    manually_completed_task = TaskService.close_task_after_manual_completion(
+        db_session,
+        task_obj,
+    )
+    return _hydrate_task_response(manually_completed_task, db_session=db_session)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponseSchema)
@@ -1710,7 +1851,11 @@ def cancel_task(
             task_id[:8],
             email_error,
         )
-    return _hydrate_task_response(updated_task, is_task_running_override=False)
+    return _hydrate_task_response(
+        updated_task,
+        db_session=db_session,
+        is_task_running_override=False,
+    )
 
 
 @router.post("/{task_id}/destroy", response_model=TaskResponseSchema)
@@ -2080,7 +2225,6 @@ def update_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-
     if previous_project_id_str != updated_task.project_id:
         next_project_label_str = _resolve_project_display_name(
             db_session,
@@ -2098,7 +2242,7 @@ def update_task(
             ),
             updated_task.run_account_id,
         )
-    return _hydrate_task_response(updated_task)
+    return _hydrate_task_response(updated_task, db_session=db_session)
 
 
 @router.get("/{task_id}", response_model=TaskResponseSchema)
@@ -2127,5 +2271,6 @@ def get_task(
     task_log_count_map = TaskService.get_task_log_count_map(db_session, [task_obj.id])
     return _hydrate_task_response(
         task_obj,
+        db_session=db_session,
         log_count_override=task_log_count_map.get(task_obj.id, 0),
     )

@@ -178,6 +178,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 在检测到任务分支缺失后人工确认完成 */
+  manualComplete: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/manual-complete`, {
+      method: "POST",
+    }),
+
   /** 更新任务内容 */
   update: (
     id: string,

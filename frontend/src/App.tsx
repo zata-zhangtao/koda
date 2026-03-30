@@ -153,6 +153,7 @@ type MutationName =
   | "qa_to_feedback"
   | "update"
   | "complete"
+  | "manual_complete"
   | "delete"
   | "destroy"
   | "open_editor"
@@ -508,6 +509,12 @@ function App() {
     useState<string | null>(null);
   const [isRequirementSummaryExpanded, setIsRequirementSummaryExpanded] =
     useState(false);
+  const [isManualCompletionChecklistOpen, setIsManualCompletionChecklistOpen] =
+    useState(false);
+  const [
+    viewedManualCompletionChecklistTaskIdSet,
+    setViewedManualCompletionChecklistTaskIdSet,
+  ] = useState<Set<string>>(new Set());
   const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -1078,6 +1085,18 @@ function App() {
       formatTaskCardActivityTitle(selectedTaskCardMetadata?.last_ai_activity_at ?? null),
     [selectedTaskCardMetadata]
   );
+  const selectedTaskBranchHealth = useMemo(
+    () =>
+      selectedTask
+        ? resolveTaskBranchHealth(selectedTask, taskCardMetadataMap)
+        : null,
+    [selectedTask, taskCardMetadataMap]
+  );
+  const isSelectedTaskManualCompletionCandidate =
+    selectedTaskBranchHealth?.manual_completion_candidate === true;
+  const hasViewedSelectedTaskManualCompletionChecklist = selectedTask
+    ? viewedManualCompletionChecklistTaskIdSet.has(selectedTask.id)
+    : false;
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED
@@ -1125,7 +1144,11 @@ function App() {
     [taskList]
   );
   const canCompleteSelectedTask = selectedTask
-    ? canCompleteTask(selectedTask, selectedTaskStage) &&
+    ? canCompleteTask(
+        selectedTask,
+        selectedTaskStage,
+        selectedTaskBranchHealth
+      ) &&
       !selectedTask.is_codex_task_running
     : false;
   const selectedTaskScheduleNameMap = useMemo(() => {
@@ -1234,6 +1257,7 @@ function App() {
     resetCreateRequirementDraft();
     setIsEditPanelOpen(false);
     setActiveComposerMode("feedback");
+    setIsManualCompletionChecklistOpen(false);
     setFeedbackInputText("");
     setFeedbackAttachmentDraft(null);
     setTaskQaInputText("");
@@ -1260,13 +1284,18 @@ function App() {
     setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
+    setIsManualCompletionChecklistOpen(false);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
+    setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
   }, [detailTaskId]);
 
   useEffect(() => {
-    setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
-  }, [detailTaskId]);
+    if (isSelectedTaskManualCompletionCandidate) {
+      return;
+    }
+    setIsManualCompletionChecklistOpen(false);
+  }, [isSelectedTaskManualCompletionCandidate]);
 
   useEffect(() => {
     if (!expandedCompactTimelineItemId) {
@@ -2398,7 +2427,68 @@ function App() {
     }
   }
 
+  function handleOpenManualCompletionChecklist(taskItem: Task): void {
+    setViewedManualCompletionChecklistTaskIdSet((previousTaskIdSet) => {
+      const nextTaskIdSet = new Set(previousTaskIdSet);
+      nextTaskIdSet.add(taskItem.id);
+      return nextTaskIdSet;
+    });
+    setIsManualCompletionChecklistOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  async function handleManualCompleteRequirement(taskItem: Task): Promise<void> {
+    const resolvedTaskBranchHealth = resolveTaskBranchHealth(
+      taskItem,
+      taskCardMetadataMap
+    );
+    if (!resolvedTaskBranchHealth?.manual_completion_candidate) {
+      setErrorMessage("当前任务不满足缺失分支后的人工完成条件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    if (!viewedManualCompletionChecklistTaskIdSet.has(taskItem.id)) {
+      setErrorMessage("请先查看完成检查单，再确认 Complete。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("manual_complete");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.manualComplete(taskItem.id);
+      setWorkspaceView("completed");
+      setIsManualCompletionChecklistOpen(false);
+      setSuccessMessage(
+        "已写入人工确认日志，任务已收敛到 Completed 归档。"
+      );
+      await loadDashboardData(true);
+    } catch (manualCompletionError) {
+      console.error(manualCompletionError);
+      setErrorMessage(
+        manualCompletionError instanceof Error
+          ? manualCompletionError.message
+          : "人工完成失败，请刷新后重试。"
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   async function handleCompleteRequirement(taskItem: Task): Promise<void> {
+    const resolvedTaskBranchHealth = resolveTaskBranchHealth(
+      taskItem,
+      taskCardMetadataMap
+    );
+    if (resolvedTaskBranchHealth?.manual_completion_candidate) {
+      await handleManualCompleteRequirement(taskItem);
+      return;
+    }
+
     setActiveMutationName("complete");
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -3658,7 +3748,36 @@ function App() {
                             <EditIcon className="devflow-icon devflow-icon--small" />
                             <span>Edit Requirement</span>
                           </ActionButton>
-                          {canCompleteSelectedTask ? (
+                          {isSelectedTaskManualCompletionCandidate ? (
+                            <>
+                              <ActionButton
+                                variant="outline"
+                                onClick={() => {
+                                  handleOpenManualCompletionChecklist(selectedTask);
+                                }}
+                              >
+                                <FileTextIcon className="devflow-icon devflow-icon--small" />
+                                <span>
+                                  {hasViewedSelectedTaskManualCompletionChecklist
+                                    ? "重新查看完成检查单"
+                                    : "查看完成检查单"}
+                                </span>
+                              </ActionButton>
+                              <ActionButton
+                                variant="outline"
+                                busy={activeMutationName === "manual_complete"}
+                                disabled={
+                                  !hasViewedSelectedTaskManualCompletionChecklist
+                                }
+                                onClick={() => {
+                                  void handleManualCompleteRequirement(selectedTask);
+                                }}
+                              >
+                                <ArchiveIcon className="devflow-icon devflow-icon--small" />
+                                <span>确认 Complete</span>
+                              </ActionButton>
+                            </>
+                          ) : canCompleteSelectedTask ? (
                             <ActionButton
                               variant="outline"
                               busy={activeMutationName === "complete"}
@@ -3697,6 +3816,108 @@ function App() {
                       ) : null}
                     </div>
                   </div>
+
+                  {selectedTaskBranchHealth ? (
+                    <CardSurface
+                      className={
+                        isSelectedTaskManualCompletionCandidate
+                          ? "devflow-branch-health-banner devflow-branch-health-banner--warning"
+                          : "devflow-branch-health-banner"
+                      }
+                    >
+                      <div className="devflow-branch-health-banner__header">
+                        <div>
+                          <p className="devflow-branch-health-banner__eyebrow">
+                            Branch Health
+                          </p>
+                          <h3 className="devflow-branch-health-banner__title">
+                            {isSelectedTaskManualCompletionCandidate
+                              ? "检测到任务分支缺失，等待人工确认"
+                              : "当前任务分支状态"}
+                          </h3>
+                        </div>
+                        <StatusBadge
+                          status={
+                            isSelectedTaskManualCompletionCandidate
+                              ? "branch_missing"
+                              : (selectedTaskDisplayStage ?? selectedTask.workflow_stage)
+                          }
+                          label={
+                            isSelectedTaskManualCompletionCandidate
+                              ? "缺失分支待确认"
+                              : selectedTaskBranchHealth.branch_exists
+                                ? "Branch Present"
+                                : selectedTaskBranchHealth.branch_exists === false
+                                  ? "Branch Missing"
+                                  : "Branch Unknown"
+                          }
+                        />
+                      </div>
+                      <p className="devflow-branch-health-banner__copy">
+                        {selectedTaskBranchHealth.status_message ??
+                          "当前没有可显示的分支探针说明。"}
+                      </p>
+                      <div className="devflow-branch-health-banner__facts">
+                        <span className="devflow-branch-health-banner__fact">
+                          <strong>Expected Branch</strong>
+                          <code>{selectedTaskBranchHealth.expected_branch_name}</code>
+                        </span>
+                        <span className="devflow-branch-health-banner__fact">
+                          <strong>Branch Probe</strong>
+                          <span>
+                            {selectedTaskBranchHealth.branch_exists
+                              ? "Present"
+                              : selectedTaskBranchHealth.branch_exists === false
+                                ? "Missing"
+                                : "Unknown"}
+                          </span>
+                        </span>
+                        <span className="devflow-branch-health-banner__fact">
+                          <strong>Worktree</strong>
+                          <span>
+                            {selectedTaskBranchHealth.worktree_exists
+                              ? "Directory still available"
+                              : "Directory not found"}
+                          </span>
+                        </span>
+                      </div>
+
+                      {isSelectedTaskManualCompletionCandidate ? (
+                        <div className="devflow-branch-health-banner__checklist">
+                          <div className="devflow-branch-health-banner__checklist-header">
+                            <span>完成检查单</span>
+                            <button
+                              type="button"
+                              className="devflow-branch-health-banner__toggle"
+                              onClick={() => {
+                                handleOpenManualCompletionChecklist(selectedTask);
+                              }}
+                            >
+                              {isManualCompletionChecklistOpen
+                                ? "已展开"
+                                : "查看检查单"}
+                            </button>
+                          </div>
+                          {isManualCompletionChecklistOpen ? (
+                            <ol className="devflow-branch-health-banner__checklist-list">
+                              <li>先看 Timeline，确认这条需求的实现与验收记录已经完整。</li>
+                              <li>如有需要，打开项目或 Worktree，再核对最终代码状态。</li>
+                              <li>
+                                确认 `{selectedTaskBranchHealth.expected_branch_name}` 的缺失是人工
+                                merge/清理后的结果，而不是误删。
+                              </li>
+                              <li>确认无误后，再点击“确认 Complete”把任务收敛到归档区。</li>
+                            </ol>
+                          ) : null}
+                          <p className="devflow-branch-health-banner__hint">
+                            {hasViewedSelectedTaskManualCompletionChecklist
+                              ? "检查单已查看，可以执行人工完成。"
+                              : "请先点击“查看完成检查单”，再解锁人工完成按钮。"}
+                          </p>
+                        </div>
+                      ) : null}
+                    </CardSurface>
+                  ) : null}
 
                   {isEditPanelOpen && canEditSelectedTask ? (
                     <CardSurface className="devflow-edit-panel">
@@ -6379,12 +6600,24 @@ function buildTaskCardMetadataFallbackMap(
 }
 
 function buildFallbackTaskCardMetadata(taskItem: Task): TaskCardMetadata {
+  if (taskItem.branch_health?.manual_completion_candidate) {
+    return {
+      task_id: taskItem.id,
+      display_stage_key: "branch_missing",
+      display_stage_label: "缺失分支待确认",
+      is_waiting_for_user: false,
+      last_ai_activity_at: taskItem.last_ai_activity_at,
+      branch_health: taskItem.branch_health,
+    };
+  }
+
   return {
     task_id: taskItem.id,
     display_stage_key: taskItem.workflow_stage,
     display_stage_label: formatStageLabel(taskItem.workflow_stage),
     is_waiting_for_user: false,
     last_ai_activity_at: taskItem.last_ai_activity_at,
+    branch_health: taskItem.branch_health,
   };
 }
 
@@ -6428,6 +6661,17 @@ function resolveTaskCardMetadata(
   );
 }
 
+function resolveTaskBranchHealth(
+  taskItem: Task,
+  taskCardMetadataMap: Record<string, TaskCardMetadata>
+): Task["branch_health"] {
+  const resolvedTaskCardMetadata = resolveTaskCardMetadata(
+    taskItem,
+    taskCardMetadataMap
+  );
+  return resolvedTaskCardMetadata.branch_health ?? taskItem.branch_health ?? null;
+}
+
 function resolveTaskCardMetadataFromSnapshot(
   taskItem: Task,
   cachedTaskCardMetadata: TaskCardMetadata | undefined
@@ -6465,6 +6709,14 @@ function isTaskCardMetadataCompatibleWithTaskSnapshot(
     );
   }
 
+  if (taskCardMetadata.display_stage_key === "branch_missing") {
+    return (
+      taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+      taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+      taskCardMetadata.branch_health?.manual_completion_candidate === true
+    );
+  }
+
   return taskCardMetadata.display_stage_key === taskItem.workflow_stage;
 }
 
@@ -6492,6 +6744,10 @@ function formatTaskDisplayStageLabel(
     return "等待用户";
   }
 
+  if (displayStage === "branch_missing") {
+    return "缺失分支待确认";
+  }
+
   return formatStageLabel(displayStage);
 }
 
@@ -6513,13 +6769,18 @@ function formatTaskCardActivityTitle(lastAiActivityAt: string | null): string {
 
 function canCompleteTask(
   taskItem: Task,
-  taskStage: RequirementStage | null
+  taskStage: RequirementStage | null,
+  taskBranchHealth: Task["branch_health"]
 ): boolean {
   if (
     taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
     taskItem.lifecycle_status === TaskLifecycleStatus.DELETED
   ) {
     return false;
+  }
+
+  if (taskBranchHealth?.manual_completion_candidate) {
+    return true;
   }
 
   if (!taskItem.worktree_path) {

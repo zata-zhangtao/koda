@@ -3,6 +3,11 @@
 提供 Task 的 CRUD 操作、生命周期管理和工作流阶段推进功能.
 """
 
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -10,6 +15,7 @@ from dsl.models.dev_log import DevLog
 from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from dsl.models.task import Task
 from dsl.schemas.task_schema import (
+    TaskBranchHealthSchema,
     TaskCreateSchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
@@ -17,6 +23,9 @@ from dsl.schemas.task_schema import (
 )
 from utils.helpers import utc_now_naive
 from utils.logger import logger
+
+if TYPE_CHECKING:
+    from dsl.models.project import Project
 
 
 class TaskService:
@@ -108,6 +117,246 @@ class TaskService:
             f"Task {task_obj.id[:8]}... worktree created: {created_worktree_path} "
             f"(branch: {branch_naming_result_obj.branch_name_str}, "
             f"branch_naming_source: {branch_naming_result_obj.naming_source_str})"
+        )
+
+    @staticmethod
+    def _build_project_map_for_task_list(
+        db_session: Session,
+        task_list: list[Task],
+    ) -> dict[str, "Project"]:
+        """Build a `project_id -> Project` lookup table for the provided tasks.
+
+        Args:
+            db_session: 数据库会话
+            task_list: 任务列表
+
+        Returns:
+            dict[str, Project]: 项目映射表
+        """
+        project_id_list = sorted(
+            {
+                task_item.project_id
+                for task_item in task_list
+                if task_item.project_id is not None
+            }
+        )
+        if not project_id_list:
+            return {}
+
+        from dsl.models.project import Project
+
+        project_obj_list = (
+            db_session.query(Project).filter(Project.id.in_(project_id_list)).all()
+        )
+        return {project_obj.id: project_obj for project_obj in project_obj_list}
+
+    @staticmethod
+    def _resolve_branch_probe_working_tree_path(
+        task_obj: Task,
+        linked_project_obj: "Project | None",
+    ) -> Path | None:
+        """Resolve the best local Git working tree for branch-health probing.
+
+        Args:
+            task_obj: 任务对象
+            linked_project_obj: 当前任务关联的项目对象（可选）
+
+        Returns:
+            Path | None: 可用于执行 Git 分支探针的工作树路径；无法定位时返回 None
+        """
+        from dsl.services.git_worktree_service import GitWorktreeService
+
+        candidate_working_tree_path_list: list[Path] = []
+        if task_obj.worktree_path:
+            candidate_working_tree_path_list.append(
+                Path(task_obj.worktree_path).expanduser()
+            )
+        if linked_project_obj is not None:
+            candidate_working_tree_path_list.append(
+                Path(linked_project_obj.repo_path).expanduser()
+            )
+
+        for candidate_working_tree_path in candidate_working_tree_path_list:
+            resolved_working_tree_path = (
+                GitWorktreeService.resolve_git_working_tree_path(
+                    candidate_working_tree_path
+                )
+            )
+            if resolved_working_tree_path is not None:
+                return resolved_working_tree_path
+
+        return None
+
+    @staticmethod
+    def _has_task_entered_worktree_backed_git_flow(task_obj: Task) -> bool:
+        """Return whether the task has durable evidence of entering Git flow.
+
+        Args:
+            task_obj: 任务对象
+
+        Returns:
+            bool: 是否已经持久化过任务 worktree 路径
+        """
+        return bool(task_obj.worktree_path)
+
+    @staticmethod
+    def build_task_branch_health(
+        task_obj: Task,
+        linked_project_obj: "Project | None" = None,
+    ) -> TaskBranchHealthSchema:
+        """Build the derived branch-health snapshot for one task.
+
+        Args:
+            task_obj: 任务对象
+            linked_project_obj: 当前任务关联的项目对象（可选）
+
+        Returns:
+            TaskBranchHealthSchema: 分支健康快照
+        """
+        from dsl.services.git_worktree_service import GitWorktreeService
+
+        resolved_linked_project_obj = linked_project_obj or task_obj.project
+        expected_branch_name_str = GitWorktreeService.build_task_branch_name(
+            task_obj.id
+        )
+        has_entered_worktree_backed_git_flow_bool = (
+            TaskService._has_task_entered_worktree_backed_git_flow(task_obj)
+        )
+        task_worktree_exists_bool = False
+        if task_obj.worktree_path:
+            task_worktree_exists_bool = (
+                Path(task_obj.worktree_path).expanduser().exists()
+            )
+
+        branch_probe_working_tree_path = (
+            TaskService._resolve_branch_probe_working_tree_path(
+                task_obj=task_obj,
+                linked_project_obj=resolved_linked_project_obj,
+            )
+        )
+        branch_exists_bool: bool | None = None
+        branch_status_message_str: str | None = None
+
+        if branch_probe_working_tree_path is None:
+            if not task_obj.project_id and not task_obj.worktree_path:
+                branch_status_message_str = (
+                    "当前任务未关联本地 Git 项目，无法检查任务分支状态。"
+                )
+            elif task_obj.worktree_path and not task_worktree_exists_bool:
+                branch_status_message_str = "任务 worktree 目录已经不存在，且当前无法定位可回退的项目仓库来检查分支。"
+            else:
+                branch_status_message_str = "当前无法定位可检查的本地 Git 仓库。"
+        else:
+            branch_exists_bool = GitWorktreeService.check_local_branch_exists(
+                branch_probe_working_tree_path,
+                expected_branch_name_str,
+            )
+            if branch_exists_bool is True:
+                branch_status_message_str = f"检测到本地任务分支 `{expected_branch_name_str}` 仍存在，可继续使用标准 Git Complete 流程。"
+            elif branch_exists_bool is False:
+                if has_entered_worktree_backed_git_flow_bool:
+                    branch_status_message_str = (
+                        f"检测到本地任务分支 `{expected_branch_name_str}` 不存在。"
+                        "请先检查时间线与代码状态，再人工确认是否完成。"
+                    )
+                else:
+                    branch_status_message_str = (
+                        f"检测到本地任务分支 `{expected_branch_name_str}` 不存在，"
+                        "但该任务尚未进入 worktree-backed Git 流程，因此不会解锁人工完成。"
+                    )
+            else:
+                branch_status_message_str = (
+                    f"无法确认本地任务分支 `{expected_branch_name_str}` 是否存在。"
+                )
+
+        manual_completion_candidate_bool = (
+            has_entered_worktree_backed_git_flow_bool
+            and task_obj.lifecycle_status
+            not in {
+                TaskLifecycleStatus.CLOSED,
+                TaskLifecycleStatus.DELETED,
+            }
+            and branch_exists_bool is False
+        )
+
+        return TaskBranchHealthSchema(
+            expected_branch_name=expected_branch_name_str,
+            branch_exists=branch_exists_bool,
+            worktree_exists=task_worktree_exists_bool,
+            manual_completion_candidate=manual_completion_candidate_bool,
+            status_message=branch_status_message_str,
+        )
+
+    @staticmethod
+    def build_task_branch_health_map(
+        db_session: Session,
+        task_list: list[Task],
+    ) -> dict[str, TaskBranchHealthSchema]:
+        """Build branch-health snapshots for multiple tasks.
+
+        Args:
+            db_session: 数据库会话
+            task_list: 任务列表
+
+        Returns:
+            dict[str, TaskBranchHealthSchema]: `task_id -> branch health` 映射
+        """
+        linked_project_obj_by_id = TaskService._build_project_map_for_task_list(
+            db_session,
+            task_list,
+        )
+        return {
+            task_obj.id: TaskService.build_task_branch_health(
+                task_obj=task_obj,
+                linked_project_obj=linked_project_obj_by_id.get(
+                    task_obj.project_id or ""
+                ),
+            )
+            for task_obj in task_list
+        }
+
+    @staticmethod
+    def validate_manual_completion_candidate(
+        task_obj: Task,
+        task_branch_health: TaskBranchHealthSchema,
+    ) -> None:
+        """Validate that a task can use the missing-branch manual-complete path.
+
+        Args:
+            task_obj: 任务对象
+            task_branch_health: 当前任务的分支健康快照
+
+        Raises:
+            ValueError: 当任务生命周期不允许或当前并非缺失分支候选态
+        """
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError(
+                f"Task {task_obj.id[:8]}... cannot manual-complete from lifecycle "
+                f"'{task_obj.lifecycle_status.value}'."
+            )
+
+        if task_branch_health.manual_completion_candidate:
+            return
+
+        if not TaskService._has_task_entered_worktree_backed_git_flow(task_obj):
+            raise ValueError(
+                "Task has not entered the worktree-backed Git flow yet. Manual "
+                "completion is only available after the task worktree/branch has "
+                "previously been created."
+            )
+
+        if task_branch_health.branch_exists is True:
+            raise ValueError(
+                "Task branch still exists. Use the normal /complete flow instead of "
+                "manual completion."
+            )
+
+        raise ValueError(
+            "Task is not eligible for manual completion because the missing-branch "
+            "candidate state could not be confirmed."
         )
 
     @staticmethod
@@ -743,6 +992,13 @@ class TaskService:
                 f"Allowed: {[stage.value for stage in allowed_source_stages]}"
             )
 
+        task_branch_health = TaskService.build_task_branch_health(task_obj)
+        if task_branch_health.manual_completion_candidate:
+            raise ValueError(
+                "Task branch is missing. Review the timeline/code state and use "
+                "/manual-complete instead of the normal /complete flow."
+            )
+
         TaskService._apply_workflow_stage_transition(
             task_obj,
             WorkflowStage.PR_PREPARING,
@@ -756,6 +1012,33 @@ class TaskService:
         logger.info(
             f"Task {task_id[:8]}... completion requested → pr_preparing"
             f", worktree={task_obj.worktree_path}"
+        )
+        return task_obj
+
+    @staticmethod
+    def close_task_after_manual_completion(
+        db_session: Session,
+        task_obj: Task,
+    ) -> Task:
+        """Converge a manually confirmed task into `done / CLOSED`.
+
+        Args:
+            db_session: 数据库会话
+            task_obj: 已完成人工校验的任务对象
+
+        Returns:
+            Task: 已切换到 `done / CLOSED` 的任务对象
+        """
+        TaskService._apply_workflow_stage_transition(task_obj, WorkflowStage.DONE)
+        task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
+        task_obj.closed_at = utc_now_naive()
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(
+            "Task %s... manually completed after missing-branch confirmation",
+            task_obj.id[:8],
         )
         return task_obj
 

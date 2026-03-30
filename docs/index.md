@@ -80,6 +80,7 @@ just dsl-dev
 - self-review 闭环通过后，系统会自动进入 `test_in_progress`，执行 `uv run pre-commit run --all-files`；若 lint 在自动重跑后仍失败，会继续进入有上限的 AI lint-fix 闭环，只有最终失败才会进入 `changes_requested`。
 - 默认不会在实现阶段自动执行 `git commit`；只有用户点击 `Complete` 后，系统才会在任务 worktree 中执行 `git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`，若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`，必要时自动调用 Codex 修复 rebase / merge 冲突，然后复用当前持有 `main` 分支的工作区完成 merge，最后清理 task worktree / branch。
 - `WorkflowStage` 中的 `pr_preparing` 现在已接入真实自动化：`Complete` 会先进入该阶段，成功后自动推进到 `done`；`test_in_progress` 现在承载 post-review lint / lint-fix，`acceptance_in_progress` 仍主要是预留阶段。
+- 对于“任务分支已被人工 merge 并删除”的边缘场景，后端会通过 `branch_health` 派生状态把已进入 worktree-backed Git 流程的任务标记为“缺失分支待确认”；前端要求用户先查看完成检查单，再走独立的 `/manual-complete` 收口接口，避免 backlog/未启动任务被误关单，也避免错误重跑普通 Git 收尾。
 - `ai_agent/` 当前是工具库，不是 DSL 请求链路中的主处理器。
 
 当前仍保留两个明确的人工边界：

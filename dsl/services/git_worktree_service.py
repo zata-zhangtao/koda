@@ -99,6 +99,88 @@ class GitWorktreeService:
         return repo_root_path.parent / "task"
 
     @staticmethod
+    def resolve_git_working_tree_path(candidate_directory_path: Path) -> Path | None:
+        """Resolve the Git working-tree root for a candidate directory.
+
+        Args:
+            candidate_directory_path: Repository root or worktree path candidate
+
+        Returns:
+            Path | None: Resolved working-tree root when the directory belongs to a Git
+                working tree; otherwise None
+        """
+        if not candidate_directory_path.exists():
+            return None
+
+        try:
+            completed_process = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(candidate_directory_path),
+                    "rev-parse",
+                    "--show-toplevel",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+        resolved_working_tree_path_str = completed_process.stdout.strip()
+        if not resolved_working_tree_path_str:
+            return None
+        return Path(resolved_working_tree_path_str).resolve()
+
+    @staticmethod
+    def check_local_branch_exists(
+        git_working_tree_path: Path,
+        branch_name_str: str,
+    ) -> bool | None:
+        """Check whether a local branch exists inside the target Git repository.
+
+        Args:
+            git_working_tree_path: Repository root or worktree path that belongs to the
+                target Git repository
+            branch_name_str: Branch name to verify
+
+        Returns:
+            bool | None: True when the branch exists, False when it is missing, and None
+                when the repository cannot be probed
+        """
+        if not git_working_tree_path.exists():
+            return None
+
+        try:
+            completed_process = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(git_working_tree_path),
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    f"refs/heads/{branch_name_str}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return None
+
+        if completed_process.returncode == 0:
+            return True
+        if completed_process.returncode == 1:
+            return False
+        return None
+
+    @staticmethod
     def create_task_worktree(
         repo_root_path: Path,
         task_id: str,
