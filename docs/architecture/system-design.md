@@ -128,7 +128,7 @@ flowchart TD
 
 `changes_requested` 的当前真实含义也随之收窄为“AI 无法自行完成 review / lint 自动闭环，需要人工介入后重新执行”，不再表示“第一次 review 发现 blocker”。PRD 生成后的确认仍然必须由用户触发，review 与 lint 闭环通过后也不会自动进入 `pr_preparing`；最终 `Complete` 仍由用户明确点击。若任务还停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，用户仍可显式触发 `Complete`，后端会先写一条 `DevLog` 记录这次人工接管。
 
-`pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`，若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`；若 rebase / merge 冲突则自动调用当前 runner（如 Codex）修复，然后复用当前持有 `main` 分支的工作区完成 merge 与清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。后台 watchdog 现在也会覆盖卡住的 `pr_preparing` 任务：如果阶段停留时间超过阈值，且当前进程内只残留一个“运行中”标记、但连 completion start `DevLog`（`🚀 已收到完成请求...`）都没写出来，watchdog 会先清理这类陈旧运行态，再自动走一次 `resume` 补救，而不是让 UI 永久停在“交付收尾中”。
+`pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`，若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`；若 `git commit` 被 commit hook 自动改写文件并退出非零，Koda 会自动重新 `git add .` 并重试一次 commit；若 rebase / merge 冲突则自动调用当前 runner（如 Codex）修复，然后复用当前持有 `main` 分支的工作区完成 merge 与清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。后台 watchdog 现在也会覆盖卡住的 `pr_preparing` 任务：如果阶段停留时间超过阈值，且当前进程内只残留一个“运行中”标记、但连 completion start `DevLog`（`🚀 已收到完成请求...`）都没写出来，watchdog 会先清理这类陈旧运行态，再自动走一次 `resume` 补救，而不是让 UI 永久停在“交付收尾中”。
 
 对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
 

@@ -398,3 +398,65 @@ def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
         _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
         == "Summarize the completed branch behavior"
     )
+
+
+def test_execute_git_completion_flow_retries_commit_after_hook_autofix(
+    tmp_path: Path,
+) -> None:
+    """Completion should restage and retry once when commit hooks mutate files."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+    )
+
+    changed_file_path = created_worktree_path / "README.md"
+    changed_file_path.write_text("hello\nfeature change\n", encoding="utf-8")
+
+    _write_shell_script(
+        repo_root_path / ".git" / "hooks" / "pre-commit",
+        """#!/usr/bin/env bash
+set -euo pipefail
+marker_file_path="$(git rev-parse --git-common-dir)/commit-hook-ran"
+if [ ! -f "${marker_file_path}" ]; then
+    printf 'hook generated\\n' > hook-generated.txt
+    touch "${marker_file_path}"
+    exit 1
+fi
+""",
+    )
+
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner._write_log_to_db = lambda *args, **kwargs: None
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        completion_result = codex_runner._execute_git_completion_flow(
+            task_id_str="12345678-task-id",
+            run_account_id_str="run-account-1",
+            task_title_str="Finalize branch",
+            commit_information_text_str="Summarize the completed branch behavior",
+            dev_log_text_list=["Implementation already passed review."],
+            worktree_path_str=str(created_worktree_path),
+        )
+    finally:
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+
+    assert completion_result.merged_to_main is True
+    assert completion_result.cleanup_succeeded is True
+    assert completion_result.worktree_removed is True
+    assert (repo_root_path / "hook-generated.txt").read_text(encoding="utf-8") == (
+        "hook generated\n"
+    )
+    assert (
+        _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
+        == "Summarize the completed branch behavior"
+    )
+
+    task_log_path = tmp_path / "koda-12345678.log"
+    task_log_text = task_log_path.read_text(encoding="utf-8")
+    assert "git-add-after-commit-hook" in task_log_text
+    assert "git-commit-rerun" in task_log_text

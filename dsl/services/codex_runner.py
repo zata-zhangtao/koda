@@ -830,6 +830,94 @@ async def _run_post_review_lint_with_auto_rerun(
     return second_completed_process.returncode == 0, second_output_line_list
 
 
+def _retry_git_commit_once_after_hook_fixes(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    worktree_path: Path,
+    commit_message_str: str,
+) -> tuple[subprocess.CompletedProcess[str] | None, list[str], str | None]:
+    """Restage and retry `git commit` once when commit hooks mutate files.
+
+    Some commit hooks auto-fix files and intentionally exit non-zero so that the
+    caller restages the modified content and reruns the commit. The completion
+    flow should treat that as a bounded retry opportunity instead of an
+    immediate failure.
+
+    Args:
+        task_id_str: Task UUID string.
+        run_account_id_str: Run account UUID string.
+        task_log_path: Task log file path.
+        worktree_path: Task worktree path.
+        commit_message_str: Git commit message used for the retry.
+
+    Returns:
+        tuple[subprocess.CompletedProcess[str] | None, list[str], str | None]:
+            - The retry-side completed process when a retry was attempted.
+            - Extra output lines collected from retry-side commands.
+            - The effective command label for failure reporting.
+    """
+    retry_output_line_list: list[str] = []
+    post_failure_status_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "status", "--short"],
+        cwd_path=worktree_path,
+        command_log_label_str="git-commit-status-after-failure",
+    )
+    retry_output_line_list.extend(
+        _extract_completed_process_output_lines(post_failure_status_process)
+    )
+    if post_failure_status_process.returncode != 0:
+        return (
+            post_failure_status_process,
+            retry_output_line_list,
+            "git-commit-status-after-failure",
+        )
+
+    if not (post_failure_status_process.stdout or "").strip():
+        return None, retry_output_line_list, None
+
+    retry_notice_text_str = (
+        "⚠️ `git commit` 失败后检测到 worktree 仍有变更，推测 commit hook "
+        "自动改写了文件；Koda 将自动重新执行一次 `git add .` 与 `git commit`。"
+    )
+    _append_text_to_task_log(task_log_path, retry_notice_text_str)
+
+    restage_completed_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "add", "."],
+        cwd_path=worktree_path,
+        command_log_label_str="git-add-after-commit-hook",
+    )
+    retry_output_line_list.extend(
+        _extract_completed_process_output_lines(restage_completed_process)
+    )
+    if restage_completed_process.returncode != 0:
+        return (
+            restage_completed_process,
+            retry_output_line_list,
+            "git-add-after-commit-hook",
+        )
+
+    retry_commit_completed_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "commit", "-m", commit_message_str],
+        cwd_path=worktree_path,
+        command_log_label_str="git-commit-rerun",
+    )
+    retry_output_line_list.extend(
+        _extract_completed_process_output_lines(retry_commit_completed_process)
+    )
+    return retry_commit_completed_process, retry_output_line_list, "git-commit-rerun"
+
+
 def _has_unmerged_conflicts(repo_path: Path) -> bool:
     """Check whether the current Git working tree still has unresolved conflicts.
 
@@ -1334,6 +1422,27 @@ def _execute_git_completion_flow(
         output_line_list.extend((completed_process.stdout or "").splitlines())
         output_line_list.extend((completed_process.stderr or "").splitlines())
         if completed_process.returncode != 0:
+            if command_log_label_str == "git-commit":
+                (
+                    retried_commit_process,
+                    retry_output_line_list,
+                    retry_command_log_label_str,
+                ) = _retry_git_commit_once_after_hook_fixes(
+                    task_id_str=task_id_str,
+                    run_account_id_str=run_account_id_str,
+                    task_log_path=task_log_path,
+                    worktree_path=worktree_path,
+                    commit_message_str=commit_message_str,
+                )
+                output_line_list.extend(retry_output_line_list)
+                if retried_commit_process is not None:
+                    completed_process = retried_commit_process
+                    if retry_command_log_label_str is not None:
+                        command_log_label_str = retry_command_log_label_str
+
+            if completed_process.returncode == 0:
+                continue
+
             operation_kind_str = ""
             if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(
                 command_cwd_path

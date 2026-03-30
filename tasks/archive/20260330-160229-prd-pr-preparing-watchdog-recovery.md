@@ -22,7 +22,7 @@
 
 `Complete` 的正常链路仍然保持不变：`POST /api/tasks/{id}/complete` 把任务推进到 `pr_preparing`，再由后台 `run_codex_completion(...)` 执行 `git add . -> git commit -> git rebase main -> merge -> cleanup`。
 实现阶段额外发现：watchdog 把 `pr_preparing` 纳入恢复之后，后台 `resume` 虽然能重新调度 completion，但统一入口 `automation_runner.run_task_completion(...)` 仍沿用旧的 `task_summary_str` 参数签名，导致一恢复就抛出 `TypeError: run_task_completion() got an unexpected keyword argument 'commit_information_text_str'`。
-因此本次修复分成两层：先让 watchdog 能发现并恢复 stuck `pr_preparing`，再让 completion wrapper 正确转发新的 commit-information 合同。
+因此本次修复分成三层：先让 watchdog 能发现并恢复 stuck `pr_preparing`，再让 completion wrapper 正确转发新的 commit-information 合同，最后补上 `git commit` 被 commit hook 自动改写文件后的一次自动 restage + retry。
 
 ### 2.1 Change Matrix
 
@@ -31,8 +31,9 @@
 | Watchdog stage coverage | `TaskRunnerWatchdogService` 只监控 `prd_generating` / `implementation_in_progress` / `self_review_in_progress` / `test_in_progress` | `pr_preparing` 也纳入卡死扫描 | 扩展 `_WATCHED_RUNNING_STAGES`，让 completion 阶段也能进入 stuck-task 补救 | `dsl/services/task_runner_watchdog_service.py` |
 | Stale completion runtime detection | `pr_preparing` 若只剩陈旧 `is_task_automation_running` 标记，watchdog 会直接跳过 | 对“未写 completion start DevLog 的假运行态”先清标记再恢复 | 增加 completion-start-signal 检测 helper；缺失时清理陈旧进程内 running flag | `dsl/services/task_runner_watchdog_service.py` |
 | Completion wrapper contract | `automation_runner.run_task_completion(...)` 仍使用旧的 `task_summary_str` 形参，并把旧字段继续传给 `run_codex_completion(...)` | 统一入口与 API/runner 现有 `commit_information_text_str` / `commit_information_source_str` 合同保持一致 | 更新 wrapper 签名、docstring 和转发字段，消除 watchdog / resume / `/complete` 的 `TypeError` | `dsl/services/automation_runner.py` |
+| Commit-hook retry | `git commit` 若被 hook 自动改写文件并返回非零，completion 会直接失败并回退到 `changes_requested` | 对 hook 自动改写导致的失败自动重试一次 commit | 在 completion 流程中检测失败后的脏 worktree，自动重新 `git add .` 并重试一次 `git commit` | `dsl/services/codex_runner.py` |
 | Regression coverage | 当前没有 watchdog 专测覆盖 `pr_preparing` 卡死恢复 | 新增正向/负向回归测试 | 增加“清掉 stale runtime 并 resume”与“已有 start log 不应误恢复”两条测试 | `tests/test_task_runner_watchdog_service.py` |
-| Wrapper regression coverage | 当前没有 completion wrapper 参数转发回归 | 新增 wrapper 合同测试 | 增加 completion wrapper 参数转发测试，锁住 `commit_information_*` 合同 | `tests/test_automation_runner_registry.py` |
+| Wrapper / completion regression coverage | 当前没有 completion wrapper 参数转发回归，也没有 commit-hook auto-fix completion 回归 | 新增 wrapper 合同测试与 commit-hook completion 测试 | 增加 completion wrapper 参数转发测试，锁住 `commit_information_*` 合同；增加 commit-hook auto-restage/retry 的真实 Git 测试 | `tests/test_automation_runner_registry.py`, `tests/test_git_worktree_service.py` |
 | Architecture/dev docs | 文档说明了 `pr_preparing` 的正常 Git 收尾，但没写 stuck recovery | 文档明确说明 `pr_preparing` 也有 watchdog 自动补救 | 在系统设计和 DSL 开发指南中补充 `pr_preparing` watchdog 行为 | `docs/architecture/system-design.md`, `docs/guides/dsl-development.md` |
 
 ### 2.2 Flow Diagram
@@ -114,7 +115,8 @@ No interactive prototype file changes in this PRD.
 6. **FR-6**：本次修复不得改变 `Complete` 的既有 Git 顺序：`git add -> git commit -> git rebase -> merge -> cleanup`。
 7. **FR-7**：本次修复不得放宽 `manual_completion_candidate` 的判定，不得把“分支仍存在”的任务误导进 manual-complete。
 8. **FR-8**：`automation_runner.run_task_completion(...)` 必须与当前 completion runner 合同保持一致，接受并转发 `commit_information_text_str` 与 `commit_information_source_str`。
-9. **FR-9**：实现必须包含自动化回归测试与对应文档同步。
+9. **FR-9**：若 `git commit` 因 commit hook 自动改写文件而失败，系统必须在同一 worktree 中自动重做一次 `git add .` 并重试一次 `git commit`。
+10. **FR-10**：实现必须包含自动化回归测试与对应文档同步。
 
 ## 6. Non-Goals
 
@@ -129,8 +131,10 @@ No interactive prototype file changes in this PRD.
 
 - `dsl/services/task_runner_watchdog_service.py`
 - `dsl/services/automation_runner.py`
+- `dsl/services/codex_runner.py`
 - `tests/test_task_runner_watchdog_service.py`
 - `tests/test_automation_runner_registry.py`
+- `tests/test_git_worktree_service.py`
 - `docs/architecture/system-design.md`
 - `docs/guides/dsl-development.md`
 
@@ -139,6 +143,7 @@ No interactive prototype file changes in this PRD.
 | Command | Purpose | Result |
 |---|---|---|
 | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_automation_runner_registry.py::test_run_task_completion_forwards_commit_information_contract -q` | Verify completion wrapper forwards the current commit-information contract | Passed (`1 passed`) |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_git_worktree_service.py::test_execute_git_completion_flow_retries_commit_after_hook_autofix -q` | Verify completion auto-restages and retries commit after hook-mutated worktree | Passed (`1 passed`) |
 | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_automation_runner_registry.py::test_run_task_prd_forwards_auto_confirm_flag -q` | Sanity-check adjacent wrapper regression coverage | Passed (`1 passed`) |
 | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_task_runner_watchdog_service.py -q` | Verify new watchdog recovery behavior | Passed (`2 passed`) |
 | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/test_tasks_api.py::test_resume_task_schedules_pr_preparing_completion_with_resolved_commit_information -q` | Sanity-check existing `pr_preparing` resume contract | Passed (`1 passed`) |
@@ -148,3 +153,4 @@ No interactive prototype file changes in this PRD.
 
 - 原始用户感知是“按钮没了、像已经被删了”；实际根因并不是 manual-complete 刷新问题，而是 `pr_preparing` completion 从未真正启动、且 watchdog 没有兜底恢复这一阶段。
 - watchdog 修复落地后又暴露出第二层根因：completion wrapper 仍停留在旧签名，导致恢复动作一调度就直接 `TypeError`；因此最终交付同时包含恢复策略和 wrapper 合同修复。
+- 运行态验证阶段进一步暴露出第三层问题：当 `git commit` 触发的 hook 自动改写文件并返回非零时，completion 缺少自动 restage + retry，因此会把本可自动收敛的任务误打回 `changes_requested`。
