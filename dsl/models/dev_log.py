@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
@@ -40,6 +40,10 @@ class DevLog(Base):
         ai_analysis_text (str | None): AI 分析文本
         ai_extracted_code (str | None): AI 提取的代码块
         ai_confidence_score (float | None): AI 置信度分数
+        automation_session_id (str | None): 自动化连续 transcript 会话 ID
+        automation_sequence_index (int | None): 自动化 transcript 内的 chunk 顺序
+        automation_phase_label (str | None): 自动化输出所属 phase 标签
+        automation_runner_kind (str | None): 自动化输出所属 runner 类型
     """
 
     __tablename__ = "dev_logs"
@@ -96,6 +100,22 @@ class DevLog(Base):
     )
     ai_confidence_score: Mapped[float | None] = mapped_column(
         Float,
+        nullable=True,
+    )
+    automation_session_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+    )
+    automation_sequence_index: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    automation_phase_label: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+    automation_runner_kind: Mapped[str | None] = mapped_column(
+        String(40),
         nullable=True,
     )
 

@@ -130,6 +130,12 @@
         - get_task_chronicle
         - export_chronicle
 
+## 连续 Transcript 合同
+
+- `/api/logs` 返回的 `DevLog` 现在会携带可选字段 `automation_session_id`、`automation_sequence_index`、`automation_phase_label`、`automation_runner_kind`；旧日志和人工日志这些字段保持 `null`
+- `ChronicleService.get_task_chronicle(...)` 继续保留原始 `logs` 列表，同时额外提供按相邻同 session 聚合后的 `transcript_blocks`
+- `ChronicleService.export_markdown(..., task_id=...)` 会消费这些 `transcript_blocks`，把连续自动化输出合并成单个 Markdown transcript block；全局 timeline 导出仍保持逐条日志
+
 ## 响应 Schema
 
 ::: dsl.schemas.task_schema.TaskCreateSchema

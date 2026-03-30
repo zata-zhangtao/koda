@@ -49,6 +49,10 @@ class DevLogResponseSchema(DSLResponseSchema):
         media_original_image_path: 原图路径
         media_thumbnail_path: 缩略图路径
         task_title: 任务标题（关联查询）
+        automation_session_id: 自动化连续 transcript 会话 ID
+        automation_sequence_index: 自动化 transcript 内的 chunk 顺序
+        automation_phase_label: 自动化输出所属 phase 标签
+        automation_runner_kind: 自动化输出所属 runner 类型
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -62,6 +66,22 @@ class DevLogResponseSchema(DSLResponseSchema):
     media_original_image_path: str | None = Field(None, description="原图路径")
     media_thumbnail_path: str | None = Field(None, description="缩略图路径")
     task_title: str = Field(default="", description="任务标题")
+    automation_session_id: str | None = Field(
+        default=None,
+        description="自动化连续 transcript 会话 ID",
+    )
+    automation_sequence_index: int | None = Field(
+        default=None,
+        description="自动化 transcript 内的 chunk 顺序",
+    )
+    automation_phase_label: str | None = Field(
+        default=None,
+        description="自动化输出所属 phase 标签",
+    )
+    automation_runner_kind: str | None = Field(
+        default=None,
+        description="自动化输出所属 runner 类型",
+    )
 
 
 class DevLogWithAIRSchema(DevLogResponseSchema):

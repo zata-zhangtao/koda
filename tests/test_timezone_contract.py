@@ -184,3 +184,81 @@ def test_chronicle_service_uses_app_timezone_for_cross_day_timeline_and_export()
         assert "## ✅ [07:30:00 UTC+08:00] Timezone boundary task" in timeline_markdown
     finally:
         db_session.close()
+
+
+def test_task_markdown_groups_adjacent_automation_transcript_chunks() -> None:
+    """Task markdown export should merge contiguous same-session automation chunks."""
+    db_session = _create_test_session()
+    try:
+        run_account = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="macOS",
+            git_branch_name="main",
+            is_active=True,
+            created_at=datetime(2026, 3, 18, 12, 0, 0),
+        )
+        db_session.add(run_account)
+        db_session.commit()
+        db_session.refresh(run_account)
+        task = Task(
+            run_account_id=run_account.id,
+            task_title="Grouped transcript task",
+            lifecycle_status=TaskLifecycleStatus.OPEN,
+            workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+            created_at=datetime(2026, 3, 18, 15, 0, 0),
+        )
+        db_session.add(task)
+        db_session.commit()
+        db_session.refresh(task)
+        db_session.add_all(
+            [
+                DevLog(
+                    task_id=task.id,
+                    run_account_id=run_account.id,
+                    created_at=datetime(2026, 3, 18, 15, 30, 0),
+                    text_content="line one",
+                    state_tag=DevLogStateTag.OPTIMIZATION,
+                    automation_session_id="session-a",
+                    automation_sequence_index=1,
+                    automation_phase_label="codex-exec",
+                    automation_runner_kind="codex",
+                ),
+                DevLog(
+                    task_id=task.id,
+                    run_account_id=run_account.id,
+                    created_at=datetime(2026, 3, 18, 15, 30, 5),
+                    text_content="line two",
+                    state_tag=DevLogStateTag.OPTIMIZATION,
+                    automation_session_id="session-a",
+                    automation_sequence_index=2,
+                    automation_phase_label="codex-exec",
+                    automation_runner_kind="codex",
+                ),
+                DevLog(
+                    task_id=task.id,
+                    run_account_id=run_account.id,
+                    created_at=datetime(2026, 3, 18, 15, 31, 0),
+                    text_content="manual interruption",
+                    state_tag=DevLogStateTag.NONE,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        task_markdown = ChronicleService.export_markdown(
+            db_session,
+            run_account.id,
+            task_id=task.id,
+        )
+
+        assert (
+            "## 🤖 [2026-03-18 23:30:00 UTC+08:00 - 2026-03-18 23:30:05 UTC+08:00] codex-exec"
+            in (task_markdown)
+        )
+        assert "> runner=codex · chunks=2" in task_markdown
+        assert "line one\nline two" in task_markdown
+        assert task_markdown.count("codex-exec") == 1
+        assert "manual interruption" in task_markdown
+    finally:
+        db_session.close()

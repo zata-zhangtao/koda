@@ -255,6 +255,10 @@ export interface DevLog {
   media_original_image_path: string | null;
   media_thumbnail_path: string | null;
   task_title: string;
+  automation_session_id?: string | null;
+  automation_sequence_index?: number | null;
+  automation_phase_label?: string | null;
+  automation_runner_kind?: string | null;
   // AI fields (Phase 2)
   ai_processing_status?: AIProcessingStatus | null;
   ai_generated_title?: string | null;

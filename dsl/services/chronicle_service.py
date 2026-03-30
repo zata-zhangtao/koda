@@ -98,9 +98,12 @@ class ChronicleService:
         logs = (
             db_session.query(DevLog)
             .filter(DevLog.task_id == task_id)
-            .order_by(DevLog.created_at.asc())
+            .order_by(DevLog.created_at.asc(), DevLog.id.asc())
             .all()
         )
+        formatted_log_list = [
+            ChronicleService._format_log_for_timeline(log) for log in logs
+        ]
 
         return {
             "task": {
@@ -110,7 +113,10 @@ class ChronicleService:
                 "created_at": serialize_datetime_for_api(task.created_at),
                 "closed_at": serialize_datetime_for_api(task.closed_at),
             },
-            "logs": [ChronicleService._format_log_for_timeline(log) for log in logs],
+            "logs": formatted_log_list,
+            "transcript_blocks": ChronicleService._build_task_transcript_block_list(
+                formatted_log_list
+            ),
             "stats": {
                 "total_logs": len(logs),
                 "bug_count": sum(
@@ -177,6 +183,122 @@ class ChronicleService:
             "ai_generated_title": log.ai_generated_title,
             "ai_analysis_text": log.ai_analysis_text,
             "ai_extracted_code": log.ai_extracted_code,
+            "automation_session_id": log.automation_session_id,
+            "automation_sequence_index": log.automation_sequence_index,
+            "automation_phase_label": log.automation_phase_label,
+            "automation_runner_kind": log.automation_runner_kind,
+        }
+
+    @staticmethod
+    def _build_task_transcript_block_list(
+        log_entry_list: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Build task-level export blocks from contiguous raw log entries.
+
+        Args:
+            log_entry_list: Chronological task log entries.
+
+        Returns:
+            list[dict[str, Any]]: Raw-log blocks plus grouped automation transcript blocks.
+        """
+        transcript_block_list: list[dict[str, Any]] = []
+        pending_transcript_log_list: list[dict[str, Any]] = []
+        active_session_id_str: str | None = None
+
+        def flush_pending_transcript_block() -> None:
+            nonlocal active_session_id_str
+            if not pending_transcript_log_list:
+                return
+            transcript_block_list.append(
+                ChronicleService._build_automation_transcript_block(
+                    pending_transcript_log_list
+                )
+            )
+            pending_transcript_log_list.clear()
+            active_session_id_str = None
+
+        for log_entry in log_entry_list:
+            log_session_id = log_entry.get("automation_session_id")
+            if not log_session_id:
+                flush_pending_transcript_block()
+                transcript_block_list.append(
+                    {
+                        "kind": "log",
+                        "log": log_entry,
+                    }
+                )
+                continue
+
+            if active_session_id_str is None or active_session_id_str != log_session_id:
+                flush_pending_transcript_block()
+                active_session_id_str = log_session_id
+
+            pending_transcript_log_list.append(log_entry)
+
+        flush_pending_transcript_block()
+        return transcript_block_list
+
+    @staticmethod
+    def _build_automation_transcript_block(
+        transcript_chunk_log_list: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Merge one contiguous automation transcript chunk sequence.
+
+        Args:
+            transcript_chunk_log_list: Contiguous log entries sharing one session ID.
+
+        Returns:
+            dict[str, Any]: Grouped transcript block metadata and merged text.
+        """
+        chronological_chunk_log_list = sorted(
+            transcript_chunk_log_list,
+            key=lambda log_entry: (log_entry["created_at"], log_entry["id"]),
+        )
+        ordered_chunk_log_list = sorted(
+            transcript_chunk_log_list,
+            key=lambda log_entry: (
+                log_entry.get("automation_sequence_index") is None,
+                log_entry.get("automation_sequence_index") or 0,
+                log_entry["created_at"],
+                log_entry["id"],
+            ),
+        )
+        merged_text_content = "\n".join(
+            log_entry["text_content"]
+            for log_entry in ordered_chunk_log_list
+            if log_entry.get("text_content")
+        )
+        first_chunk_log_entry = chronological_chunk_log_list[0]
+        last_chunk_log_entry = chronological_chunk_log_list[-1]
+        phase_label_str = next(
+            (
+                log_entry.get("automation_phase_label")
+                for log_entry in ordered_chunk_log_list
+                if log_entry.get("automation_phase_label")
+            ),
+            None,
+        )
+        runner_kind_str = next(
+            (
+                log_entry.get("automation_runner_kind")
+                for log_entry in ordered_chunk_log_list
+                if log_entry.get("automation_runner_kind")
+            ),
+            None,
+        )
+
+        return {
+            "kind": "automation_transcript",
+            "id": first_chunk_log_entry["id"],
+            "task_id": first_chunk_log_entry["task_id"],
+            "task_title": first_chunk_log_entry["task_title"],
+            "automation_session_id": first_chunk_log_entry["automation_session_id"],
+            "automation_phase_label": phase_label_str,
+            "automation_runner_kind": runner_kind_str,
+            "chunk_count": len(ordered_chunk_log_list),
+            "start_created_at": first_chunk_log_entry["created_at"],
+            "end_created_at": last_chunk_log_entry["created_at"],
+            "text_content": merged_text_content,
         }
 
     @staticmethod
@@ -195,6 +317,7 @@ class ChronicleService:
             return "# Error\n\nTask not found."
 
         task = chronicle_data["task"]
+        transcript_block_list = chronicle_data["transcript_blocks"]
         logs = chronicle_data["logs"]
 
         lines: list[str] = [
@@ -215,35 +338,18 @@ class ChronicleService:
                 f"**Closed:** {ChronicleService._format_markdown_datetime_label(task['closed_at'])}",
             )
 
-        for log in logs:
-            timestamp = ChronicleService._format_markdown_datetime_label(
-                log["created_at"]
+        for transcript_block in transcript_block_list:
+            if transcript_block["kind"] == "automation_transcript":
+                ChronicleService._append_automation_transcript_markdown_block(
+                    lines,
+                    transcript_block,
+                )
+                continue
+
+            ChronicleService._append_single_log_markdown_block(
+                lines,
+                transcript_block["log"],
             )
-            icon = ChronicleService.STATE_TAG_ICONS.get(
-                DevLogStateTag(log["state_tag"]), ""
-            )
-
-            lines.append(f"## {icon} [{timestamp}] {log['task_title']}")
-            lines.append("")
-
-            if log["text_content"]:
-                lines.append(log["text_content"])
-                lines.append("")
-
-            if log["has_media"] and log["media_original_path"]:
-                # 使用相对路径引用图片
-                lines.append(f"![Screenshot]({log['media_original_path']})")
-                lines.append("")
-
-            if log["ai_generated_title"]:
-                lines.append("> **AI Analysis:** " + log["ai_generated_title"])
-                lines.append("")
-                if log["ai_analysis_text"]:
-                    lines.append(f"> {log['ai_analysis_text']}")
-                    lines.append("")
-
-            lines.append("---")
-            lines.append("")
 
         return "\n".join(lines)
 
@@ -373,3 +479,106 @@ class ChronicleService:
             str: 人类可读的时区说明
         """
         return get_app_timezone_display_label()
+
+    @staticmethod
+    def _format_markdown_datetime_range_label(
+        start_datetime_text: str | None,
+        end_datetime_text: str | None,
+    ) -> str:
+        """Format a task transcript time range for Markdown headings.
+
+        Args:
+            start_datetime_text: Transcript start time in API format.
+            end_datetime_text: Transcript end time in API format.
+
+        Returns:
+            str: One timestamp or a start/end range label.
+        """
+        start_label = ChronicleService._format_markdown_datetime_label(
+            start_datetime_text
+        )
+        end_label = ChronicleService._format_markdown_datetime_label(end_datetime_text)
+        if start_label == end_label:
+            return start_label
+        return f"{start_label} - {end_label}"
+
+    @staticmethod
+    def _append_single_log_markdown_block(
+        markdown_line_list: list[str],
+        log_entry: dict[str, Any],
+    ) -> None:
+        """Append one raw task log block to the Markdown export.
+
+        Args:
+            markdown_line_list: Mutable Markdown line buffer.
+            log_entry: One formatted task log entry.
+        """
+        timestamp = ChronicleService._format_markdown_datetime_label(
+            log_entry["created_at"]
+        )
+        icon = ChronicleService.STATE_TAG_ICONS.get(
+            DevLogStateTag(log_entry["state_tag"]), ""
+        )
+
+        markdown_line_list.append(f"## {icon} [{timestamp}] {log_entry['task_title']}")
+        markdown_line_list.append("")
+
+        if log_entry["text_content"]:
+            markdown_line_list.append(log_entry["text_content"])
+            markdown_line_list.append("")
+
+        if log_entry["has_media"] and log_entry["media_original_path"]:
+            markdown_line_list.append(
+                f"![Screenshot]({log_entry['media_original_path']})"
+            )
+            markdown_line_list.append("")
+
+        if log_entry["ai_generated_title"]:
+            markdown_line_list.append(
+                "> **AI Analysis:** " + log_entry["ai_generated_title"]
+            )
+            markdown_line_list.append("")
+            if log_entry["ai_analysis_text"]:
+                markdown_line_list.append(f"> {log_entry['ai_analysis_text']}")
+                markdown_line_list.append("")
+
+        markdown_line_list.append("---")
+        markdown_line_list.append("")
+
+    @staticmethod
+    def _append_automation_transcript_markdown_block(
+        markdown_line_list: list[str],
+        transcript_block: dict[str, Any],
+    ) -> None:
+        """Append one grouped automation transcript block to the Markdown export.
+
+        Args:
+            markdown_line_list: Mutable Markdown line buffer.
+            transcript_block: Grouped transcript metadata and merged body.
+        """
+        transcript_time_range_label = (
+            ChronicleService._format_markdown_datetime_range_label(
+                transcript_block.get("start_created_at"),
+                transcript_block.get("end_created_at"),
+            )
+        )
+        transcript_phase_label = transcript_block.get("automation_phase_label")
+        transcript_heading_label = transcript_phase_label or "automation-transcript"
+        metadata_part_list: list[str] = []
+        if transcript_block.get("automation_runner_kind"):
+            metadata_part_list.append(
+                f"runner={transcript_block['automation_runner_kind']}"
+            )
+        metadata_part_list.append(f"chunks={transcript_block['chunk_count']}")
+
+        markdown_line_list.append(
+            f"## 🤖 [{transcript_time_range_label}] {transcript_heading_label}"
+        )
+        markdown_line_list.append("")
+        markdown_line_list.append("> " + " · ".join(metadata_part_list))
+        markdown_line_list.append("")
+        if transcript_block.get("text_content"):
+            markdown_line_list.append(transcript_block["text_content"])
+            markdown_line_list.append("")
+        markdown_line_list.append("---")
+        markdown_line_list.append("")

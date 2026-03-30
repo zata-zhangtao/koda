@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import shlex
@@ -2103,6 +2104,10 @@ def _write_log_to_db(
     run_account_id_str: str,
     text_content_str: str,
     state_tag_value: str = "OPTIMIZATION",
+    automation_session_id_str: str | None = None,
+    automation_sequence_index_int: int | None = None,
+    automation_phase_label_str: str | None = None,
+    automation_runner_kind_str: str | None = None,
 ) -> None:
     """向数据库写入一条 DevLog（同步，供 asyncio.to_thread 使用）.
 
@@ -2114,6 +2119,10 @@ def _write_log_to_db(
         run_account_id_str: 运行账户 ID
         text_content_str: 日志文本内容
         state_tag_value: DevLogStateTag 枚举值字符串
+        automation_session_id_str: 自动化连续 transcript 会话 ID
+        automation_sequence_index_int: 自动化 transcript 内的 chunk 顺序
+        automation_phase_label_str: 自动化输出所属 phase 标签
+        automation_runner_kind_str: 自动化输出所属 runner 类型
     """
     from dsl.models.dev_log import DevLog
     from dsl.models.enums import DevLogStateTag
@@ -2129,6 +2138,10 @@ def _write_log_to_db(
             text_content=text_content_str,
             state_tag=DevLogStateTag(state_tag_value),
             created_at=created_at_datetime,
+            automation_session_id=automation_session_id_str,
+            automation_sequence_index=automation_sequence_index_int,
+            automation_phase_label=automation_phase_label_str,
+            automation_runner_kind=automation_runner_kind_str,
         )
         db_session.add(new_dev_log)
         db_session.commit()
@@ -2152,6 +2165,60 @@ def _write_log_to_db(
         db_session.rollback()
     finally:
         db_session.close()
+
+
+def _write_automation_transcript_chunk_to_db(
+    task_id_str: str,
+    run_account_id_str: str,
+    text_content_str: str,
+    automation_session_id_str: str,
+    automation_sequence_index_int: int,
+    automation_phase_label_str: str,
+    automation_runner_kind_str: str,
+) -> None:
+    """Write one automation transcript chunk into `DevLog`.
+
+    Args:
+        task_id_str: 关联任务 ID
+        run_account_id_str: 运行账户 ID
+        text_content_str: transcript chunk 正文
+        automation_session_id_str: 单次 phase attempt 的 transcript 会话 ID
+        automation_sequence_index_int: transcript 内的单调递增顺序号
+        automation_phase_label_str: 当前 phase 标签
+        automation_runner_kind_str: 当前 runner 类型
+    """
+    write_log_signature = inspect.signature(_write_log_to_db)
+    write_log_parameter_list = list(write_log_signature.parameters.values())
+    supports_arbitrary_keyword_arguments = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in write_log_parameter_list
+    )
+    supports_automation_metadata = supports_arbitrary_keyword_arguments or {
+        "automation_session_id_str",
+        "automation_sequence_index_int",
+        "automation_phase_label_str",
+        "automation_runner_kind_str",
+    }.issubset(write_log_signature.parameters.keys())
+
+    if supports_automation_metadata:
+        _write_log_to_db(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            text_content_str=text_content_str,
+            state_tag_value="OPTIMIZATION",
+            automation_session_id_str=automation_session_id_str,
+            automation_sequence_index_int=automation_sequence_index_int,
+            automation_phase_label_str=automation_phase_label_str,
+            automation_runner_kind_str=automation_runner_kind_str,
+        )
+        return
+
+    _write_log_to_db(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        text_content_str=text_content_str,
+        state_tag_value="OPTIMIZATION",
+    )
 
 
 def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
@@ -2319,6 +2386,8 @@ async def _run_codex_phase(
 
     for attempt_index in range(_MAX_AUTO_RETRY + 1):
         runner_process_obj: asyncio.subprocess.Process | None = None
+        automation_session_id_str = str(uuid.uuid4())
+        automation_sequence_index_int = 0
         try:
             runner_process_obj = await _create_runner_subprocess(
                 runner_obj=active_runner_obj,
@@ -2335,6 +2404,7 @@ async def _run_codex_phase(
             async def flush_pending_output_lines(force: bool = False) -> None:
                 """将积累的输出批量写入一条 DevLog."""
                 nonlocal last_flush_time_float
+                nonlocal automation_sequence_index_int
                 if not pending_output_line_list:
                     return
 
@@ -2346,12 +2416,16 @@ async def _run_codex_phase(
                     or len(pending_output_line_list) >= _LOG_BATCH_SIZE
                     or elapsed_seconds_float >= _LOG_FLUSH_INTERVAL_SECONDS
                 ):
+                    automation_sequence_index_int += 1
                     await asyncio.to_thread(
-                        _write_log_to_db,
+                        _write_automation_transcript_chunk_to_db,
                         task_id_str,
                         run_account_id_str,
                         "\n".join(pending_output_line_list),
-                        "OPTIMIZATION",
+                        automation_session_id_str,
+                        automation_sequence_index_int,
+                        phase_log_label_str,
+                        active_runner_obj.runner_kind,
                     )
                     pending_output_line_list.clear()
                     last_flush_time_float = asyncio.get_running_loop().time()

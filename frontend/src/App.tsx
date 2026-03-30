@@ -47,6 +47,11 @@ import {
   toTimestampValue,
 } from "./utils/datetime";
 import {
+  buildTaskTimelineRenderableLogList,
+  isGroupedAutomationTranscriptLog,
+  type TaskTimelineRenderableLog,
+} from "./utils/task_timeline_continuity";
+import {
   buildPrdPendingQuestionsFeedbackText,
   derivePrdPendingQuestionActionBlockReason,
   getTaskScopedPrdPendingQuestionAnswerSelectionMap,
@@ -115,7 +120,7 @@ interface RequirementViewModel {
 }
 
 interface TimelineViewModel {
-  log: DevLog;
+  log: TaskTimelineRenderableLog;
   kind: TimelineKind;
   authorName: string;
   timeLabel: string;
@@ -801,7 +806,7 @@ function App() {
   const selectedTimelineItemList = useMemo(
     () =>
       selectedTask
-        ? selectedTaskDevLogs.map((devLogItem) =>
+        ? buildTaskTimelineRenderableLogList(selectedTaskDevLogs).map((devLogItem) =>
             buildTimelineViewModel(devLogItem, currentRunAccount))
         : [],
     [currentRunAccount, selectedTask, selectedTaskDevLogs]
@@ -5712,7 +5717,7 @@ function CompactTimelineDetailDrawer({
             {buildCompactTimelinePreviewText(timelineItem)}
           </h4>
           <p className="devflow-timeline-detail-drawer__meta">
-            {formatDateTime(timelineItem.log.created_at)}
+            {buildTimelineDetailMetaLabel(timelineItem)}
           </p>
         </div>
 
@@ -5939,15 +5944,24 @@ function buildRequirementViewModel(
 }
 
 function buildTimelineViewModel(
-  devLogItem: DevLog,
+  devLogItem: TaskTimelineRenderableLog,
   currentRunAccount: RunAccount | null
 ): TimelineViewModel {
   const timelineKind = deriveTimelineKind(devLogItem);
+  const groupedTranscriptStartTime =
+    devLogItem.grouped_automation_transcript_started_at ?? devLogItem.created_at;
+  const groupedTranscriptEndTime =
+    devLogItem.grouped_automation_transcript_ended_at ?? devLogItem.created_at;
+  const startTimeLabel = formatHourMinute(groupedTranscriptStartTime);
+  const endTimeLabel = formatHourMinute(groupedTranscriptEndTime);
   return {
     log: devLogItem,
     kind: timelineKind,
     authorName: deriveTimelineAuthorName(timelineKind, currentRunAccount),
-    timeLabel: formatHourMinute(devLogItem.created_at),
+    timeLabel:
+      startTimeLabel !== endTimeLabel
+        ? `${startTimeLabel} - ${endTimeLabel}`
+        : startTimeLabel,
   };
 }
 
@@ -6198,6 +6212,15 @@ function buildCompactTimelinePreviewText(timelineItem: TimelineViewModel): strin
   const rawTimelineText = timelineItem.log.text_content || "";
   const cleanedTimelinePreviewText = cleanMarkdownPreview(rawTimelineText);
   const filePathMatchList = extractCompactTimelineFilePathList(cleanedTimelinePreviewText);
+  if (isGroupedAutomationTranscriptLog(timelineItem.log)) {
+    const transcriptPreviewLine = rawTimelineText
+      .split("\n")
+      .map((rawTimelineLine) => cleanMarkdownPreview(rawTimelineLine))
+      .find((cleanedTimelineLine) => cleanedTimelineLine.length > 0);
+    if (transcriptPreviewLine) {
+      return truncateText(transcriptPreviewLine, 140);
+    }
+  }
 
   if (
     rawTimelineText.toLowerCase().includes("codex exec") &&
@@ -6398,6 +6421,20 @@ function buildCompactTimelineMetadataTagList(
   timelineItem: TimelineViewModel
 ): string[] {
   const metadataTagList: string[] = [];
+
+  if (isGroupedAutomationTranscriptLog(timelineItem.log)) {
+    if (timelineItem.log.automation_runner_kind) {
+      metadataTagList.push(timelineItem.log.automation_runner_kind.toUpperCase());
+    }
+    if (timelineItem.log.automation_phase_label) {
+      metadataTagList.push(timelineItem.log.automation_phase_label);
+    }
+    if (timelineItem.log.grouped_automation_transcript_chunk_count) {
+      metadataTagList.push(
+        `${timelineItem.log.grouped_automation_transcript_chunk_count} 段`
+      );
+    }
+  }
 
   if (timelineItem.log.state_tag === DevLogStateTag.BUG) {
     metadataTagList.push("BUG");
@@ -7037,6 +7074,13 @@ function buildRequirementUpdateLog(
 
 function deriveTimelineKind(devLogItem: DevLog): TimelineKind {
   if (
+    Boolean(devLogItem.automation_session_id) ||
+    Boolean(devLogItem.automation_runner_kind)
+  ) {
+    return "ai_log";
+  }
+
+  if (
     devLogItem.ai_processing_status &&
     devLogItem.ai_processing_status !== AIProcessingStatus.CONFIRMED
   ) {
@@ -7074,6 +7118,22 @@ function deriveTimelineAuthorName(
   }
 
   return currentRunAccount?.account_display_name || GUEST_USER_LABEL;
+}
+
+function buildTimelineDetailMetaLabel(timelineItem: TimelineViewModel): string {
+  const groupedTranscriptStartTime =
+    timelineItem.log.grouped_automation_transcript_started_at ??
+    timelineItem.log.created_at;
+  const groupedTranscriptEndTime =
+    timelineItem.log.grouped_automation_transcript_ended_at ??
+    timelineItem.log.created_at;
+  const startTimeLabel = formatDateTime(groupedTranscriptStartTime);
+  const endTimeLabel = formatDateTime(groupedTranscriptEndTime);
+  if (startTimeLabel === endTimeLabel) {
+    return startTimeLabel;
+  }
+
+  return `${startTimeLabel} - ${endTimeLabel}`;
 }
 
 function cleanMarkdownPreview(rawMarkdownText: string): string {

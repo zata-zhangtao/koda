@@ -72,6 +72,27 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: ensured idx_dev_logs_run_account_created_at",
     ),
     (
+        "ALTER TABLE dev_logs ADD COLUMN automation_session_id VARCHAR(36)",
+        "Migration: added automation_session_id column to dev_logs",
+    ),
+    (
+        "ALTER TABLE dev_logs ADD COLUMN automation_sequence_index INTEGER",
+        "Migration: added automation_sequence_index column to dev_logs",
+    ),
+    (
+        "ALTER TABLE dev_logs ADD COLUMN automation_phase_label VARCHAR(120)",
+        "Migration: added automation_phase_label column to dev_logs",
+    ),
+    (
+        "ALTER TABLE dev_logs ADD COLUMN automation_runner_kind VARCHAR(40)",
+        "Migration: added automation_runner_kind column to dev_logs",
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_dev_logs_task_automation_session "
+        "ON dev_logs (task_id, automation_session_id, automation_sequence_index)",
+        "Migration: ensured idx_dev_logs_task_automation_session",
+    ),
+    (
         "ALTER TABLE email_settings ADD COLUMN stalled_task_threshold_minutes "
         "INTEGER NOT NULL DEFAULT 20",
         "Migration: added stalled_task_threshold_minutes column to email_settings",

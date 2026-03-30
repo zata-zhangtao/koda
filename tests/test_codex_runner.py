@@ -276,6 +276,66 @@ def test_write_log_to_db_refreshes_last_ai_activity_at() -> None:
         seed_session.close()
 
 
+def test_write_automation_transcript_chunk_to_db_persists_continuity_fields() -> None:
+    """Transcript chunk writes should persist automation continuity metadata."""
+    session_factory = _build_db_session_factory()
+    seed_session = session_factory()
+    try:
+        run_account_obj = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="Linux",
+            git_branch_name=None,
+            is_active=True,
+        )
+        seed_session.add(run_account_obj)
+        seed_session.commit()
+
+        task_obj = Task(
+            run_account_id=run_account_obj.id,
+            task_title="Persist transcript metadata",
+            workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+            lifecycle_status=TaskLifecycleStatus.OPEN,
+        )
+        seed_session.add(task_obj)
+        seed_session.commit()
+        task_id_str = task_obj.id
+        run_account_id_str = run_account_obj.id
+
+        original_session_local = codex_runner.SessionLocal
+        codex_runner.SessionLocal = session_factory
+        try:
+            codex_runner._write_automation_transcript_chunk_to_db(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                text_content_str="first line\nsecond line",
+                automation_session_id_str="session-123",
+                automation_sequence_index_int=2,
+                automation_phase_label_str="codex-exec",
+                automation_runner_kind_str="codex",
+            )
+        finally:
+            codex_runner.SessionLocal = original_session_local
+
+        verification_session = session_factory()
+        try:
+            persisted_dev_log_obj = (
+                verification_session.query(DevLog)
+                .filter(DevLog.task_id == task_id_str)
+                .first()
+            )
+            assert persisted_dev_log_obj is not None
+            assert persisted_dev_log_obj.text_content == "first line\nsecond line"
+            assert persisted_dev_log_obj.automation_session_id == "session-123"
+            assert persisted_dev_log_obj.automation_sequence_index == 2
+            assert persisted_dev_log_obj.automation_phase_label == "codex-exec"
+            assert persisted_dev_log_obj.automation_runner_kind == "codex"
+        finally:
+            verification_session.close()
+    finally:
+        seed_session.close()
+
+
 def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
     """Implementation prompt should forbid default commits before user confirmation."""
     implementation_prompt_text = codex_runner.build_codex_prompt(
@@ -737,6 +797,7 @@ def test_run_logged_runner_conflict_resolution_passes_prompt_via_stdin(
 
     monkeypatch.setattr(codex_runner.shutil, "which", lambda _name: "/usr/bin/codex")
     monkeypatch.setattr(codex_runner.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(codex_runner, "_write_log_to_db", lambda *args, **kwargs: None)
 
     completed_process = codex_runner._run_logged_runner_conflict_resolution(
         task_id_str="12345678-conflict",

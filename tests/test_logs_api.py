@@ -90,6 +90,54 @@ def test_list_logs_filters_incremental_results_from_created_after(
     assert incremental_log_list[0].task_title == task_obj.task_title
 
 
+def test_list_logs_exposes_automation_transcript_metadata(
+    db_session: Session,
+) -> None:
+    """Log listing should expose automation transcript metadata for continuity-aware clients."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Continuity metadata task",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+    transcript_log = DevLog(
+        task_id=task_obj.id,
+        run_account_id=run_account_obj.id,
+        created_at=datetime(2026, 3, 19, 5, 1, 0),
+        text_content="chunk one",
+        state_tag=DevLogStateTag.OPTIMIZATION,
+        automation_session_id="session-1",
+        automation_sequence_index=1,
+        automation_phase_label="codex-exec",
+        automation_runner_kind="codex",
+    )
+    db_session.add(transcript_log)
+    db_session.commit()
+
+    returned_log_list = list_logs(
+        task_id=task_obj.id,
+        limit=20,
+        offset=0,
+        created_after=None,
+        db_session=db_session,
+    )
+
+    assert len(returned_log_list) == 1
+    assert returned_log_list[0].automation_session_id == "session-1"
+    assert returned_log_list[0].automation_sequence_index == 1
+    assert returned_log_list[0].automation_phase_label == "codex-exec"
+    assert returned_log_list[0].automation_runner_kind == "codex"
+
+
 def test_list_logs_rejects_invalid_created_after_timestamp(
     db_session: Session,
 ) -> None:

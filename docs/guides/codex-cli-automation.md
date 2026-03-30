@@ -196,6 +196,8 @@ printf '%s' "<prompt>" | claude -p --dangerously-skip-permissions
 - `stderr` 被合并到 `stdout`
 - 输出按行读取
 - 每积累 5 行，或等待 1.5 秒，就批量写入一条 `DevLog`
+- 同一次 phase attempt 的 flush chunk 会共享 `automation_session_id`，并记录单调递增的 `automation_sequence_index`
+- chunk 还会附带 `automation_phase_label` 与 `automation_runner_kind`，供读取侧恢复连续 transcript
 - 每个阶段日志头部会写入 `runner_kind=<codex|claude>` 便于排障
 
 ## 日志与可观测性
@@ -206,6 +208,10 @@ Codex 的输出不是单独存放在某个审计表中，而是直接写回 `Dev
 
 - 第 N 轮 review 发现问题 -> 第 N 轮自动回改 -> 第 N+1 轮复审
 - review 通过 -> pre-commit lint -> AI lint-fix -> lint 复检
+
+为了修复连续输出被切碎后的阅读问题，任务详情时间线不会直接逐条展示这些 flush chunk，而是先按 `automation_session_id` 做一次只读聚合：只有“相邻且 session 相同”的 chunk 会被合并成一个 transcript 卡片；如果中间插入人工反馈或系统日志，就会强制断开。`/tmp/koda-<task短ID>.log` 和数据库里的原子 `DevLog` 仍保持原样，方便 tail 与审计。
+
+任务级 Markdown 编年史导出也使用相同的 continuity 合同：同一连续 transcript 会导出为一个 Markdown block，标题展示时间范围与 phase，正文保留原始 chunk 顺序和换行。
 
 ### 本地日志文件
 

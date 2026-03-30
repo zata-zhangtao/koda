@@ -72,8 +72,10 @@ flowchart LR
 - `Project`：本地 Git 仓库目录
 - `RunAccount`：开发环境与当前活跃身份
 - `Task`：需求卡片与工作流阶段
-- `DevLog`：时间线中的最小记录单元
+- `DevLog`：时间线中的最小记录单元，也是自动化 transcript 的事实源
 - `TaskQaMessage`：任务内独立问答消息，独立于 `DevLog`
+
+自动化 runner 的连续输出不会改写成单条大日志，而是继续按 flush 批次 append 到 `DevLog`。为了解决用户侧“内容不连贯”的阅读问题，新生成的自动化 chunk 会额外携带 `automation_session_id`、`automation_sequence_index`、`automation_phase_label`、`automation_runner_kind`；任务详情时间线和 task 维度 Markdown 导出再基于这些显式元数据，把“相邻且 session 相同”的 chunk 合并成一个连续 transcript block。全局 raw timeline 仍保持逐条 `DevLog` 视图，不做历史回填。
 
 数据库通过 `utils/database.py` 管理，默认落在 `data/dsl.db`。对于文件型 SQLite，连接创建时会统一启用 WAL 和 30 秒 busy timeout，以降低 UI 读接口与后台 DevLog 写入并发时的锁冲突。
 
@@ -155,6 +157,8 @@ flowchart TD
 9. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
 10. 如果生成了 PRD，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件 `tasks/prd-{task_id[:8]}.md` 的内容；后端优先读取固定文件名，并兼容回退到同前缀的历史 slugged 文件
 11. 当 PRD Markdown 中存在 `## 0. 待确认问题（结构化）` JSON 块时，前端会先解析该块渲染下拉确认卡片，再渲染清洗后的 PRD 正文；如果结构化块 malformed，则前端显示修复提示并阻断“确认 PRD / 开始执行”
+
+其中第 5 步的自动化输出仍然保持 append-only：同一次 runner attempt 的多个 flush chunk 会共享同一个 `automation_session_id`，并在读取侧仅按“相邻且 session 相同”聚合。若中间穿插人工反馈、系统事件或其他普通 `DevLog`，前后 transcript 必须断开，避免跨越真实时序强行拼接。
 
 ## Sidecar Q&A 边界
 

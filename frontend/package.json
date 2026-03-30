@@ -9,6 +9,7 @@
     "test:prd-pending-questions": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_pending_questions.test.ts",
     "test:workspace-view": "node --experimental-strip-types --experimental-specifier-resolution=node tests/workspace_view.test.ts",
     "test:selected-task-prd-file": "node --experimental-strip-types --experimental-specifier-resolution=node tests/use_selected_task_prd_file.test.ts",
+    "test:timeline-continuity": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_timeline_continuity.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
