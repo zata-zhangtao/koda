@@ -285,6 +285,7 @@ def repair_invalid_task_prd_file_for_read(
         task_title_str=task_title_str,
     )
 
+
 def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[Path]:
     """List readable PRD files for one task, newest semantic filenames first.
 
@@ -309,6 +310,7 @@ def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[
             task_id_str=task_id_str,
         )
     ]
+
 
 def list_all_task_prd_file_paths(
     worktree_dir_path: Path, task_id_str: str

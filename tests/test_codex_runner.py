@@ -1188,9 +1188,7 @@ def test_run_codex_prd_unexpected_preflight_exception_writes_task_log_and_fails(
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
         email_service.send_task_failed_notification = fake_send_task_failed_notification
-        codex_runner.list_all_task_prd_file_paths = (
-            fake_list_all_task_prd_file_paths
-        )
+        codex_runner.list_all_task_prd_file_paths = fake_list_all_task_prd_file_paths
         codex_runner._CODEX_LOG_DIR = tmp_path
 
         asyncio.run(

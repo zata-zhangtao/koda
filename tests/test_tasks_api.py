@@ -126,6 +126,7 @@ def _create_git_repo(repo_root_path: Path) -> Path:
     _run_git_command(repo_root_path, ["commit", "-m", "init"])
     return repo_root_path
 
+
 def test_get_task_prd_file_prefers_semantic_filename_over_legacy_and_random_suffix(
     db_session: Session,
     tmp_path: Path,
@@ -882,6 +883,80 @@ def test_list_task_card_metadata_defaults_missing_waiting_user_markers_to_false(
     assert review_metadata.is_waiting_for_user is False
     assert lint_metadata.display_stage_key == WorkflowStage.TEST_IN_PROGRESS.value
     assert lint_metadata.is_waiting_for_user is False
+
+
+def test_list_task_card_metadata_does_not_require_full_task_log_history(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card metadata should derive requirement-change summaries without loading all task logs."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Requirement change summary",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="普通日志，不应触发 requirement-change 摘要读取",
+                state_tag=DevLogStateTag.NONE,
+            ),
+            DevLog(
+                task_id=task_obj.id,
+                run_account_id=run_account_obj.id,
+                text_content="\n".join(
+                    [
+                        "<!-- requirement-change:update -->",
+                        "## Requirement Updated",
+                        "",
+                        "Previous Title: Requirement change summary",
+                        "Current Title: Requirement change summary",
+                        "",
+                        "Summary:",
+                        "Latest compact requirement summary",
+                    ]
+                ),
+                state_tag=DevLogStateTag.NONE,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    def _raise_if_full_task_logs_are_loaded(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("card-metadata should not load the full task log history")
+
+    monkeypatch.setattr(
+        tasks_api,
+        "_get_ordered_task_dev_logs_by_task_id",
+        _raise_if_full_task_logs_are_loaded,
+    )
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    task_card_metadata_list = list_task_card_metadata(db_session)
+
+    assert len(task_card_metadata_list) == 1
+    assert task_card_metadata_list[0].task_id == task_obj.id
+    assert task_card_metadata_list[0].requirement_change_kind == "update"
+    assert (
+        task_card_metadata_list[0].requirement_summary
+        == "Latest compact requirement summary"
+    )
 
 
 def test_regenerate_task_prd_schedules_background_job_with_media_context(

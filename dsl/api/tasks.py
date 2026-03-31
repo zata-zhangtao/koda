@@ -180,6 +180,7 @@ def _get_ordered_task_dev_logs(task_obj: Task) -> list[DevLog]:
         key=lambda dev_log_item: (dev_log_item.created_at, dev_log_item.id),
     )
 
+
 def _get_ordered_task_dev_logs_by_task_id(
     db_session: Session,
     task_id_list: list[str],
@@ -302,6 +303,59 @@ def _get_latest_requirement_change_snapshot(
         if requirement_change_snapshot is not None:
             return requirement_change_snapshot
     return None
+
+
+def _get_latest_requirement_change_snapshot_map_by_task_id(
+    db_session: Session,
+    task_id_list: list[str],
+) -> dict[str, RequirementChangeSnapshot]:
+    """批量返回任务最近一条需求变更快照.
+
+    `card-metadata` 只需要需求变更摘要，不应该把任务的全部时间线都读入内存。
+    这里仅查询带有 requirement-change marker 的日志，并按时间倒序为每个任务保留
+    第一条匹配记录。
+
+    Args:
+        db_session: 数据库会话
+        task_id_list: 任务 ID 列表
+
+    Returns:
+        dict[str, RequirementChangeSnapshot]: `task_id -> latest requirement-change`
+            映射；无匹配日志的任务不会出现在结果中
+    """
+    if not task_id_list:
+        return {}
+
+    relevant_requirement_change_filter = or_(
+        DevLog.text_content.contains(_REQUIREMENT_UPDATE_MARKER),
+        DevLog.text_content.contains(_REQUIREMENT_DELETE_MARKER),
+    )
+    relevant_requirement_change_row_list = (
+        db_session.query(
+            DevLog.task_id,
+            DevLog.text_content,
+        )
+        .filter(
+            DevLog.task_id.in_(task_id_list),
+            relevant_requirement_change_filter,
+        )
+        .order_by(DevLog.task_id.asc(), DevLog.created_at.desc(), DevLog.id.desc())
+        .all()
+    )
+
+    latest_requirement_change_snapshot_map_by_task_id: dict[
+        str, RequirementChangeSnapshot
+    ] = {}
+    for task_id_str, log_text in relevant_requirement_change_row_list:
+        if task_id_str in latest_requirement_change_snapshot_map_by_task_id:
+            continue
+        requirement_change_snapshot = _parse_requirement_change_log(log_text)
+        if requirement_change_snapshot is not None:
+            latest_requirement_change_snapshot_map_by_task_id[task_id_str] = (
+                requirement_change_snapshot
+            )
+
+    return latest_requirement_change_snapshot_map_by_task_id
 
 
 def _get_latest_waiting_user_signal_map_by_task_id(
@@ -1214,6 +1268,7 @@ def _build_task_card_metadata(
     task_branch_health: TaskBranchHealthSchema | None,
     *,
     ordered_task_dev_log_list: list[DevLog] | None = None,
+    latest_requirement_change_snapshot: RequirementChangeSnapshot | None = None,
     is_task_running: bool,
     latest_self_review_passed: bool = False,
     latest_post_review_lint_passed: bool = False,
@@ -1227,14 +1282,16 @@ def _build_task_card_metadata(
     Returns:
         TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
     """
-    resolved_ordered_task_dev_log_list = (
-        ordered_task_dev_log_list
-        if ordered_task_dev_log_list is not None
-        else _get_ordered_task_dev_logs(task_obj)
-    )
-    latest_requirement_change_snapshot = _get_latest_requirement_change_snapshot(
-        resolved_ordered_task_dev_log_list
-    )
+    resolved_latest_requirement_change_snapshot = latest_requirement_change_snapshot
+    if resolved_latest_requirement_change_snapshot is None:
+        resolved_ordered_task_dev_log_list = (
+            ordered_task_dev_log_list
+            if ordered_task_dev_log_list is not None
+            else _get_ordered_task_dev_logs(task_obj)
+        )
+        resolved_latest_requirement_change_snapshot = (
+            _get_latest_requirement_change_snapshot(resolved_ordered_task_dev_log_list)
+        )
     if task_branch_health and task_branch_health.manual_completion_candidate:
         return TaskCardMetadataSchema(
             task_id=task_obj.id,
@@ -1243,13 +1300,13 @@ def _build_task_card_metadata(
             is_waiting_for_user=False,
             last_ai_activity_at=task_obj.last_ai_activity_at,
             requirement_change_kind=(
-                latest_requirement_change_snapshot.change_kind
-                if latest_requirement_change_snapshot is not None
+                resolved_latest_requirement_change_snapshot.change_kind
+                if resolved_latest_requirement_change_snapshot is not None
                 else None
             ),
             requirement_summary=(
-                latest_requirement_change_snapshot.summary_text
-                if latest_requirement_change_snapshot is not None
+                resolved_latest_requirement_change_snapshot.summary_text
+                if resolved_latest_requirement_change_snapshot is not None
                 else None
             ),
             branch_health=task_branch_health,
@@ -1284,13 +1341,13 @@ def _build_task_card_metadata(
         is_waiting_for_user=is_waiting_for_user,
         last_ai_activity_at=task_obj.last_ai_activity_at,
         requirement_change_kind=(
-            latest_requirement_change_snapshot.change_kind
-            if latest_requirement_change_snapshot is not None
+            resolved_latest_requirement_change_snapshot.change_kind
+            if resolved_latest_requirement_change_snapshot is not None
             else None
         ),
         requirement_summary=(
-            latest_requirement_change_snapshot.summary_text
-            if latest_requirement_change_snapshot is not None
+            resolved_latest_requirement_change_snapshot.summary_text
+            if resolved_latest_requirement_change_snapshot is not None
             else None
         ),
         branch_health=task_branch_health,
@@ -1502,9 +1559,11 @@ def list_task_card_metadata(
             WorkflowStage.TEST_IN_PROGRESS,
         }
     ]
-    ordered_task_dev_logs_by_task_id = _get_ordered_task_dev_logs_by_task_id(
-        db_session,
-        task_id_list,
+    latest_requirement_change_snapshot_map_by_task_id = (
+        _get_latest_requirement_change_snapshot_map_by_task_id(
+            db_session,
+            task_id_list,
+        )
     )
     latest_waiting_user_signal_map_by_task_id = (
         _get_latest_waiting_user_signal_map_by_task_id(
@@ -1530,9 +1589,8 @@ def list_task_card_metadata(
             _build_task_card_metadata(
                 task_item,
                 task_branch_health_map.get(task_item.id),
-                ordered_task_dev_log_list=ordered_task_dev_logs_by_task_id.get(
-                    task_item.id,
-                    [],
+                latest_requirement_change_snapshot=(
+                    latest_requirement_change_snapshot_map_by_task_id.get(task_item.id)
                 ),
                 is_task_running=is_codex_task_running(task_item.id),
                 latest_self_review_passed=bool(

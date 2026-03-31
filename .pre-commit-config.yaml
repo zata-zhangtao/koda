@@ -20,13 +20,13 @@ repos:
   # ==========================================
   # 1. 基础文件卫生 (本地自举执行，避免运行时从 GitHub 拉取)
   # ==========================================
-- repo: local
-  hooks:
-    - id: trailing-whitespace
-      name: trailing-whitespace
-      entry: uv run python -m pre_commit_hooks.trailing_whitespace_fixer
-      language: system
-      types: [text]
+  - repo: local
+    hooks:
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        entry: uv run python -m pre_commit_hooks.trailing_whitespace_fixer
+        language: system
+        types: [text]
       - id: end-of-file-fixer
         name: end-of-file-fixer
         entry: uv run python -m pre_commit_hooks.end_of_file_fixer
@@ -57,14 +57,14 @@ repos:
   # ==========================================
   - repo: local
     hooks:
-    - id: ruff
-      name: ruff
-      entry: uv run ruff check --fix
-      language: system
-      types: [python]
-    - id: ruff-format
-      name: ruff-format
-      entry: uv run ruff format
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff-format
+        entry: uv run ruff format
         language: system
         types: [python]
 
