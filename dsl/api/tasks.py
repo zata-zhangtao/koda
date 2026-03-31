@@ -1263,6 +1263,44 @@ def _build_destroy_cleanup_failure_reason(
     return "Destroy cleanup did not finish completely: " + "; ".join(cleanup_gap_list)
 
 
+def _build_business_sync_status_note(task_obj: Task) -> str | None:
+    """Build a UI-facing note for tasks restored from business sync snapshots.
+
+    Args:
+        task_obj: 任务对象
+
+    Returns:
+        str | None: 面向 UI 的说明文案；若任务并非业务同步恢复则返回 None
+    """
+    if not task_obj.business_sync_restored_at:
+        return None
+
+    original_stage_value_str = task_obj.business_sync_original_workflow_stage
+    if original_stage_value_str:
+        try:
+            original_workflow_stage = WorkflowStage(original_stage_value_str)
+            original_stage_label_str = _format_workflow_stage_label(
+                original_workflow_stage
+            )
+        except ValueError:
+            original_stage_label_str = original_stage_value_str.replace("_", " ")
+    else:
+        original_stage_label_str = "Unknown"
+
+    if task_obj.workflow_stage.value != original_stage_value_str:
+        return (
+            f"Synced progress was {original_stage_label_str}. Koda reopened this task "
+            f"as {_format_workflow_stage_label(task_obj.workflow_stage)} on this machine "
+            "because repo/worktree execution state is machine-local."
+        )
+
+    return (
+        f"Restored from a WebDAV business snapshot. Current progress reflects the "
+        f"synced card state ({original_stage_label_str}), but local repo/worktree "
+        "state still needs to be rebuilt on this machine."
+    )
+
+
 def _build_task_card_metadata(
     task_obj: Task,
     task_branch_health: TaskBranchHealthSchema | None,
@@ -1309,6 +1347,8 @@ def _build_task_card_metadata(
                 if resolved_latest_requirement_change_snapshot is not None
                 else None
             ),
+            business_sync_restored_at=task_obj.business_sync_restored_at,
+            business_sync_status_note=_build_business_sync_status_note(task_obj),
             branch_health=task_branch_health,
         )
     waiting_for_user_after_self_review = (
@@ -1350,6 +1390,8 @@ def _build_task_card_metadata(
             if resolved_latest_requirement_change_snapshot is not None
             else None
         ),
+        business_sync_restored_at=task_obj.business_sync_restored_at,
+        business_sync_status_note=_build_business_sync_status_note(task_obj),
         branch_health=task_branch_health,
     )
 
@@ -1394,6 +1436,7 @@ def _hydrate_task_response(
         if is_task_running_override is None
         else is_task_running_override
     )
+    task_obj.business_sync_status_note = _build_business_sync_status_note(task_obj)
     return task_obj
 
 

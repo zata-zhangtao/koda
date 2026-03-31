@@ -1,4 +1,4 @@
-"""WebDAV 设置 Pydantic Schema 定义.
+"""WebDAV 存储设置 Pydantic Schema 定义.
 
 用于 API 请求/响应的数据验证和序列化.
 """
@@ -11,7 +11,7 @@ from dsl.schemas.base import DSLResponseSchema
 
 
 class WebDAVSettingsUpdate(BaseModel):
-    """更新 WebDAV 设置的请求体.
+    """更新 WebDAV 存储设置的请求体.
 
     Attributes:
         server_url (str): WebDAV 服务器 URL
@@ -24,12 +24,12 @@ class WebDAVSettingsUpdate(BaseModel):
     server_url: str = Field(..., max_length=512, description="WebDAV 服务器 URL")
     username: str = Field(..., max_length=255, description="用户名")
     password: str = Field(..., max_length=255, description="密码")
-    remote_path: str = Field("/koda-backup/", max_length=512, description="远端路径")
-    is_enabled: bool = Field(True, description="是否启用 WebDAV 同步")
+    remote_path: str = Field("/koda-sync/", max_length=512, description="远端目录")
+    is_enabled: bool = Field(True, description="是否启用 WebDAV 备份与业务同步")
 
 
 class WebDAVSettingsResponse(DSLResponseSchema):
-    """WebDAV 设置响应体（密码脱敏）.
+    """WebDAV 存储设置响应体（密码脱敏）.
 
     Attributes:
         id (int): 记录 ID
@@ -53,7 +53,7 @@ class WebDAVSettingsResponse(DSLResponseSchema):
 
 
 class WebDAVSyncResult(BaseModel):
-    """WebDAV 同步操作结果.
+    """WebDAV 备份/同步操作结果.
 
     Attributes:
         success (bool): 是否成功

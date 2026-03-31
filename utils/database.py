@@ -36,6 +36,20 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added auto_confirm_prd_and_execute column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN business_sync_original_workflow_stage "
+        "VARCHAR(64)",
+        "Migration: added business_sync_original_workflow_stage column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN business_sync_original_lifecycle_status "
+        "VARCHAR(32)",
+        "Migration: added business_sync_original_lifecycle_status column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN business_sync_restored_at DATETIME",
+        "Migration: added business_sync_restored_at column to tasks",
+    ),
+    (
         "ALTER TABLE tasks ADD COLUMN destroy_reason VARCHAR(200)",
         "Migration: added destroy_reason column to tasks",
     ),

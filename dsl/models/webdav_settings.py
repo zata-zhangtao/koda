@@ -1,6 +1,6 @@
-"""WebDAV 同步设置数据模型.
+"""WebDAV 存储设置数据模型.
 
-存储 WebDAV 服务器连接配置，用于数据库备份/同步功能.
+存储 WebDAV 服务器连接配置，用于数据库备份/恢复与业务快照同步功能.
 """
 
 from datetime import datetime
@@ -13,7 +13,7 @@ from utils.helpers import utc_now_naive
 
 
 class WebDAVSettings(Base):
-    """WebDAV 同步设置模型.
+    """WebDAV 存储设置模型.
 
     全局唯一一条记录（id=1），存储 WebDAV 服务器地址和认证信息.
 
@@ -22,8 +22,8 @@ class WebDAVSettings(Base):
         server_url (str): WebDAV 服务器基础 URL（如 https://dav.example.com/remote.php/dav/files/user/）
         username (str): WebDAV 登录用户名
         password (str): WebDAV 登录密码
-        remote_path (str): 远程存储路径（如 /koda-backup/）
-        is_enabled (bool): 是否启用 WebDAV 同步
+        remote_path (str): 远程存储目录（如 /koda-sync/）
+        is_enabled (bool): 是否启用 WebDAV 备份与业务同步
         created_at (datetime): 创建时间
         updated_at (datetime): 最后更新时间
     """
@@ -35,7 +35,7 @@ class WebDAVSettings(Base):
     username: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     password: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     remote_path: Mapped[str] = mapped_column(
-        String(512), nullable=False, default="/koda-backup/"
+        String(512), nullable=False, default="/koda-sync/"
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)

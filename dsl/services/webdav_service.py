@@ -1,7 +1,10 @@
-"""WebDAV 同步服务模块.
+"""WebDAV 数据库备份服务模块.
 
 使用 Python 标准库 urllib 实现 WebDAV 文件上传/下载和连接测试，
-无需额外依赖。支持 Basic Auth，兼容 Nextcloud、坚果云、ownCloud 等主流 WebDAV 服务.
+无需额外依赖。支持 Basic Auth，兼容 Nextcloud、坚果云、ownCloud 等主流 WebDAV 服务。
+
+当前能力是“本地 SQLite 数据库备份/恢复”，不是 Git 仓库或 worktree
+级别的跨设备语义同步。
 """
 
 import base64
@@ -12,6 +15,17 @@ from pathlib import Path
 
 from utils.logger import logger
 from utils.settings import config
+
+_WEBDAV_BACKUP_SCOPE_NOTE = (
+    "This uploads a database backup snapshot of local Koda records, including "
+    "projects, requirement cards, logs, and settings. Git repositories, "
+    "worktrees, and actual code completion progress are not included."
+)
+_WEBDAV_RESTORE_SCOPE_NOTE = (
+    "Restored projects and requirement cards are database snapshots only. "
+    "Relink repositories on this machine before relying on local repo status "
+    "or completion state."
+)
 
 
 def _build_basic_auth_header(username_str: str, password_str: str) -> str:
@@ -47,7 +61,7 @@ def _normalize_remote_dir_url(server_url_str: str, remote_path_str: str) -> str:
 
 
 def _load_webdav_settings_from_db():
-    """从数据库读取 WebDAV 设置（同步）.
+    """从数据库读取 WebDAV 设置（同步调用）.
 
     Returns:
         WebDAVSettings | None: WebDAV 设置对象，若未配置返回 None
@@ -72,7 +86,7 @@ def _build_repo_relink_hint_message() -> str:
     """生成 WebDAV 恢复后的项目路径修复提示.
 
     Returns:
-        str: 追加到同步结果后的提示语；若无需提示则返回空字符串
+        str: 追加到恢复结果后的提示语；若无需提示则返回空字符串
     """
     from dsl.models.project import Project
     from dsl.services.project_service import ProjectService
@@ -120,7 +134,23 @@ def _build_repo_relink_hint_message() -> str:
             "path but are on a different HEAD commit than the synced fingerprint"
         )
 
-    return " " + "; ".join(hint_message_part_list) + "."
+    return "; ".join(hint_message_part_list) + "."
+
+
+def _compose_result_message(*message_part_tuple: str) -> str:
+    """拼接 WebDAV 结果消息，自动跳过空片段.
+
+    Args:
+        *message_part_tuple: 待拼接的消息片段
+
+    Returns:
+        str: 规范化后的结果消息
+    """
+    return " ".join(
+        message_part_str.strip()
+        for message_part_str in message_part_tuple
+        if message_part_str and message_part_str.strip()
+    )
 
 
 def test_webdav_connection(
@@ -355,7 +385,7 @@ def sync_database_to_webdav() -> tuple[bool, str, str | None]:
         return False, "WebDAV settings not configured.", None
 
     if not webdav_settings_obj.is_enabled:
-        return False, "WebDAV sync is disabled.", None
+        return False, "WebDAV database backup is disabled.", None
 
     required_fields_list = [
         webdav_settings_obj.server_url,
@@ -385,7 +415,7 @@ def sync_database_to_webdav() -> tuple[bool, str, str | None]:
     db_url_str = config.DATABASE_URL
     # 仅处理 SQLite 本地文件
     if not db_url_str.startswith("sqlite:///"):
-        return False, "Only SQLite databases are supported for WebDAV sync.", None
+        return False, "Only SQLite databases are supported for WebDAV backup.", None
 
     db_file_path = Path(db_url_str.replace("sqlite:///", ""))
     if not db_file_path.is_absolute():
@@ -398,7 +428,14 @@ def sync_database_to_webdav() -> tuple[bool, str, str | None]:
         password_str=webdav_settings_obj.password,
         remote_path_str=webdav_settings_obj.remote_path,
     )
-    return upload_success_bool, upload_message_str, remote_url_str
+    if not upload_success_bool:
+        return upload_success_bool, upload_message_str, remote_url_str
+
+    return (
+        True,
+        _compose_result_message(upload_message_str, _WEBDAV_BACKUP_SCOPE_NOTE),
+        remote_url_str,
+    )
 
 
 def restore_database_from_webdav() -> tuple[bool, str]:
@@ -415,11 +452,11 @@ def restore_database_from_webdav() -> tuple[bool, str]:
         return False, "WebDAV settings not configured."
 
     if not webdav_settings_obj.is_enabled:
-        return False, "WebDAV sync is disabled."
+        return False, "WebDAV database backup is disabled."
 
     db_url_str = config.DATABASE_URL
     if not db_url_str.startswith("sqlite:///"):
-        return False, "Only SQLite databases are supported for WebDAV sync."
+        return False, "Only SQLite databases are supported for WebDAV backup."
 
     db_file_path = Path(db_url_str.replace("sqlite:///", ""))
     if not db_file_path.is_absolute():
@@ -437,4 +474,11 @@ def restore_database_from_webdav() -> tuple[bool, str]:
         return False, download_message_str
 
     relink_hint_message_str = _build_repo_relink_hint_message()
-    return True, f"{download_message_str}{relink_hint_message_str}"
+    return (
+        True,
+        _compose_result_message(
+            download_message_str,
+            _WEBDAV_RESTORE_SCOPE_NOTE,
+            relink_hint_message_str,
+        ),
+    )

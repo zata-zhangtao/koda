@@ -159,6 +159,10 @@ class TaskResponseSchema(DSLResponseSchema):
         stage_updated_at: 最近一次进入当前工作流阶段的时间
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
+        business_sync_original_workflow_stage: 最近一次业务同步恢复前的原始阶段快照
+        business_sync_original_lifecycle_status: 最近一次业务同步恢复前的原始生命周期快照
+        business_sync_restored_at: 最近一次从业务同步快照恢复到当前机器的时间
+        business_sync_status_note: 面向 UI 的业务同步恢复说明
         created_at: 创建时间
         closed_at: 关闭时间
         destroy_reason: 已启动任务销毁原因（若存在）
@@ -193,6 +197,22 @@ class TaskResponseSchema(DSLResponseSchema):
         default=False,
         description="PRD 生成后是否自动确认并直接进入执行",
     )
+    business_sync_original_workflow_stage: str | None = Field(
+        None,
+        description="最近一次业务同步恢复前的原始阶段快照",
+    )
+    business_sync_original_lifecycle_status: str | None = Field(
+        None,
+        description="最近一次业务同步恢复前的原始生命周期快照",
+    )
+    business_sync_restored_at: datetime | None = Field(
+        None,
+        description="最近一次从业务同步快照恢复到当前机器的时间",
+    )
+    business_sync_status_note: str | None = Field(
+        None,
+        description="面向 UI 的业务同步恢复说明",
+    )
     destroy_reason: str | None = Field(None, description="已启动任务销毁原因")
     destroyed_at: datetime | None = Field(
         None,
@@ -225,6 +245,8 @@ class TaskCardMetadataSchema(DSLResponseSchema):
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
         requirement_change_kind: 最近一次需求变更日志类型；仅卡片分组/摘要使用
         requirement_summary: 最近一次需求变更摘要；为空时前端回退到 `Task.requirement_brief`
+        business_sync_restored_at: 最近一次从业务同步快照恢复到当前机器的时间
+        business_sync_status_note: 业务同步恢复说明
         branch_health: 任务关联 Git 分支的派生健康状态
     """
 
@@ -249,6 +271,14 @@ class TaskCardMetadataSchema(DSLResponseSchema):
     requirement_summary: str | None = Field(
         None,
         description="最近一次需求变更摘要；为空时前端回退到 Task.requirement_brief",
+    )
+    business_sync_restored_at: datetime | None = Field(
+        None,
+        description="最近一次从业务同步快照恢复到当前机器的时间",
+    )
+    business_sync_status_note: str | None = Field(
+        None,
+        description="业务同步恢复说明",
     )
     branch_health: TaskBranchHealthSchema | None = Field(
         None,

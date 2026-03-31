@@ -149,6 +149,10 @@ export interface Task {
   worktree_path: string | null;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
+  business_sync_original_workflow_stage: string | null;
+  business_sync_original_lifecycle_status: string | null;
+  business_sync_restored_at: string | null;
+  business_sync_status_note: string | null;
   destroy_reason: string | null;
   destroyed_at: string | null;
   created_at: string;
@@ -216,6 +220,8 @@ export interface TaskCardMetadata {
   last_ai_activity_at: string | null;
   requirement_change_kind: "update" | "delete" | null;
   requirement_summary: string | null;
+  business_sync_restored_at: string | null;
+  business_sync_status_note: string | null;
   branch_health: TaskBranchHealth | null;
 }
 
@@ -309,7 +315,7 @@ export interface EmailSettings {
   updated_at: string;
 }
 
-/** WebDAV 同步设置 */
+/** WebDAV 存储设置 */
 export interface WebDAVSettings {
   id: number;
   server_url: string;
@@ -321,7 +327,7 @@ export interface WebDAVSettings {
   updated_at: string;
 }
 
-/** WebDAV 设置保存请求体 */
+/** WebDAV 存储设置保存请求体 */
 export interface WebDAVSettingsUpdate {
   server_url: string;
   username: string;
@@ -330,7 +336,7 @@ export interface WebDAVSettingsUpdate {
   is_enabled: boolean;
 }
 
-/** WebDAV 同步操作结果 */
+/** WebDAV 备份/同步操作结果 */
 export interface WebDAVSyncResult {
   success: boolean;
   message: string;

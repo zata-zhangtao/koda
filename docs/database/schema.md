@@ -15,6 +15,20 @@
 - `TaskArtifact`：任务工件快照（PRD 与 planning with files）
 - `TaskReferenceLink`：历史需求引用关系（source task -> target task）的审计与去重锚点
 
+## WebDAV 恢复语义
+
+WebDAV 现在有两条并行能力，语义不同：
+
+- 原始数据库备份/恢复：直接上传或恢复整个 SQLite 文件，适合灾备与整机迁移。数据库中的设置、历史记录以及机器相关路径都会原样回来，因此跨设备恢复后仍需要重新检查 `repo_path`、worktree 和本地 Git 状态。
+- 业务快照同步：只同步业务事实，包括项目、需求卡片、日志、`TaskArtifact`（PRD / planning 快照）、媒体文件、任务侧边问答和任务引用关系。它不会同步 `repo_path`、`worktree_path`、本地分支是否存在、后台进程是否仍在运行等机器事实。
+
+业务快照恢复的额外约束：
+
+- 导入任务会重绑到“当前活跃 `RunAccount`”，否则卡片会因为账户过滤而在当前机器上不可见。
+- 新导入项目不会写入远端机器的 `repo_path`；若当前机器上已存在同 ID 项目，则保留本地 `repo_path`，仅刷新 remote / HEAD 指纹与描述。
+- 业务快照恢复的任务会清空 `worktree_path`，并把远端原始阶段/生命周期写入 `business_sync_original_*` 字段。
+- 若远端阶段依赖本机代码执行上下文，系统会做安全降级，例如把 `implementation_in_progress` 恢复为 `changes_requested`，把带 PRD 快照的 `prd_generating` 恢复为 `prd_waiting_confirmation`。
+
 ## 时间语义契约
 
 - 数据库存储层继续使用 UTC 语义的 naive datetime，不对历史记录做批量 `+8h` 回填。
@@ -51,7 +65,10 @@ erDiagram
     PROJECT {
         string id PK
         string display_name
+        string project_category
         string repo_path
+        string repo_remote_url
+        string repo_head_commit_hash
         text description
         datetime created_at
     }
@@ -67,6 +84,10 @@ erDiagram
         datetime last_ai_activity_at
         string worktree_path
         text requirement_brief
+        bool auto_confirm_prd_and_execute
+        string business_sync_original_workflow_stage
+        string business_sync_original_lifecycle_status
+        datetime business_sync_restored_at
         text destroy_reason
         datetime destroyed_at
         datetime created_at
@@ -141,6 +162,7 @@ erDiagram
         string run_status
         string skip_reason
         string error_message
+    }
 
     TASK_ARTIFACT {
         string id PK
@@ -184,7 +206,10 @@ erDiagram
 
 `Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。除了路径本身，项目还会记录仓库的 `origin` remote 与 `HEAD` commit 指纹，用于跨机器恢复时校验你绑定的是不是同一个仓库、是不是同一个同步基线。
 
-注意：`repo_path` 是机器本地路径。若你通过 WebDAV 恢复了另一台机器上的数据库备份，项目记录会保留，但 `repo_path` 可能失效，需要在项目面板中重新绑定当前机器上的仓库路径。重绑后，系统还会继续检查 remote 与 commit hash 是否和同步时记录的指纹一致。
+需要区分两种 WebDAV 恢复模式：
+
+- 原始数据库恢复：项目记录和其中的 `repo_path` 会原样恢复；如果数据库来自另一台机器，这个路径大概率已经失效，需要在项目面板重新绑定。
+- 业务快照恢复：项目的 remote / HEAD 指纹、分类、描述会恢复，但新导入项目的 `repo_path` 会留空；若当前机器已经存在同 ID 项目，则沿用本地 `repo_path`，避免覆盖用户已经重绑好的仓库路径。
 
 关键字段：
 
@@ -209,6 +234,8 @@ erDiagram
 
 `Task` 是需求卡片的核心实体，也是工作流状态的唯一事实来源。
 
+补充说明：WebDAV 原始数据库恢复会把整个任务表原样带回；而业务快照恢复只带回卡片、日志、工件、媒体和侧边问答等业务事实。后者不会把关联 Git 仓库、worktree、本地未提交修改，或真实代码完成进度一起带回来，因此更适合跨设备同步“需求进度视图”，不能等同于“代码侧执行状态已完整同步”。
+
 关键字段：
 
 | 字段 | 说明 |
@@ -222,6 +249,9 @@ erDiagram
 | `last_ai_activity_at` | 最近一次 Codex 自动化输出写入时间 |
 | `worktree_path` | 任务 worktree 绝对路径 |
 | `requirement_brief` | 当前持久化的需求摘要 |
+| `business_sync_original_workflow_stage` | 业务快照恢复前记录的原始远端阶段 |
+| `business_sync_original_lifecycle_status` | 业务快照恢复前记录的原始远端生命周期 |
+| `business_sync_restored_at` | 最近一次业务快照恢复到当前机器的时间 |
 | `destroy_reason` | 已启动任务销毁原因；普通 backlog 删除通常为空 |
 | `destroyed_at` | 任务进入 deleted history 的时间 |
 | `closed_at` | 完成或关闭时间 |
@@ -232,7 +262,8 @@ erDiagram
 - `stage_updated_at`：停滞提醒的计算基准。系统只会在任务真正进入新阶段时刷新该值，因此它也是“同一阶段停留窗口”去重的锚点
 - `last_ai_activity_at`：只记录最近一次 Codex 自动化输出落库时间，供需求卡片和详情头部展示“最近 AI 活动”使用；它不是通过扫描 worktree 文件时间推导出来的
 - `worktree_path`：决定 Codex 实际工作目录
-- `project_id`：仅允许在 `backlog` 且尚未生成 `worktree_path` 时改绑；任务一旦开始，项目绑定会锁定，避免与运行上下文脱钩。前端需求卡片列表也会基于它提供按项目/未关联项目的筛选入口
+- `project_id`：默认仅允许在 `backlog` 且尚未生成 `worktree_path` 时改绑；若任务是从 WebDAV 业务快照恢复且本机还没有 worktree，也允许先重绑项目再继续本地执行。前端需求卡片列表也会基于它提供按项目/未关联项目的筛选入口
+- `business_sync_original_*` / `business_sync_restored_at`：只在 WebDAV 业务快照恢复后出现，用来告诉前端“远端同步时的阶段是什么”以及“当前机器上的安全降级结果是什么”
 - `destroy_reason` / `destroyed_at`：用于 started-task destroy 审计。普通 backlog 轻量删除也可能写入 `destroyed_at`，但通常不会有 `destroy_reason`
 
 需要额外说明的是：前端可能把 `self_review_in_progress` 或 `test_in_progress` 这类真实阶段覆盖显示为“等待用户”，但这只是 `GET /api/tasks/card-metadata` 返回的展示态，不会写回 `Task.workflow_stage`，也不会新增持久化 `waiting_user` 阶段。
@@ -365,6 +396,8 @@ erDiagram
 - `PRD`：优先从任务 worktree 的 `tasks/prd-{task_id[:8]}.md` 读取，并在 PRD 生成后及任务完成前刷新快照
 - `PLANNING_WITH_FILES`：优先从任务 worktree 的 `.claude/planning/current/{task_plan,findings,progress}.md` 读取，兼容旧根目录 planning 文件；若文件不存在，再回退到历史 DevLog 中的 planning 摘要文本
 
+它们也是 WebDAV 业务快照同步的核心组成部分，因此跨设备恢复后依然可以看到最近一次 PRD / planning 状态，即使本机 worktree 还未重建。
+
 ## 设计观察
 
 ### 目前没有 JSONB 字段
@@ -377,4 +410,4 @@ erDiagram
 
 ### 媒体路径存的是相对项目根的字符串
 
-这让后端可以直接把路径映射到静态目录，但部署时必须确保 `data/media/` 作为持久目录保留下来。
+这让后端可以直接把路径映射到静态目录，但部署时必须确保 `data/media/` 作为持久目录保留下来。WebDAV 业务快照同步不会只传递这些路径字符串，还会把被日志引用的实际媒体文件一起打包进 ZIP，因此恢复后附件链接仍能落到同名文件上。

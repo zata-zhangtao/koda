@@ -560,6 +560,18 @@ export const webdavSettingsApi = {
 
   /** 从 WebDAV 下载数据库（覆盖本地） */
   download: () => fetchApi<WebDAVSyncResult>("/webdav-settings/sync/download", { method: "POST" }),
+
+  /** 上传业务状态快照到 WebDAV */
+  uploadBusinessSnapshot: () =>
+    fetchApi<WebDAVSyncResult>("/webdav-settings/sync/business/upload", {
+      method: "POST",
+    }),
+
+  /** 从 WebDAV 下载业务状态快照并导入当前工作区 */
+  downloadBusinessSnapshot: () =>
+    fetchApi<WebDAVSyncResult>("/webdav-settings/sync/business/download", {
+      method: "POST",
+    }),
 };
 
 /** Chronicle API */

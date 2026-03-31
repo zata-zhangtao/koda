@@ -127,6 +127,7 @@ type ComposerMode = "feedback" | "sidecar_qa";
 interface RequirementViewModel {
   task: Task;
   description: string;
+  syncStatusNote: string | null;
   displayStage: RequirementDisplayStage;
   displayStageLabel: string;
   cardMetaLabel: string;
@@ -1175,6 +1176,20 @@ function App() {
     () =>
       formatTaskCardActivityTitle(selectedTaskCardMetadata?.last_ai_activity_at ?? null),
     [selectedTaskCardMetadata]
+  );
+  const selectedTaskBusinessSyncRestoredAt = useMemo(
+    () =>
+      selectedTaskCardMetadata?.business_sync_restored_at ??
+      selectedTask?.business_sync_restored_at ??
+      null,
+    [selectedTask, selectedTaskCardMetadata]
+  );
+  const selectedTaskBusinessSyncStatusNote = useMemo(
+    () =>
+      selectedTaskCardMetadata?.business_sync_status_note ??
+      selectedTask?.business_sync_status_note ??
+      null,
+    [selectedTask, selectedTaskCardMetadata]
   );
   const selectedTaskBranchHealth = useMemo(
     () =>
@@ -3944,10 +3959,26 @@ function App() {
                           </span>
                           <p className="devflow-detail__fact-hint">
                             {canRebindSelectedTaskProject
-                              ? "Backlog 阶段且尚未生成 worktree 时，可在编辑面板中改绑项目。"
+                              ? "Backlog 或 WebDAV 恢复且尚未创建 worktree 的任务，可在编辑面板中改绑项目。"
                               : "任务开始后项目绑定会锁定，避免 project_id 与 worktree / 运行上下文脱钩。"}
                           </p>
                         </div>
+
+                        {selectedTaskBusinessSyncStatusNote ||
+                        selectedTaskBusinessSyncRestoredAt ? (
+                          <div className="devflow-detail__fact-card devflow-detail__fact-card--sync">
+                            <span className="devflow-detail__fact-label">同步快照</span>
+                            <span className="devflow-detail__fact-value">
+                              {selectedTaskBusinessSyncRestoredAt
+                                ? formatDateTime(selectedTaskBusinessSyncRestoredAt)
+                                : "Restored from WebDAV business snapshot"}
+                            </span>
+                            <p className="devflow-detail__fact-hint">
+                              {selectedTaskBusinessSyncStatusNote ||
+                                "This task was restored from a WebDAV business snapshot."}
+                            </p>
+                          </div>
+                        ) : null}
 
                         {selectedTask.destroyed_at || selectedTask.destroy_reason ? (
                           <div className="devflow-detail__fact-card devflow-detail__fact-card--danger">
@@ -4358,7 +4389,7 @@ function App() {
 
                       <p className="devflow-create-panel__hint">
                         {canRebindSelectedTaskProject
-                          ? "Only backlog tasks without a worktree can rebind project_id."
+                          ? "Backlog tasks and WebDAV-restored snapshot tasks without a worktree can rebind project_id."
                           : "Project binding is locked after task start so the stored project stays aligned with the worktree and runtime context."}
                       </p>
 
@@ -6227,6 +6258,11 @@ const RequirementCardButton = memo(function RequirementCardButton({
         <p className="devflow-requirement-card__description">
           {requirementViewModel.description}
         </p>
+        {requirementViewModel.syncStatusNote ? (
+          <p className="devflow-requirement-card__sync-note">
+            {requirementViewModel.syncStatusNote}
+          </p>
+        ) : null}
       </CardSurface>
     </button>
   );
@@ -6240,6 +6276,10 @@ function buildRequirementViewModel(
   return {
     task: taskItem,
     description: buildRequirementDescription(taskItem, taskCardMetadata),
+    syncStatusNote:
+      taskCardMetadata.business_sync_status_note ??
+      taskItem.business_sync_status_note ??
+      null,
     displayStage: taskCardMetadata.display_stage_key,
     displayStageLabel: taskCardMetadata.display_stage_label,
     cardMetaLabel: formatTaskCardActivityLabel(taskCardMetadata.last_ai_activity_at),
@@ -7056,6 +7096,8 @@ function buildFallbackTaskCardMetadata(
         fallbackRequirementChangeMetadata.requirement_change_kind,
       requirement_summary:
         fallbackRequirementChangeMetadata.requirement_summary,
+      business_sync_restored_at: taskItem.business_sync_restored_at,
+      business_sync_status_note: taskItem.business_sync_status_note,
       branch_health: taskItem.branch_health,
     };
   }
@@ -7070,6 +7112,8 @@ function buildFallbackTaskCardMetadata(
       fallbackRequirementChangeMetadata.requirement_change_kind,
     requirement_summary:
       fallbackRequirementChangeMetadata.requirement_summary,
+    business_sync_restored_at: taskItem.business_sync_restored_at,
+    business_sync_status_note: taskItem.business_sync_status_note,
     branch_health: taskItem.branch_health,
   };
 }
@@ -7258,12 +7302,18 @@ function canCompleteTask(
 }
 
 function canRebindTaskProject(taskItem: Task): boolean {
-  return (
-    taskItem.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
-    taskItem.lifecycle_status !== TaskLifecycleStatus.DELETED &&
-    taskItem.workflow_stage === WorkflowStage.BACKLOG &&
-    !taskItem.worktree_path
-  );
+  if (
+    taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
+    taskItem.lifecycle_status === TaskLifecycleStatus.DELETED
+  ) {
+    return false;
+  }
+
+  if (taskItem.workflow_stage === WorkflowStage.BACKLOG && !taskItem.worktree_path) {
+    return true;
+  }
+
+  return Boolean(taskItem.business_sync_restored_at) && !taskItem.worktree_path;
 }
 
 function canDestroyTask(taskItem: Task): boolean {

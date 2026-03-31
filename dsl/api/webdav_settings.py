@@ -1,6 +1,7 @@
-"""WebDAV 同步设置 API 路由.
+"""WebDAV 存储设置 API 路由.
 
-提供 WebDAV 配置的读取、保存、连接测试，以及手动触发上传/下载同步功能.
+提供 WebDAV 配置的读取、保存、连接测试，以及手动触发数据库备份/恢复
+与业务快照同步功能.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,10 @@ from dsl.schemas.webdav_settings_schema import (
     WebDAVSettingsResponse,
     WebDAVSettingsUpdate,
     WebDAVSyncResult,
+)
+from dsl.services.webdav_business_sync_service import (
+    restore_business_snapshot_from_webdav,
+    sync_business_snapshot_to_webdav,
 )
 from dsl.services.webdav_service import (
     restore_database_from_webdav,
@@ -63,7 +68,7 @@ def _to_response(webdav_settings_obj: WebDAVSettings) -> WebDAVSettingsResponse:
 
 @router.get("", response_model=WebDAVSettingsResponse)
 def get_webdav_settings(db: Session = Depends(get_db)) -> WebDAVSettingsResponse:
-    """获取当前 WebDAV 设置.
+    """获取当前 WebDAV 存储设置.
 
     Args:
         db: 数据库会话
@@ -89,7 +94,7 @@ def upsert_webdav_settings(
     update_payload: WebDAVSettingsUpdate,
     db: Session = Depends(get_db),
 ) -> WebDAVSettingsResponse:
-    """创建或更新 WebDAV 设置（单例，id=1）.
+    """创建或更新 WebDAV 存储设置（单例，id=1）.
 
     Args:
         update_payload: 更新数据
@@ -103,9 +108,14 @@ def upsert_webdav_settings(
     )
 
     if existing_webdav_settings_obj:
+        password_str = (
+            update_payload.password
+            if update_payload.password
+            else existing_webdav_settings_obj.password
+        )
         existing_webdav_settings_obj.server_url = update_payload.server_url
         existing_webdav_settings_obj.username = update_payload.username
-        existing_webdav_settings_obj.password = update_payload.password
+        existing_webdav_settings_obj.password = password_str
         existing_webdav_settings_obj.remote_path = update_payload.remote_path
         existing_webdav_settings_obj.is_enabled = update_payload.is_enabled
         existing_webdav_settings_obj.updated_at = utc_now_naive()
@@ -168,7 +178,7 @@ def test_webdav(db: Session = Depends(get_db)) -> WebDAVSyncResult:
 
 @router.post("/sync/upload", response_model=WebDAVSyncResult)
 def upload_database(db: Session = Depends(get_db)) -> WebDAVSyncResult:
-    """将本地 SQLite 数据库上传到 WebDAV 服务器.
+    """将本地 SQLite 数据库备份上传到 WebDAV 服务器.
 
     Args:
         db: 数据库会话
@@ -191,7 +201,7 @@ def upload_database(db: Session = Depends(get_db)) -> WebDAVSyncResult:
 
 @router.post("/sync/download", response_model=WebDAVSyncResult)
 def download_database(db: Session = Depends(get_db)) -> WebDAVSyncResult:
-    """从 WebDAV 服务器下载数据库并覆盖本地（危险操作，需用户确认）.
+    """从 WebDAV 服务器恢复数据库并覆盖本地（危险操作，需用户确认）.
 
     Args:
         db: 数据库会话
@@ -203,6 +213,54 @@ def download_database(db: Session = Depends(get_db)) -> WebDAVSyncResult:
         HTTPException: 500 若下载失败
     """
     download_success_bool, download_message_str = restore_database_from_webdav()
+    if not download_success_bool:
+        raise HTTPException(status_code=500, detail=download_message_str)
+    return WebDAVSyncResult(success=True, message=download_message_str)
+
+
+@router.post("/sync/business/upload", response_model=WebDAVSyncResult)
+def upload_business_snapshot(db: Session = Depends(get_db)) -> WebDAVSyncResult:
+    """将业务状态快照上传到 WebDAV 服务器.
+
+    Args:
+        db: 数据库会话
+
+    Returns:
+        WebDAVSyncResult: 上传结果
+
+    Raises:
+        HTTPException: 500 若上传失败
+    """
+
+    upload_success_bool, upload_message_str, remote_url_str = (
+        sync_business_snapshot_to_webdav()
+    )
+    if not upload_success_bool:
+        raise HTTPException(status_code=500, detail=upload_message_str)
+    return WebDAVSyncResult(
+        success=True,
+        message=upload_message_str,
+        remote_url=remote_url_str,
+    )
+
+
+@router.post("/sync/business/download", response_model=WebDAVSyncResult)
+def download_business_snapshot(db: Session = Depends(get_db)) -> WebDAVSyncResult:
+    """从 WebDAV 服务器导入业务状态快照.
+
+    Args:
+        db: 数据库会话
+
+    Returns:
+        WebDAVSyncResult: 导入结果
+
+    Raises:
+        HTTPException: 500 若导入失败
+    """
+
+    download_success_bool, download_message_str = (
+        restore_business_snapshot_from_webdav()
+    )
     if not download_success_bool:
         raise HTTPException(status_code=500, detail=download_message_str)
     return WebDAVSyncResult(success=True, message=download_message_str)

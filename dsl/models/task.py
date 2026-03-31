@@ -44,6 +44,9 @@ class Task(Base):
         last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         auto_confirm_prd_and_execute (bool): PRD 生成后是否自动确认并直接进入执行
+        business_sync_original_workflow_stage (str | None): 业务同步恢复前的原始阶段快照
+        business_sync_original_lifecycle_status (str | None): 业务同步恢复前的原始生命周期快照
+        business_sync_restored_at (datetime | None): 最近一次从业务同步快照恢复到当前机器的时间
         destroy_reason (str | None): 已启动任务销毁时记录的原因
         destroyed_at (datetime | None): 任务进入 deleted history 的时间
         created_at (datetime): 创建时间
@@ -97,6 +100,18 @@ class Task(Base):
         default=False,
         server_default="0",
         nullable=False,
+    )
+    business_sync_original_workflow_stage: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    business_sync_original_lifecycle_status: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+    business_sync_restored_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
     destroy_reason: Mapped[str | None] = mapped_column(
         String(200),

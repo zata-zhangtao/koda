@@ -58,6 +58,17 @@ class TaskService:
         return sorted_matching_task_branch_name_list[0]
 
     @staticmethod
+    def _clear_business_sync_restore_markers(task_obj: Task) -> None:
+        """Clear snapshot-only restore markers once local execution resumes.
+
+        Args:
+            task_obj: 待清理标记的任务对象
+        """
+        task_obj.business_sync_original_workflow_stage = None
+        task_obj.business_sync_original_lifecycle_status = None
+        task_obj.business_sync_restored_at = None
+
+    @staticmethod
     def _ensure_task_worktree_if_needed(
         db_session: Session,
         task_obj: Task,
@@ -429,12 +440,19 @@ class TaskService:
         Returns:
             bool: 仅当任务仍在 backlog 且尚未创建 worktree 时返回 True
         """
-        return (
-            task_obj.lifecycle_status
-            not in {TaskLifecycleStatus.CLOSED, TaskLifecycleStatus.DELETED}
-            and task_obj.workflow_stage == WorkflowStage.BACKLOG
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            return False
+
+        if (
+            task_obj.workflow_stage == WorkflowStage.BACKLOG
             and not task_obj.worktree_path
-        )
+        ):
+            return True
+
+        return bool(task_obj.business_sync_restored_at) and not task_obj.worktree_path
 
     @staticmethod
     def has_task_started(task_obj: Task) -> bool:
@@ -713,6 +731,7 @@ class TaskService:
             WorkflowStage.PRD_GENERATING,
         )
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+        TaskService._clear_business_sync_restore_markers(task_obj)
 
         TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
 
@@ -764,6 +783,7 @@ class TaskService:
 
         task_obj.workflow_stage = WorkflowStage.PRD_GENERATING
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+        TaskService._clear_business_sync_restore_markers(task_obj)
 
         TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
 
@@ -819,6 +839,8 @@ class TaskService:
             WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
         )
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
+        TaskService._clear_business_sync_restore_markers(task_obj)
+        TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
 
         db_session.commit()
         db_session.refresh(task_obj)

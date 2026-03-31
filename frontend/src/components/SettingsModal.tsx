@@ -1,6 +1,6 @@
 /** 统一设置模态框
  *
- * 通过 Tab 页聚合所有设置项（邮件通知、WebDAV 同步等），
+ * 通过 Tab 页聚合所有设置项（邮件通知、WebDAV 存储等），
  * 方便后续扩展更多设置类别.
  */
 
@@ -42,7 +42,7 @@ const DEFAULT_WEBDAV_FORM: WebDAVSettingsUpdate = {
   server_url: "",
   username: "",
   password: "",
-  remote_path: "/koda-backup/",
+  remote_path: "/koda-sync/",
   is_enabled: true,
 };
 
@@ -68,7 +68,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
           {(
             [
               ["email", "📧 Email"],
-              ["webdav", "☁️ WebDAV Sync"],
+              ["webdav", "☁️ WebDAV Storage"],
             ] as const
           ).map(([tabId, tabLabel]) => (
             <button
@@ -252,6 +252,8 @@ function WebDAVTab() {
   const [isTesting, setIsTesting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isUploadingBusinessSnapshot, setIsUploadingBusinessSnapshot] = useState(false);
+  const [isDownloadingBusinessSnapshot, setIsDownloadingBusinessSnapshot] = useState(false);
   const [status, setStatus] = useState<StatusMessage | null>(null);
 
   useEffect(() => {
@@ -315,7 +317,7 @@ function WebDAVTab() {
 
   const handleDownload = async () => {
     const confirmed = confirm(
-      "⚠️ This will overwrite your local database with the remote backup. Are you sure?"
+      "⚠️ This restores the remote database backup over your local data. Projects and requirement cards come back as database snapshots only; Git repositories, worktrees, and real code progress are not restored. Continue?"
     );
     if (!confirmed) return;
     setIsDownloading(true);
@@ -330,14 +332,59 @@ function WebDAVTab() {
     }
   };
 
-  const isBusy = isSaving || isTesting || isUploading || isDownloading;
+  const handleBusinessSnapshotUpload = async () => {
+    setIsUploadingBusinessSnapshot(true);
+    setStatus(null);
+    try {
+      const result = await webdavSettingsApi.uploadBusinessSnapshot();
+      setStatus({ text: result.message, isError: false });
+    } catch (err) {
+      setStatus({
+        text: err instanceof Error ? err.message : "Business snapshot upload failed.",
+        isError: true,
+      });
+    } finally {
+      setIsUploadingBusinessSnapshot(false);
+    }
+  };
+
+  const handleBusinessSnapshotDownload = async () => {
+    const confirmed = confirm(
+      "This imports the remote business snapshot into your current workspace. Projects, cards, logs, PRD/planning snapshots, and media will be restored, but local repo/worktree execution state will not be recreated. Existing synced records with the same IDs may be updated. Continue?"
+    );
+    if (!confirmed) return;
+    setIsDownloadingBusinessSnapshot(true);
+    setStatus(null);
+    try {
+      const result = await webdavSettingsApi.downloadBusinessSnapshot();
+      setStatus({
+        text: result.message + " — Refresh the dashboard to load the imported cards.",
+        isError: false,
+      });
+    } catch (err) {
+      setStatus({
+        text: err instanceof Error ? err.message : "Business snapshot import failed.",
+        isError: true,
+      });
+    } finally {
+      setIsDownloadingBusinessSnapshot(false);
+    }
+  };
+
+  const isBusy =
+    isSaving ||
+    isTesting ||
+    isUploading ||
+    isDownloading ||
+    isUploadingBusinessSnapshot ||
+    isDownloadingBusinessSnapshot;
 
   if (isLoading) return <div style={s.loadingText}>Loading...</div>;
 
   return (
     <div style={s.form}>
       <ToggleRow
-        label="Enable WebDAV sync"
+        label="Enable WebDAV backup and business sync"
         checked={formState.is_enabled}
         onChange={(v) => setFormState((p) => ({ ...p, is_enabled: v }))}
       />
@@ -364,10 +411,15 @@ function WebDAVTab() {
       </div>
 
       <Field label="Remote path (directory on server)">
-        <input style={s.input} type="text" placeholder="/koda-backup/"
+        <input style={s.input} type="text" placeholder="/koda-sync/"
           value={formState.remote_path}
           onChange={(e) => setFormState((p) => ({ ...p, remote_path: e.target.value }))} />
       </Field>
+
+      <div style={s.hint}>
+        Koda stores both the raw SQLite backup and the business snapshot archive in
+        this WebDAV directory.
+      </div>
 
       <StatusBanner status={status} />
 
@@ -383,21 +435,53 @@ function WebDAVTab() {
         </button>
       </div>
 
-      {/* Sync actions */}
+      {/* Backup actions */}
       <Divider />
-      <div style={s.syncLabel}>Manual Sync</div>
+      <div style={s.syncLabel}>Raw Database Backup</div>
       <div style={s.actions}>
         <button style={{ ...s.btn, ...s.secondaryBtn }}
           onClick={handleUpload} disabled={isBusy}>
-          {isUploading ? "Uploading..." : "⬆ Upload DB to WebDAV"}
+          {isUploading ? "Uploading..." : "⬆ Upload DB Backup"}
         </button>
         <button style={{ ...s.btn, ...s.dangerBtn }}
           onClick={handleDownload} disabled={isBusy}>
-          {isDownloading ? "Downloading..." : "⬇ Restore DB from WebDAV"}
+          {isDownloading ? "Downloading..." : "⬇ Restore DB Backup"}
         </button>
       </div>
       <div style={s.hint}>
-        Uploads/restores the local SQLite database file. Restore will overwrite local data.
+        Backs up or restores the local SQLite database file. Projects and
+        requirement cards are included as database records, but Git repositories,
+        worktrees, and actual code completion progress are not. Restore will
+        overwrite local data.
+      </div>
+
+      <Divider />
+      <div style={s.syncLabel}>Business Snapshot Sync</div>
+      <div style={s.actions}>
+        <button
+          style={{ ...s.btn, ...s.secondaryBtn }}
+          onClick={handleBusinessSnapshotUpload}
+          disabled={isBusy}
+        >
+          {isUploadingBusinessSnapshot
+            ? "Uploading..."
+            : "⬆ Upload Business Snapshot"}
+        </button>
+        <button
+          style={{ ...s.btn, ...s.primaryBtn }}
+          onClick={handleBusinessSnapshotDownload}
+          disabled={isBusy}
+        >
+          {isDownloadingBusinessSnapshot
+            ? "Importing..."
+            : "⬇ Import Business Snapshot"}
+        </button>
+      </div>
+      <div style={s.hint}>
+        Syncs business facts only: projects, cards, logs, PRD/planning snapshots,
+        sidecar Q&amp;A, references, and media files. Machine-local repo paths,
+        worktrees, live branch state, and directly runnable code execution state
+        are excluded and must be rebuilt on this machine.
       </div>
     </div>
   );

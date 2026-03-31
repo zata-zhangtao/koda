@@ -630,6 +630,17 @@ img {
   -webkit-box-orient: vertical;
 }
 
+.devflow-requirement-card__sync-note {
+  display: -webkit-box;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: #0f766e;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
 .devflow-detail {
   position: relative;
   display: flex;
@@ -783,6 +794,12 @@ img {
   border-color: rgba(239, 68, 68, 0.16);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(254, 242, 242, 0.92) 100%);
+}
+
+.devflow-detail__fact-card--sync {
+  border-color: rgba(15, 118, 110, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 253, 250, 0.94) 100%);
 }
 
 .devflow-detail__fact-label {
