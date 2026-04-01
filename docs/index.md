@@ -78,6 +78,7 @@ just dsl-dev
 
 - 已实现的自动化主链路是：创建任务、生成 PRD、等待用户确认 PRD、触发编码、自动进入 AI 自检闭环并写回执行日志。若 self-review 首轮发现 blocker，系统会先在同一个 worktree 中自动回改并复审；只有闭环最终失败才会进入 `changes_requested`。
 - self-review 闭环通过后，系统会自动进入 `test_in_progress`，执行 `uv run pre-commit run --all-files`；若 lint 在自动重跑后仍失败，会继续进入有上限的 AI lint-fix 闭环，只有最终失败才会进入 `changes_requested`。
+- 任务级 schedule 现在除了 `start_task` / `resume_task` 之外，也支持独立 `review_task`：它会在任务 worktree 或绑定项目仓库上执行一次 review-only 评审，把 transcript 与结论写回 `DevLog`，但不会自动回改、不会推进到 lint，也不会修改 `workflow_stage`。
 - 默认不会在实现阶段自动执行 `git commit`；只有用户点击 `Complete` 后，系统才会在任务 worktree 中执行 `git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`，若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`，必要时自动调用 Codex 修复 rebase / merge 冲突，然后复用当前持有 `main` 分支的工作区完成 merge，最后清理 task worktree / branch。
 - `WorkflowStage` 中的 `pr_preparing` 现在已接入真实自动化：`Complete` 会先进入该阶段，成功后自动推进到 `done`；`test_in_progress` 现在承载 post-review lint / lint-fix，`acceptance_in_progress` 仍主要是预留阶段。
 - 对于“任务分支已被人工 merge 并删除”的边缘场景，后端会通过 `branch_health` 派生状态把已进入 worktree-backed Git 流程的任务标记为“缺失分支待确认”；前端要求用户先查看完成检查单，再走独立的 `/manual-complete` 收口接口，避免 backlog/未启动任务被误关单，也避免错误重跑普通 Git 收尾。

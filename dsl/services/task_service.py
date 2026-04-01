@@ -913,6 +913,44 @@ class TaskService:
         return task_obj
 
     @staticmethod
+    def prepare_task_review(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """Validate that a task can run standalone review-only automation.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 当前任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当任务生命周期不允许评审时
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+            TaskLifecycleStatus.ABANDONED,
+        }:
+            raise ValueError(
+                f"Task {task_id[:8]}... cannot run review from lifecycle "
+                f"'{task_obj.lifecycle_status.value}'."
+            )
+
+        logger.info(
+            "Task %s... standalone review prepared from stage %s",
+            task_id[:8],
+            task_obj.workflow_stage.value,
+        )
+        return task_obj
+
+    @staticmethod
     def update_task(
         db_session: Session,
         task_id: str,

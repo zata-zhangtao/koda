@@ -24,6 +24,7 @@ from dsl.api.tasks import (
     open_task_in_trae,
     manual_complete_task,
     regenerate_task_prd,
+    review_task,
     resume_task,
     update_task,
     update_task_stage,
@@ -1440,6 +1441,87 @@ def test_start_task_primes_task_log_file_before_background_runner_starts(
     assert started_task.workflow_stage == WorkflowStage.PRD_GENERATING
     assert primed_task_log_path.exists() is True
     assert "已收到 PRD 生成请求" in primed_task_log_path.read_text(encoding="utf-8")
+
+
+def test_review_task_schedules_background_review_only_for_linked_project(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone review should use the linked project repo when no worktree exists."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "review-repo")
+    project_obj = Project(
+        display_name="Review repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Standalone review",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    background_tasks = BackgroundTasks()
+    reviewed_task = review_task(task_obj.id, background_tasks, db_session)
+
+    assert reviewed_task.workflow_stage == WorkflowStage.BACKLOG
+    assert reviewed_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is tasks_api.run_codex_review_only
+    assert background_tasks.tasks[0].kwargs["task_id_str"] == task_obj.id
+    assert background_tasks.tasks[0].kwargs["run_account_id_str"] == run_account_obj.id
+    assert background_tasks.tasks[0].kwargs["task_title_str"] == task_obj.task_title
+    assert background_tasks.tasks[0].kwargs["work_dir_path"] == repo_root_path
+    assert background_tasks.tasks[0].kwargs["worktree_path_str"] is None
+
+
+def test_review_task_rejects_missing_worktree_and_project(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone review should refuse to fall back to the Koda repo itself."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Invalid standalone review target",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    with pytest.raises(HTTPException) as raised_error:
+        review_task(task_obj.id, BackgroundTasks(), db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "Standalone review requires" in str(raised_error.value.detail)
 
 
 def test_get_task_exposes_present_branch_health(

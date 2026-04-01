@@ -47,6 +47,7 @@ export enum WorkflowStage {
 export enum TaskScheduleActionType {
   START_TASK = "start_task",
   RESUME_TASK = "resume_task",
+  REVIEW_TASK = "review_task",
 }
 
 /** 任务调度触发类型 */

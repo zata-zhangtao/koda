@@ -168,6 +168,23 @@ class SelfReviewExecutionResult:
 
 
 @dataclass(slots=True)
+class ReviewOnlyExecutionResult:
+    """Describe the result of a standalone review-only run.
+
+    Attributes:
+        completed: Whether the standalone review phase completed successfully
+        passed: Whether the reported review status was PASS
+        review_status_str: Parsed review status marker value
+        review_summary_str: Parsed review summary marker value
+    """
+
+    completed: bool
+    passed: bool | None
+    review_status_str: str | None = None
+    review_summary_str: str | None = None
+
+
+@dataclass(slots=True)
 class PostReviewLintExecutionResult:
     """Describe the result of the post-review lint loop.
 
@@ -3201,6 +3218,176 @@ async def run_codex_review(
         passed=False,
         context_log_text_list=review_context_log_list,
     )
+
+
+async def run_codex_review_only(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str | None = None,
+) -> ReviewOnlyExecutionResult:
+    """Run one standalone review-only phase without changing workflow stage.
+
+    Args:
+        task_id_str: 任务 UUID 字符串
+        run_account_id_str: 运行账户 UUID 字符串
+        task_title_str: 任务标题
+        dev_log_text_list: 历史日志文本列表
+        work_dir_path: Runner 的工作目录
+        worktree_path_str: 预期的 git worktree 路径（可选）
+
+    Returns:
+        ReviewOnlyExecutionResult: 独立评审结果
+    """
+    register_task_background_activity(task_id_str)
+    active_runner_kind_str = get_active_runner_kind()
+    try:
+        review_start_log_text = (
+            "🔍 已启动独立代码评审。"
+            "本次运行只记录 review 结论，不会自动回改，也不会推进到 lint / Complete。"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            review_start_log_text,
+            "OPTIMIZATION",
+        )
+        review_context_log_list = list(dev_log_text_list)
+        review_context_log_list.append(review_start_log_text)
+
+        review_prompt_text_str = build_codex_review_prompt(
+            task_title=task_title_str,
+            dev_log_text_list=review_context_log_list,
+            worktree_path_str=worktree_path_str,
+            review_round_index_int=1,
+            total_review_round_count_int=1,
+        )
+        review_phase_result = await _run_codex_phase(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            codex_prompt_text_str=review_prompt_text_str,
+            work_dir_path=work_dir_path,
+            phase_log_label_str=f"{active_runner_kind_str}-review-only",
+            phase_display_name_str="独立代码评审",
+            cancelled_log_text_str="🛑 用户手动中断了独立代码评审。",
+            overwrite_existing_log_bool=False,
+            clear_cancel_marker_at_start_bool=False,
+        )
+        if not review_phase_result.success:
+            if review_phase_result.was_cancelled:
+                return ReviewOnlyExecutionResult(
+                    completed=False,
+                    passed=None,
+                )
+
+            failure_log_text = (
+                "❌ 独立代码评审未完成：评审执行失败。"
+                "本次运行不会修改任务阶段，请查看上方 transcript 和本地任务日志排查。"
+            )
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                failure_log_text,
+                "BUG",
+            )
+            return ReviewOnlyExecutionResult(
+                completed=False,
+                passed=None,
+            )
+
+        review_status_str = _extract_self_review_status(
+            review_phase_result.output_lines
+        )
+        review_summary_str = _extract_self_review_summary(
+            review_phase_result.output_lines
+        )
+        if review_status_str == _SELF_REVIEW_STATUS_PASS:
+            review_pass_log_text = (
+                "✅ 独立代码评审完成：未发现阻塞性问题。"
+                "本次运行不会推进到 lint 或修改任务阶段。"
+            )
+            if review_summary_str:
+                review_pass_log_text += f"\n摘要：{review_summary_str}"
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                review_pass_log_text,
+                "FIXED",
+            )
+            return ReviewOnlyExecutionResult(
+                completed=True,
+                passed=True,
+                review_status_str=review_status_str,
+                review_summary_str=review_summary_str,
+            )
+
+        if review_status_str == _SELF_REVIEW_STATUS_CHANGES_REQUESTED:
+            review_findings_log_text = (
+                "📝 独立代码评审完成：发现需要处理的阻塞性问题。"
+                "本次运行只记录 review 结论，不会自动回改，也不会修改任务阶段。"
+            )
+            if review_summary_str:
+                review_findings_log_text += f"\n摘要：{review_summary_str}"
+            await asyncio.to_thread(
+                _write_log_to_db,
+                task_id_str,
+                run_account_id_str,
+                review_findings_log_text,
+                "BUG",
+            )
+            return ReviewOnlyExecutionResult(
+                completed=True,
+                passed=False,
+                review_status_str=review_status_str,
+                review_summary_str=review_summary_str,
+            )
+
+        missing_status_log_text = (
+            "⚠️ 独立代码评审完成，但未产出有效的结构化状态标记。"
+            "本次运行不会修改任务阶段，请人工阅读 transcript。"
+        )
+        if review_summary_str:
+            missing_status_log_text += f"\n摘要：{review_summary_str}"
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            missing_status_log_text,
+            "BUG",
+        )
+        return ReviewOnlyExecutionResult(
+            completed=False,
+            passed=None,
+            review_status_str=review_status_str,
+            review_summary_str=review_summary_str,
+        )
+    except Exception as unexpected_review_error:
+        unexpected_review_log_text = (
+            f"❌ runner_kind={active_runner_kind_str} 独立代码评审在启动阶段发生异常："
+            f"{unexpected_review_error}"
+        )
+        await asyncio.to_thread(
+            _write_log_to_db,
+            task_id_str,
+            run_account_id_str,
+            unexpected_review_log_text,
+            "BUG",
+        )
+        logger.exception(
+            "Unexpected standalone review error for task %s...",
+            task_id_str[:8],
+        )
+        return ReviewOnlyExecutionResult(
+            completed=False,
+            passed=None,
+        )
+    finally:
+        clear_task_background_activity(task_id_str)
 
 
 async def run_post_review_lint(

@@ -29,7 +29,7 @@
 - `dsl/services/`：负责业务规则与状态推进
 - `dsl/models/`：定义数据库实体
 - `dsl/schemas/`：定义请求与响应模型
-- 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` 路由逻辑，不额外定义并行执行语义
+- 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` / `review_task` 路由逻辑；其中 `review_task` 只写日志，不改变任务阶段
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 - sidecar Q&A 约定：问答消息必须落到独立表，默认不写 `DevLog`，并且不得隐式改动 `workflow_stage`
 
@@ -104,12 +104,13 @@
 
 1. 一次性规则（`trigger_type=once`）在触发后自动停用
 2. 周期规则（`trigger_type=cron`）按时区与 Cron 规则推进 `next_run_at`
-3. 调度动作首期支持 `start_task`、`resume_task`
+3. 调度动作支持 `start_task`、`resume_task`、`review_task`
 4. 自动轮询分发会先领取调度窗口，再执行动作，避免同一窗口重复派发
 5. 每次分发都会写入 `TaskScheduleRun` 审计，状态包含 `succeeded` / `failed` / `skipped`
 6. 当任务已有后台自动化运行时，调度分发会标记为 `skipped`，不并发启动
 7. 任务详情页已提供调度面板，可创建规则、启停、立即执行并查看最近执行历史
 8. 前端创建 `once` 规则时会把 `datetime-local` 输入转换为 UTC ISO 并携带浏览器时区，避免与后端默认 `APP_TIMEZONE` 不一致导致触发时间偏移
+9. `review_task` 会在任务 worktree 或关联项目仓库上执行一次独立 review-only 评审；结论写回 `DevLog`，但不会自动回改，也不会推进到 lint / Complete
 
 ### 已建模但尚未自动化闭环的阶段
 

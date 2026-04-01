@@ -238,3 +238,44 @@ def test_dispatch_claim_prevents_duplicate_action_for_same_window(
     db_session.refresh(created_task_schedule_obj)
     assert created_task_schedule_obj.next_run_at is not None
     assert created_task_schedule_obj.next_run_at > planned_run_at_utc_naive_datetime
+
+
+def test_dispatch_task_action_routes_review_schedule_to_review_api(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review schedules should call the dedicated review-only task API helper."""
+    import dsl.api.tasks as task_api_module
+
+    task_obj = _create_seed_task(db_session)
+    created_task_schedule_obj = TaskScheduleService.create_task_schedule(
+        db_session,
+        task_obj,
+        TaskScheduleCreateSchema(
+            schedule_name="Nightly review",
+            action_type="review_task",
+            trigger_type="cron",
+            cron_expr="0 9 * * 1-5",
+            timezone_name="UTC",
+            is_enabled=True,
+        ),
+    )
+
+    recorded_call_dict: dict[str, object] = {}
+
+    def _fake_review_task(*, task_id: str, background_tasks, db_session) -> None:
+        recorded_call_dict["task_id"] = task_id
+        recorded_call_dict["background_task_count"] = len(background_tasks.tasks)
+        recorded_call_dict["db_session"] = db_session
+        background_tasks.add_task(lambda: None)
+
+    monkeypatch.setattr(task_api_module, "review_task", _fake_review_task)
+
+    TaskSchedulerDispatcher._dispatch_task_action_via_existing_api(
+        created_task_schedule_obj,
+        db_session,
+    )
+
+    assert recorded_call_dict["task_id"] == task_obj.id
+    assert recorded_call_dict["background_task_count"] == 0
+    assert recorded_call_dict["db_session"] is db_session

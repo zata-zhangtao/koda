@@ -1,6 +1,6 @@
 """任务调度分发器.
 
-负责把到期调度规则分发到既有任务动作链路（start_task/resume_task）。
+负责把到期调度规则分发到既有任务动作链路（start_task/resume_task/review_task）。
 """
 
 from __future__ import annotations
@@ -72,8 +72,14 @@ class TaskSchedulerDispatcher:
                 background_tasks=background_tasks,
                 db_session=db_session,
             )
-        else:
+        elif task_schedule_obj.action_type == TaskScheduleActionType.RESUME_TASK:
             task_api_module.resume_task(
+                task_id=task_schedule_obj.task_id,
+                background_tasks=background_tasks,
+                db_session=db_session,
+            )
+        else:
+            task_api_module.review_task(
                 task_id=task_schedule_obj.task_id,
                 background_tasks=background_tasks,
                 db_session=db_session,

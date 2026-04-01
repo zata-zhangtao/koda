@@ -9,10 +9,11 @@
 - `codex`（默认）
 - `claude`
 
-真实调用入口有两个：
+真实调用入口有四个：
 
 - `dsl/api/tasks.py` 的 `start_task` 会在后台触发 `run_codex_prd`
 - `dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
+- `dsl/api/tasks.py` 的 `review_task` 会在后台触发 `run_task_review`
 - `dsl/api/tasks.py` 的 `resume_task` 会在后台从持久化工作流阶段恢复中断的自动化
 
 对应的核心实现位于：
@@ -65,6 +66,16 @@
 7. 日志继续写入 `DevLog`
 8. 若收尾成功，任务自动推进到 `done`
 9. 若在合并到 `main` 前失败，任务回退到 `changes_requested`
+
+### 独立代码评审链路
+
+1. 用户直接调用 `POST /api/tasks/{task_id}/review`，或通过 schedule 的 `review_task` 动作触发 `run-now` / Cron
+2. 后端校验该任务当前没有活跃自动化，且本机存在可用的 task worktree 或绑定项目仓库
+3. `run_task_review` / `run_codex_review_only` 复用 `build_codex_review_prompt`
+4. 输出继续实时写入 `DevLog`
+5. 若评审输出 `SELF_REVIEW_STATUS: PASS`，系统会写一条“独立代码评审完成”摘要日志
+6. 若评审输出 `SELF_REVIEW_STATUS: CHANGES_REQUESTED`，系统只记录 blocker 结论，不自动回改，不推进到 lint，也不修改 `workflow_stage`
+7. 若评审阶段执行失败或未产出有效结构化状态，也只记录失败日志，不会把任务强制推进到 `changes_requested`
 
 ### 中断恢复链路
 
@@ -130,6 +141,11 @@
 - 这是 review-only 阶段，不修改文件
 - 审查需求覆盖、明显回归、文档同步和错误路径
 - 输出结构化标记 `SELF_REVIEW_SUMMARY` 与 `SELF_REVIEW_STATUS`
+
+这同一份 Prompt 既用于实现后的 `self_review_in_progress` 闭环，也用于独立 `review_task`。两者差异不在 Prompt，而在编排层：
+
+- `self_review_in_progress` 会在 blocker 时进入自动回改闭环，并在通过后继续 post-review lint
+- 独立 `review_task` 只执行单轮 review-only，不自动回改，不进入 lint，也不改任务阶段
 
 ### 自动回改 Prompt
 

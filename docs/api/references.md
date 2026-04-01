@@ -69,6 +69,7 @@
         - start_task
         - regenerate_task_prd
         - execute_task
+        - review_task
         - resume_task
         - cancel_task
         - destroy_task
@@ -342,6 +343,7 @@
         - is_task_automation_running
         - run_task_prd
         - run_task_implementation
+        - run_task_review
         - run_task_self_review_resume
         - run_task_post_review_lint_resume
         - run_task_completion

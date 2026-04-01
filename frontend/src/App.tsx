@@ -2048,7 +2048,10 @@ function App() {
     try {
       await taskScheduleApi.create(selectedTask.id, {
         schedule_name: normalizedScheduleNameText,
-        action_type: taskScheduleDraftActionType as "start_task" | "resume_task",
+        action_type: taskScheduleDraftActionType as
+          | "start_task"
+          | "resume_task"
+          | "review_task",
         trigger_type: taskScheduleDraftTriggerType as "once" | "cron",
         run_at: isOnceTriggerType ? normalizedRunAtUtcIsoText : null,
         cron_expr:
@@ -4507,6 +4510,7 @@ function App() {
                         >
                           <option value={TaskScheduleActionType.START_TASK}>start_task</option>
                           <option value={TaskScheduleActionType.RESUME_TASK}>resume_task</option>
+                          <option value={TaskScheduleActionType.REVIEW_TASK}>review_task</option>
                         </select>
                         <select
                           className="devflow-input devflow-input--select"
@@ -7586,6 +7590,7 @@ function formatTaskScheduleActionLabel(actionType: TaskScheduleActionType): stri
   const actionTypeLabelMap: Record<TaskScheduleActionType, string> = {
     [TaskScheduleActionType.START_TASK]: "start_task",
     [TaskScheduleActionType.RESUME_TASK]: "resume_task",
+    [TaskScheduleActionType.REVIEW_TASK]: "review_task",
   };
   return actionTypeLabelMap[actionType];
 }

@@ -333,7 +333,7 @@ erDiagram
 | `task_id` | 所属任务 |
 | `run_account_id` | 规则创建时的运行账户快照 |
 | `schedule_name` | 规则名称 |
-| `action_type` | 动作类型：`start_task` / `resume_task` |
+| `action_type` | 动作类型：`start_task` / `resume_task` / `review_task` |
 | `trigger_type` | 触发类型：`once` / `cron` |
 | `run_at` | 一次性触发时间（UTC naive） |
 | `cron_expr` | Cron 表达式（5 段） |

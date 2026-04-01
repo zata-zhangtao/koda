@@ -148,7 +148,7 @@ class TaskScheduleResponseSchema(DSLResponseSchema):
         task_id: 任务 ID
         run_account_id: 运行账户 ID
         schedule_name: 规则名称
-        action_type: 调度动作类型
+        action_type: 调度动作类型（`start_task` / `resume_task` / `review_task`）
         trigger_type: 触发类型
         run_at: 一次性触发时间
         cron_expr: Cron 表达式

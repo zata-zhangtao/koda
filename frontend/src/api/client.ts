@@ -203,6 +203,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 触发一次独立的 review-only 代码评审 */
+  review: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/review`, {
+      method: "POST",
+    }),
+
   /** 触发任务进入完成收尾阶段（AI-summary-first commit + rebase + Codex conflict fix + merge + cleanup） */
   complete: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/complete`, {
@@ -280,7 +286,7 @@ export const taskScheduleApi = {
     taskId: string,
     data: {
       schedule_name: string;
-      action_type: "start_task" | "resume_task";
+      action_type: "start_task" | "resume_task" | "review_task";
       trigger_type: "once" | "cron";
       run_at?: string | null;
       cron_expr?: string | null;
@@ -299,7 +305,7 @@ export const taskScheduleApi = {
     scheduleId: string,
     data: {
       schedule_name?: string;
-      action_type?: "start_task" | "resume_task";
+      action_type?: "start_task" | "resume_task" | "review_task";
       trigger_type?: "once" | "cron";
       run_at?: string | null;
       cron_expr?: string | null;

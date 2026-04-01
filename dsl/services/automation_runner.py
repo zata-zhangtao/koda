@@ -16,6 +16,7 @@ from dsl.services.codex_runner import (
     is_codex_task_running,
     register_task_background_activity,
     run_codex_completion,
+    run_codex_review_only,
     run_codex_prd,
     run_codex_review_resume,
     run_codex_task,
@@ -145,6 +146,34 @@ async def run_task_self_review_resume(
     )
 
 
+async def run_task_review(
+    task_id_str: str,
+    run_account_id_str: str,
+    task_title_str: str,
+    dev_log_text_list: list[str],
+    work_dir_path: Path,
+    worktree_path_str: str | None = None,
+) -> None:
+    """Run standalone review-only stage with the active runner.
+
+    Args:
+        task_id_str: Task UUID string.
+        run_account_id_str: Run account UUID string.
+        task_title_str: Task title.
+        dev_log_text_list: Task context log texts.
+        work_dir_path: Working directory.
+        worktree_path_str: Optional worktree path.
+    """
+    await run_codex_review_only(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_title_str=task_title_str,
+        dev_log_text_list=dev_log_text_list,
+        work_dir_path=work_dir_path,
+        worktree_path_str=worktree_path_str,
+    )
+
+
 async def run_task_post_review_lint_resume(
     task_id_str: str,
     run_account_id_str: str,
@@ -218,5 +247,6 @@ __all__ = [
     "run_task_implementation",
     "run_task_post_review_lint_resume",
     "run_task_prd",
+    "run_task_review",
     "run_task_self_review_resume",
 ]

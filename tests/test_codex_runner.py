@@ -1479,6 +1479,66 @@ def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pa
     assert "=== Koda post-review-lint" in task_log_text
 
 
+def test_run_codex_review_only_reports_blockers_without_advancing_stage(
+    tmp_path: Path,
+) -> None:
+    """Standalone review-only should report blockers without triggering lint or stage changes."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+
+    async def fake_run_codex_phase(
+        **_kwargs: object,
+    ) -> codex_runner.CodexPhaseExecutionResult:
+        return codex_runner.CodexPhaseExecutionResult(
+            success=True,
+            output_lines=[
+                "Reviewed current repository changes.",
+                "SELF_REVIEW_SUMMARY: fix the fallback path before release",
+                "SELF_REVIEW_STATUS: CHANGES_REQUESTED",
+            ],
+        )
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    original_run_codex_phase = codex_runner._run_codex_phase
+    original_write_log_to_db = codex_runner._write_log_to_db
+
+    try:
+        codex_runner._run_codex_phase = fake_run_codex_phase
+        codex_runner._write_log_to_db = fake_write_log_to_db
+
+        review_result = asyncio.run(
+            codex_runner.run_codex_review_only(
+                task_id_str="12345678-review-only",
+                run_account_id_str="run-account-1",
+                task_title_str="Standalone review-only",
+                dev_log_text_list=["Recent task context."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-review-only"),
+            )
+        )
+    finally:
+        codex_runner._run_codex_phase = original_run_codex_phase
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._running_background_task_ids.clear()
+        codex_runner._running_codex_processes.clear()
+        codex_runner._user_cancelled_tasks.clear()
+
+    assert review_result.completed is True
+    assert review_result.passed is False
+    assert review_result.review_status_str == "CHANGES_REQUESTED"
+    assert review_result.review_summary_str == "fix the fallback path before release"
+    assert any(
+        "不会自动回改，也不会修改任务阶段" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+
+
 def test_run_codex_review_resume_continues_into_post_review_lint_on_pass(
     tmp_path: Path,
 ) -> None:

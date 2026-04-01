@@ -208,6 +208,55 @@ def test_run_task_prd_forwards_auto_confirm_flag(monkeypatch) -> None:
     assert recorded_call_dict["auto_confirm_prd_and_execute_bool"] is True
 
 
+def test_run_task_review_forwards_review_contract(monkeypatch) -> None:
+    """The runner-agnostic review wrapper should preserve the review contract."""
+    recorded_call_dict: dict[str, object] = {}
+
+    async def fake_run_codex_review_only(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_title_str: str,
+        dev_log_text_list: list[str],
+        work_dir_path: Path,
+        worktree_path_str: str | None = None,
+    ) -> None:
+        recorded_call_dict.update(
+            {
+                "task_id_str": task_id_str,
+                "run_account_id_str": run_account_id_str,
+                "task_title_str": task_title_str,
+                "dev_log_text_list": dev_log_text_list,
+                "work_dir_path": work_dir_path,
+                "worktree_path_str": worktree_path_str,
+            }
+        )
+
+    monkeypatch.setattr(
+        automation_runner,
+        "run_codex_review_only",
+        fake_run_codex_review_only,
+    )
+
+    asyncio.run(
+        automation_runner.run_task_review(
+            task_id_str="12345678-review-wrapper",
+            run_account_id_str="run-account-1",
+            task_title_str="Forward standalone review",
+            dev_log_text_list=["ctx line"],
+            work_dir_path=Path("/tmp/review-wrapper"),
+            worktree_path_str="/tmp/repo-wt-review-wrapper",
+        )
+    )
+
+    assert recorded_call_dict["task_id_str"] == "12345678-review-wrapper"
+    assert recorded_call_dict["run_account_id_str"] == "run-account-1"
+    assert recorded_call_dict["task_title_str"] == "Forward standalone review"
+    assert recorded_call_dict["dev_log_text_list"] == ["ctx line"]
+    assert recorded_call_dict["work_dir_path"] == Path("/tmp/review-wrapper")
+    assert recorded_call_dict["worktree_path_str"] == "/tmp/repo-wt-review-wrapper"
+
+
 def test_run_task_completion_forwards_commit_information_contract(
     monkeypatch,
 ) -> None:

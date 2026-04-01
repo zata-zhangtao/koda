@@ -39,6 +39,7 @@ from dsl.services.automation_runner import (
     run_task_implementation,
     run_task_post_review_lint_resume,
     run_task_prd,
+    run_task_review,
     run_task_self_review_resume,
 )
 from dsl.services.log_service import LogService
@@ -64,6 +65,7 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 is_codex_task_running = is_task_automation_running
 run_codex_prd = run_task_prd
 run_codex_task = run_task_implementation
+run_codex_review_only = run_task_review
 run_codex_review_resume = run_task_self_review_resume
 run_post_review_lint_resume = run_task_post_review_lint_resume
 run_codex_completion = run_task_completion
@@ -479,6 +481,49 @@ def _resolve_task_effective_work_dir_path(
                 return project_repo_path
 
     return effective_work_dir_path
+
+
+def _resolve_task_review_work_dir_path(
+    db_session: Session,
+    task_obj: Task,
+) -> Path:
+    """Resolve the working directory for standalone review-only automation.
+
+    独立评审必须指向真实的 task worktree 或绑定项目仓库，不能回退到 Koda 自身仓库。
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 任务对象
+
+    Returns:
+        Path: review-only 执行目录
+
+    Raises:
+        HTTPException: 当任务没有可用的 worktree / 项目仓库时抛出 422
+    """
+    if task_obj.worktree_path:
+        worktree_dir_path = Path(task_obj.worktree_path)
+        if worktree_dir_path.exists():
+            return worktree_dir_path
+
+    if task_obj.project_id:
+        from dsl.models.project import Project
+
+        project_obj = (
+            db_session.query(Project).filter(Project.id == task_obj.project_id).first()
+        )
+        if project_obj:
+            project_repo_path = Path(project_obj.repo_path)
+            if project_repo_path.exists():
+                return project_repo_path
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            "Standalone review requires an existing task worktree or linked project "
+            "repository on this machine."
+        ),
+    )
 
 
 def _extract_attachment_absolute_path_list(raw_log_text_str: str) -> list[str]:
@@ -1977,6 +2022,76 @@ def execute_task(
 
     return _hydrate_task_response(
         executed_task,
+        db_session=db_session,
+        is_task_running_override=True,
+    )
+
+
+@router.post("/{task_id}/review", response_model=TaskResponseSchema)
+def review_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """触发一次独立的 review-only 代码评审.
+
+    该入口不会修改 `workflow_stage`，也不会在评审通过后自动继续 lint / Complete。
+    它只会把评审 transcript 与结论写回 `DevLog`，适合手动 run-now 或定时调度。
+
+    Args:
+        task_id: 任务 ID
+        background_tasks: FastAPI 后台任务注入
+        db_session: 数据库会话
+
+    Returns:
+        Task: 当前任务对象，带运行态字段
+
+    Raises:
+        HTTPException: 当任务不存在、生命周期不允许评审、缺少可用 review 目录，
+            或当前已有自动化运行时返回错误
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    try:
+        reviewable_task = TaskService.prepare_task_review(db_session, task_id)
+    except ValueError as review_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(review_error),
+        ) from review_error
+
+    if not reviewable_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    ordered_task_dev_log_list = _get_ordered_task_dev_logs(reviewable_task)
+    dev_log_text_snapshot_list = _build_task_context_snapshot_list(
+        ordered_task_dev_log_list
+    )
+    review_work_dir_path = _resolve_task_review_work_dir_path(
+        db_session,
+        reviewable_task,
+    )
+
+    register_task_background_activity(task_id)
+    background_tasks.add_task(
+        run_codex_review_only,
+        task_id_str=task_id,
+        run_account_id_str=reviewable_task.run_account_id,
+        task_title_str=reviewable_task.task_title,
+        dev_log_text_list=dev_log_text_snapshot_list,
+        work_dir_path=review_work_dir_path,
+        worktree_path_str=reviewable_task.worktree_path,
+    )
+
+    return _hydrate_task_response(
+        reviewable_task,
         db_session=db_session,
         is_task_running_override=True,
     )

@@ -158,10 +158,12 @@ class TaskScheduleActionType(str, Enum):
     Attributes:
         START_TASK: 启动任务并触发 PRD 生成链路
         RESUME_TASK: 从持久化阶段恢复自动化执行
+        REVIEW_TASK: 触发一次独立的 review-only 代码评审
     """
 
     START_TASK = "start_task"
     RESUME_TASK = "resume_task"
+    REVIEW_TASK = "review_task"
 
 
 class TaskScheduleTriggerType(str, Enum):
