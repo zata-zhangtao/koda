@@ -52,7 +52,10 @@ from backend.dsl.services.prd_file_service import (
     find_task_prd_file_path,
     repair_invalid_task_prd_file_for_read,
 )
-from backend.dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
+from backend.dsl.services.terminal_launcher import (
+    TerminalLaunchError,
+    open_log_tail_terminal,
+)
 from backend.dsl.services.task_service import TaskService
 from utils.database import get_db
 from utils.logger import logger
@@ -2504,7 +2507,9 @@ def cancel_task(
         )
 
     try:
-        from backend.dsl.services.email_service import send_manual_interruption_notification
+        from backend.dsl.services.email_service import (
+            send_manual_interruption_notification,
+        )
 
         send_manual_interruption_notification(
             task_id_str=task_id,

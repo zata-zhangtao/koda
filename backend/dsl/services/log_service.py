@@ -11,8 +11,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from backend.dsl.models.dev_log import DevLog
-from backend.dsl.models.enums import AIProcessingStatus, DevLogStateTag, TaskLifecycleStatus
-from backend.dsl.schemas.dev_log_schema import CommandParseResultSchema, DevLogCreateSchema
+from backend.dsl.models.enums import (
+    AIProcessingStatus,
+    DevLogStateTag,
+    TaskLifecycleStatus,
+)
+from backend.dsl.schemas.dev_log_schema import (
+    CommandParseResultSchema,
+    DevLogCreateSchema,
+)
 from utils.logger import logger
 
 if TYPE_CHECKING:

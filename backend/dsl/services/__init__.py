@@ -26,7 +26,10 @@ from backend.dsl.services.path_opener import (
     open_path_in_editor,
 )
 from backend.dsl.services.task_qa_service import TaskQaService
-from backend.dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
+from backend.dsl.services.terminal_launcher import (
+    TerminalLaunchError,
+    open_log_tail_terminal,
+)
 
 __all__ = [
     "LogService",

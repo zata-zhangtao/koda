@@ -40,16 +40,19 @@
 2. 为任务补充几条日志
 3. 点击“开始任务”，确认是否生成 PRD
 4. 检查 PRD 顶部是否同时包含 `原始需求标题` 与 `需求名称（AI 归纳）`
-5. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
-6. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
-7. 检查阶段是否推进到 `self_review_in_progress`
-8. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
-9. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
-10. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
-11. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
-12. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
-13. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`
-14. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
+5. 在任务详情选择“从 tasks/pending 选择”，确认 pending Markdown PRD 会被移动到 `tasks/prd-{task_id[:8]}-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
+6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/prd-{task_id[:8]}-<slug>.md`，并能通过现有 PRD 面板读取
+7. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
+8. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
+9. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
+10. 检查阶段是否推进到 `self_review_in_progress`
+11. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
+12. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
+13. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
+14. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
+15. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
+16. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`
+17. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 
 ### Sidecar Q&A
 

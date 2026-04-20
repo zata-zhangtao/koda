@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.dsl.prd_sources.api import router as prd_sources_router
 from backend.dsl.api import (
     app_config_router,
     chronicle_router,
@@ -112,7 +113,9 @@ async def _run_task_schedule_dispatch_loop() -> None:
 
 async def _run_task_runner_watchdog_loop() -> None:
     """后台周期扫描卡死的 AI 执行任务并自动 resume."""
-    from backend.dsl.services.task_runner_watchdog_service import TaskRunnerWatchdogService
+    from backend.dsl.services.task_runner_watchdog_service import (
+        TaskRunnerWatchdogService,
+    )
 
     # 首次延迟 60s，等服务器完全启动后再开始扫描
     await asyncio.sleep(60)
@@ -209,6 +212,7 @@ def create_application() -> FastAPI:
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)
+    application.include_router(prd_sources_router)
     application.include_router(task_qa_router)
     application.include_router(task_schedules_router)
     application.include_router(logs_router)

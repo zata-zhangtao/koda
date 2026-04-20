@@ -59,6 +59,15 @@ import {
   sanitizePrdPendingQuestionAnswerSelectionMap,
   setTaskScopedPrdPendingQuestionAnswerSelectionMap,
 } from "./utils/prd_pending_questions";
+import {
+  MANUAL_IMPORT_ENTRY_MODE_LABEL_MAP,
+  PRD_SOURCE_MODE_LABEL_MAP,
+  canSubmitPrdSourceAction,
+  getPrdSourceActionLabel,
+  isMarkdownPrdImportFile,
+  type ManualImportEntryMode,
+  type PrdSourceMode,
+} from "./utils/prd_source_selection";
 import { reconcileTaskListWithReturnedTaskSnapshot } from "./utils/task_list";
 import {
   MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS,
@@ -92,6 +101,7 @@ import {
   TaskScheduleTriggerType,
   type TaskCardMetadata,
   type TaskDisplayStageKey,
+  type PendingPrdFile,
   type PrdPendingQuestionAnswerSelectionMap,
   type PrdPendingQuestionAnswerSelectionMapByTaskId,
   TaskQaContextScope,
@@ -175,6 +185,7 @@ interface AttachmentDraft {
 type MutationName =
   | "create"
   | "start"
+  | "prd_source"
   | "confirm"
   | "execute"
   | "pending_questions"
@@ -483,6 +494,7 @@ function App() {
   const createRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const editRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const feedbackAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const manualImportPrdInputRef = useRef<HTMLInputElement | null>(null);
   const latestTaskListRef = useRef<Task[]>([]);
   const committedTaskProjectFilterValueRef = useRef<string>(
     ALL_TASK_PROJECT_FILTER_VALUE
@@ -526,6 +538,17 @@ function App() {
     isAutoConfirmPrdAndExecuteEnabled,
     setIsAutoConfirmPrdAndExecuteEnabled,
   ] = useState(false);
+  const [selectedTaskPrdSourceMode, setSelectedTaskPrdSourceMode] =
+    useState<PrdSourceMode>("ai_generate");
+  const [pendingPrdFileList, setPendingPrdFileList] = useState<PendingPrdFile[]>([]);
+  const [selectedPendingPrdRelativePath, setSelectedPendingPrdRelativePath] =
+    useState<string | null>(null);
+  const [manualImportEntryMode, setManualImportEntryMode] =
+    useState<ManualImportEntryMode>("upload");
+  const [manualImportPrdFile, setManualImportPrdFile] = useState<File | null>(null);
+  const [manualImportPrdMarkdownText, setManualImportPrdMarkdownText] =
+    useState("");
+  const [isPendingPrdListLoading, setIsPendingPrdListLoading] = useState(false);
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
   const [editRequirementProjectId, setEditRequirementProjectId] = useState<string | null>(null);
@@ -610,6 +633,19 @@ function App() {
     }
     setNewRequirementProjectId(nextProjectId);
     setIsAutoConfirmPrdAndExecuteEnabled(false);
+  }
+
+  function resetSelectedTaskPrdSourceDraft(): void {
+    setSelectedTaskPrdSourceMode("ai_generate");
+    setPendingPrdFileList([]);
+    setSelectedPendingPrdRelativePath(null);
+    setManualImportEntryMode("upload");
+    setManualImportPrdFile(null);
+    setManualImportPrdMarkdownText("");
+    setIsPendingPrdListLoading(false);
+    if (manualImportPrdInputRef.current) {
+      manualImportPrdInputRef.current.value = "";
+    }
   }
 
   function openCreateRequirementPanel(): void {
@@ -1489,6 +1525,7 @@ function App() {
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
     setIsManualCompletionChecklistOpen(false);
+    resetSelectedTaskPrdSourceDraft();
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
     setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
@@ -2254,6 +2291,174 @@ function App() {
         startError instanceof Error ? startError.message : "Failed to start task."
       );
       // 刷新数据，让界面与数据库实际状态同步
+      await loadDashboardData(true);
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function loadPendingPrdFilesForTask(taskItem: Task): Promise<void> {
+    setIsPendingPrdListLoading(true);
+    setErrorMessage(null);
+    try {
+      const pendingPrdFileListResponse = await taskApi.listPendingPrdFiles(
+        taskItem.id
+      );
+      setPendingPrdFileList(pendingPrdFileListResponse.files);
+      setSelectedPendingPrdRelativePath(
+        pendingPrdFileListResponse.files[0]?.relative_path ?? null
+      );
+    } catch (pendingPrdLoadError) {
+      console.error(pendingPrdLoadError);
+      setPendingPrdFileList([]);
+      setSelectedPendingPrdRelativePath(null);
+      setErrorMessage(
+        pendingPrdLoadError instanceof Error
+          ? pendingPrdLoadError.message
+          : "Failed to load pending PRD files."
+      );
+    } finally {
+      setIsPendingPrdListLoading(false);
+    }
+  }
+
+  async function handleChangeSelectedTaskPrdSourceMode(
+    taskItem: Task,
+    nextPrdSourceMode: PrdSourceMode
+  ): Promise<void> {
+    setSelectedTaskPrdSourceMode(nextPrdSourceMode);
+    setSuccessMessage(null);
+    setErrorMessage(null);
+    setSelectedPendingPrdRelativePath(null);
+    setManualImportEntryMode("upload");
+    setManualImportPrdFile(null);
+    setManualImportPrdMarkdownText("");
+    if (manualImportPrdInputRef.current) {
+      manualImportPrdInputRef.current.value = "";
+    }
+
+    if (nextPrdSourceMode === "pending") {
+      await loadPendingPrdFilesForTask(taskItem);
+    }
+  }
+
+  function handleChangeManualImportEntryMode(
+    nextManualImportEntryMode: ManualImportEntryMode
+  ): void {
+    setManualImportEntryMode(nextManualImportEntryMode);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleManualImportPrdFileChange(
+    changeEvent: ChangeEvent<HTMLInputElement>
+  ): void {
+    const nextManualImportPrdFile = changeEvent.target.files?.[0] ?? null;
+    setManualImportPrdFile(nextManualImportPrdFile);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleManualImportPrdMarkdownTextChange(
+    changeEvent: ChangeEvent<HTMLTextAreaElement>
+  ): void {
+    setManualImportPrdMarkdownText(changeEvent.target.value);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleManualImportPrdPaste(
+    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+  ): void {
+    const pastedFile = getClipboardFile(clipboardEvent);
+    if (!pastedFile) {
+      return;
+    }
+
+    if (!isMarkdownPrdImportFile(pastedFile)) {
+      clipboardEvent.preventDefault();
+      setErrorMessage("这里只支持粘贴 Markdown 文本或 .md 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    clipboardEvent.preventDefault();
+    setManualImportEntryMode("upload");
+    setManualImportPrdFile(pastedFile);
+    setManualImportPrdMarkdownText("");
+    setErrorMessage(null);
+    setSuccessMessage("已从剪贴板读取 Markdown 文件，点击“导入 PRD”即可。");
+    if (manualImportPrdInputRef.current) {
+      manualImportPrdInputRef.current.value = "";
+    }
+  }
+
+  async function handleSelectPendingPrdSource(taskItem: Task): Promise<void> {
+    if (!selectedPendingPrdRelativePath) {
+      setErrorMessage("请选择一个 tasks/pending 中的 PRD 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("prd_source");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const updatedTask = await taskApi.selectPendingPrd(
+        taskItem.id,
+        selectedPendingPrdRelativePath
+      );
+      setSelectedTaskId(updatedTask.id);
+      resetSelectedTaskPrdSourceDraft();
+      setSuccessMessage("Pending PRD 已移动到 tasks 根目录。");
+      await loadDashboardData(true);
+    } catch (selectPendingPrdError) {
+      console.error(selectPendingPrdError);
+      setErrorMessage(
+        selectPendingPrdError instanceof Error
+          ? selectPendingPrdError.message
+          : "Failed to select pending PRD."
+      );
+      await loadDashboardData(true);
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleImportManualPrdSource(taskItem: Task): Promise<void> {
+    if (manualImportEntryMode === "paste") {
+      if (manualImportPrdMarkdownText.trim().length === 0) {
+        setErrorMessage("请先粘贴 PRD Markdown 内容。");
+        setSuccessMessage(null);
+        return;
+      }
+    } else if (!manualImportPrdFile) {
+      setErrorMessage("请选择一个 Markdown PRD 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("prd_source");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const updatedTask =
+        manualImportEntryMode === "paste"
+          ? await taskApi.importPrdFromText(taskItem.id, manualImportPrdMarkdownText)
+          : await taskApi.importPrd(taskItem.id, manualImportPrdFile as File);
+      setSelectedTaskId(updatedTask.id);
+      resetSelectedTaskPrdSourceDraft();
+      setSuccessMessage("PRD 已导入到 tasks 根目录。");
+      await loadDashboardData(true);
+    } catch (importPrdError) {
+      console.error(importPrdError);
+      setErrorMessage(
+        importPrdError instanceof Error
+          ? importPrdError.message
+          : "Failed to import PRD."
+      );
       await loadDashboardData(true);
     } finally {
       setActiveMutationName(null);
@@ -3788,7 +3993,7 @@ function App() {
                       )
                     }
                   />
-                  <span>PRD 生成后自动确认并直接开始执行</span>
+                  <span>PRD 就绪后自动确认并直接开始执行</span>
                 </label>
 
                 {errorMessage ? (
@@ -4000,9 +4205,246 @@ function App() {
                       </div>
                     </div>
 
+                    {(selectedTaskStage === WorkflowStage.BACKLOG ||
+                      selectedTaskStage === WorkflowStage.PRD_GENERATING) &&
+                    selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                    selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
+                      <div className="devflow-prd-source-panel">
+                        <div className="devflow-prd-source-panel__header">
+                          <span className="devflow-detail__fact-label">PRD 来源</span>
+                          <p className="devflow-detail__fact-hint">
+                            保留 AI 生成，也可以移动 `tasks/pending` 中的 PRD，或手动上传 /
+                            粘贴 Markdown 文本与 `.md` 文件。
+                          </p>
+                        </div>
+
+                        <select
+                          className="devflow-input devflow-input--select"
+                          value={selectedTaskPrdSourceMode}
+                          disabled={
+                            activeMutationName === "start" ||
+                            activeMutationName === "prd_source"
+                          }
+                          onChange={(changeEvent) => {
+                            void handleChangeSelectedTaskPrdSourceMode(
+                              selectedTask,
+                              changeEvent.target.value as PrdSourceMode
+                            );
+                          }}
+                        >
+                          {Object.entries(PRD_SOURCE_MODE_LABEL_MAP).map(
+                            ([sourceModeValue, sourceModeLabel]) => (
+                              <option key={sourceModeValue} value={sourceModeValue}>
+                                {sourceModeLabel}
+                              </option>
+                            )
+                          )}
+                        </select>
+
+                        {selectedTaskPrdSourceMode === "pending" ? (
+                          <div className="devflow-prd-source-panel__controls">
+                            <select
+                              className="devflow-input devflow-input--select"
+                              value={selectedPendingPrdRelativePath ?? ""}
+                              disabled={
+                                isPendingPrdListLoading ||
+                                activeMutationName === "prd_source"
+                              }
+                              onChange={(changeEvent) =>
+                                setSelectedPendingPrdRelativePath(
+                                  changeEvent.target.value || null
+                                )
+                              }
+                            >
+                              <option value="">
+                                {isPendingPrdListLoading
+                                  ? "Loading pending PRDs..."
+                                  : pendingPrdFileList.length > 0
+                                    ? "-- 选择 pending PRD --"
+                                    : "tasks/pending 暂无 Markdown PRD"}
+                              </option>
+                              {pendingPrdFileList.map((pendingPrdFile) => (
+                                <option
+                                  key={pendingPrdFile.relative_path}
+                                  value={pendingPrdFile.relative_path}
+                                >
+                                  {pendingPrdFile.title_preview ||
+                                    pendingPrdFile.file_name}
+                                  {" · "}
+                                  {formatFileSize(pendingPrdFile.size_bytes)}
+                                </option>
+                              ))}
+                            </select>
+                            <ActionButton
+                              variant="secondary"
+                              busy={activeMutationName === "prd_source"}
+                              disabled={
+                                !canSubmitPrdSourceAction(
+                                  selectedTaskPrdSourceMode,
+                                  selectedPendingPrdRelativePath,
+                                  manualImportPrdFile,
+                                  manualImportEntryMode,
+                                  manualImportPrdMarkdownText
+                                )
+                              }
+                              onClick={() => {
+                                void handleSelectPendingPrdSource(selectedTask);
+                              }}
+                            >
+                              <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                              <span>{getPrdSourceActionLabel("pending")}</span>
+                            </ActionButton>
+                            <ActionButton
+                              variant="ghost"
+                              onClick={() => {
+                                void loadPendingPrdFilesForTask(selectedTask);
+                              }}
+                            >
+                              Refresh
+                            </ActionButton>
+                          </div>
+                        ) : null}
+
+                        {selectedTaskPrdSourceMode === "manual_import" ? (
+                          <div className="devflow-prd-source-panel__manual-stack">
+                            <div
+                              className="devflow-feedback__channel-tabs"
+                              role="tablist"
+                              aria-label="Manual PRD import method"
+                            >
+                              {Object.entries(MANUAL_IMPORT_ENTRY_MODE_LABEL_MAP).map(
+                                ([manualImportEntryModeValue, manualImportEntryModeLabel]) => (
+                                  <button
+                                    key={manualImportEntryModeValue}
+                                    type="button"
+                                    className={[
+                                      "devflow-feedback__channel-tab",
+                                      manualImportEntryMode === manualImportEntryModeValue
+                                        ? "devflow-feedback__channel-tab--active"
+                                        : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" ")}
+                                    disabled={activeMutationName === "prd_source"}
+                                    onClick={() =>
+                                      handleChangeManualImportEntryMode(
+                                        manualImportEntryModeValue as ManualImportEntryMode
+                                      )
+                                    }
+                                  >
+                                    {manualImportEntryModeLabel}
+                                  </button>
+                                )
+                              )}
+                            </div>
+
+                            {manualImportEntryMode === "upload" ? (
+                              <div className="devflow-prd-source-panel__controls">
+                                <input
+                                  ref={manualImportPrdInputRef}
+                                  className="devflow-feedback__file-input"
+                                  type="file"
+                                  accept=".md,text/markdown,text/plain"
+                                  onChange={handleManualImportPrdFileChange}
+                                />
+                                <ActionButton
+                                  variant="ghost"
+                                  onClick={() => manualImportPrdInputRef.current?.click()}
+                                >
+                                  Choose Markdown
+                                </ActionButton>
+                                {manualImportPrdFile ? (
+                                  <span className="devflow-prd-source-panel__file">
+                                    {manualImportPrdFile.name}
+                                    {" · "}
+                                    {formatFileSize(manualImportPrdFile.size)}
+                                  </span>
+                                ) : (
+                                  <span className="devflow-prd-source-panel__file">
+                                    未选择文件
+                                  </span>
+                                )}
+                                <ActionButton
+                                  variant="secondary"
+                                  busy={activeMutationName === "prd_source"}
+                                  disabled={
+                                    !canSubmitPrdSourceAction(
+                                      selectedTaskPrdSourceMode,
+                                      selectedPendingPrdRelativePath,
+                                      manualImportPrdFile,
+                                      manualImportEntryMode,
+                                      manualImportPrdMarkdownText
+                                    )
+                                  }
+                                  onClick={() => {
+                                    void handleImportManualPrdSource(selectedTask);
+                                  }}
+                                >
+                                  <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                                  <span>{getPrdSourceActionLabel("manual_import")}</span>
+                                </ActionButton>
+                              </div>
+                            ) : (
+                              <>
+                                <textarea
+                                  className="devflow-prd-source-panel__textarea"
+                                  value={manualImportPrdMarkdownText}
+                                  placeholder={
+                                    "直接粘贴 PRD Markdown 文本，或粘贴一个 .md 文件…\n\n例如：\n# PRD：需求标题\n\n**需求名称（AI 归纳）**：需求标题"
+                                  }
+                                  disabled={activeMutationName === "prd_source"}
+                                  onChange={handleManualImportPrdMarkdownTextChange}
+                                  onPaste={handleManualImportPrdPaste}
+                                />
+                                <div className="devflow-prd-source-panel__controls">
+                                  <span className="devflow-prd-source-panel__file">
+                                    {manualImportPrdMarkdownText.trim().length > 0
+                                      ? `已粘贴 ${manualImportPrdMarkdownText.length} 个字符`
+                                      : "未粘贴内容"}
+                                  </span>
+                                  <ActionButton
+                                    variant="ghost"
+                                    disabled={manualImportPrdMarkdownText.length === 0}
+                                    onClick={() => setManualImportPrdMarkdownText("")}
+                                  >
+                                    Clear
+                                  </ActionButton>
+                                  <ActionButton
+                                    variant="secondary"
+                                    busy={activeMutationName === "prd_source"}
+                                    disabled={
+                                      !canSubmitPrdSourceAction(
+                                        selectedTaskPrdSourceMode,
+                                        selectedPendingPrdRelativePath,
+                                        manualImportPrdFile,
+                                        manualImportEntryMode,
+                                        manualImportPrdMarkdownText
+                                      )
+                                    }
+                                    onClick={() => {
+                                      void handleImportManualPrdSource(selectedTask);
+                                    }}
+                                  >
+                                    <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                                    <span>{getPrdSourceActionLabel("manual_import")}</span>
+                                  </ActionButton>
+                                </div>
+                                <p className="devflow-prd-source-panel__hint">
+                                  支持直接粘贴 UTF-8 Markdown 文本，或从剪贴板粘贴 `.md`
+                                  文件；导入后仍会写入当前任务的
+                                  `tasks/prd-...-&lt;slug&gt;.md`。
+                                </p>
+                              </>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     <div className="devflow-detail__actions">
                       {/* ── Backlog: 开始任务 ── */}
                       {selectedTaskStage === WorkflowStage.BACKLOG &&
+                      selectedTaskPrdSourceMode === "ai_generate" &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <ActionButton
@@ -4019,6 +4461,7 @@ function App() {
 
                       {/* ── PRD 撰写中: 重新生成 + 确认 PRD ── */}
                       {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
+                      selectedTaskPrdSourceMode === "ai_generate" &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <>

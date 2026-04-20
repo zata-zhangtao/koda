@@ -5,7 +5,11 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.dsl.models.enums import TaskLifecycleStatus, TaskArtifactType, WorkflowStage
+from backend.dsl.models.enums import (
+    TaskLifecycleStatus,
+    TaskArtifactType,
+    WorkflowStage,
+)
 from backend.dsl.schemas.base import DSLResponseSchema
 
 

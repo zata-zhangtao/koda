@@ -253,6 +253,13 @@ tasks/prd-{task_id[:8]}-<requirement-slug>.md
 后端会按任务前缀 `tasks/prd-{task_id[:8]}*.md` 查找并返回最合适的文件，优先读取满足语义命名合同的新文件名，同时兼容旧的固定文件名。
 如果 Codex 写出了旧固定文件名或随机后缀，`run_codex_prd` 会自动重命名到合法的语义文件名并把修正结果写回日志。
 
+除 AI 生成外，任务详情也支持两种非 runner PRD 来源：
+
+- 从 `tasks/pending/*.md` 选择一个既有 PRD；后端会把该文件移动到 `tasks/` 根目录，并改名为当前任务专属的语义 PRD 文件名。
+- 手动上传 `.md` PRD，或直接粘贴 Markdown；后端会按 UTF-8 Markdown 校验后写入 `tasks/` 根目录，并使用同一任务专属文件名合同。
+
+这两条路径由 `backend/dsl/prd_sources/` 领域切片实现，不会调用 `run_codex_prd`，但 PRD ready 之后的确认、自动确认执行和 `/api/tasks/{task_id}/prd-file` 读取逻辑与 AI 生成保持一致。
+
 ## 故障处理
 
 ### 执行器 CLI 缺失
@@ -300,7 +307,7 @@ tasks/prd-{task_id[:8]}-<requirement-slug>.md
 3. 重新收集当前任务的最新上下文
 4. 再次调用 `run_codex_prd`
 
-`run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧 PRD 文件 `tasks/prd-{task_id[:8]}*.md`，避免前端读取到历史版本；新生成结果仍按固定文件名 `tasks/prd-{task_id[:8]}.md` 写回。
+`run_codex_prd` 在执行前会清理 worktree 下当前任务对应的旧 PRD 文件 `tasks/prd-{task_id[:8]}*.md`，避免前端读取到历史版本；新生成结果仍按语义文件名合同写回。
 
 ### Worktree 选择优先级
 

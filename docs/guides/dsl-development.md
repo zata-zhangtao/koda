@@ -5,14 +5,28 @@
 当前 DSL 是一个前后端分离的单机工作台：
 
 - `frontend/` 提供需求卡片与时间线界面
-- `backend/dsl/` 提供 FastAPI 路由、服务层与 ORM 模型
+- `backend/dsl/` 提供 FastAPI 应用、领域切片、路由、服务层与 ORM 模型
 - `utils/` 提供配置、数据库和日志底座
 - `ai_agent/` 提供与主业务链路松耦合的模型配置工具
+- 新增能力优先采用 `backend/dsl/<domain>/` 领域切片；历史模块仍保留在 `backend/dsl/services/`
 - `backend/dsl/services/task_qa_service.py` 则把这层工具能力用于任务内独立问答，而不是复用 `DevLog`
 
 ## 后端结构
 
-后端包从仓库根目录的 `backend/` 开始。当前 DSL 应用位于 `backend/dsl/`，导入路径统一写作 `backend.dsl...`。新增后端模块时，先按业务域确定目录和边界，再在模块内部保持简洁架构：路由层处理 HTTP 合同，服务层承载用例和业务规则，模型/Schema 只表达数据结构，外部系统通过服务层或适配器接入。
+后端包从仓库根目录的 `backend/` 开始。当前 DSL 应用位于 `backend/dsl/`，导入路径统一写作 `backend.dsl...`。新增后端模块时，先按业务域确定目录和边界，再在模块内部保持简洁架构：API 层处理 HTTP 合同，application/use case 层承载编排，domain 层表达业务规则，infrastructure 层接入数据库、文件系统、runner 等外部系统。
+
+`backend/dsl/services/` 是历史平铺服务目录，不再作为新增业务能力的默认落点。新能力应优先采用如下领域切片结构：
+
+```text
+backend/dsl/<domain>/
+  api.py
+  schemas.py
+  domain/
+  application/
+  infrastructure/
+```
+
+`backend/dsl/prd_sources/` 是该模式的首个落地模块：pending PRD 列表、选择、手动导入、路径安全、文件 staging、任务阶段推进和 auto-confirm 分流都收敛在该领域切片内；旧 `TaskService`、runner 和 PRD 文件命名/读取逻辑只通过 infrastructure adapter 复用。
 
 ### 启动链路
 
@@ -27,8 +41,11 @@
 
 ### 路由与服务分工
 
-- `backend/dsl/api/`：负责参数校验、依赖注入、HTTP 异常与状态码
-- `backend/dsl/services/`：负责业务规则与状态推进
+- `backend/dsl/<domain>/api.py` 或 `backend/dsl/api/`：负责参数校验、依赖注入、HTTP 异常与状态码
+- `backend/dsl/<domain>/application/`：负责用例编排和端口依赖
+- `backend/dsl/<domain>/domain/`：负责纯业务规则，不依赖 FastAPI、SQLAlchemy、真实文件系统或前端类型
+- `backend/dsl/<domain>/infrastructure/`：负责数据库、文件系统、CLI runner、WebDAV、邮件等外部系统适配
+- `backend/dsl/services/`：历史服务层，新增能力应通过 adapter 复用而不是继续平铺扩张
 - `backend/dsl/models/`：定义数据库实体
 - `backend/dsl/schemas/`：定义请求与响应模型
 - 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` / `review_task` 路由逻辑；其中 `review_task` 只写日志，不改变任务阶段
@@ -38,10 +55,11 @@
 新增后端功能时，推荐保持下面的修改顺序：
 
 1. 先定义或调整 Pydantic Schema
-2. 在 `backend/dsl/services/` 实现业务规则
-3. 在 `backend/dsl/api/` 暴露路由
-4. 在前端 `api/client.ts` 对接接口
-5. 更新文档并执行验证
+2. 为新业务域创建 `backend/dsl/<domain>/domain/` 与 `application/`，先写纯业务规则和 use case
+3. 在 `backend/dsl/<domain>/infrastructure/` 适配旧服务、数据库、文件系统或 runner
+4. 在 `backend/dsl/<domain>/api.py` 暴露路由，并在 `backend/dsl/app.py` 注册
+5. 在前端 `api/client.ts` 对接接口
+6. 更新文档并执行验证
 
 如果新功能属于“只读 sidecar”而不是主执行链路，额外要确认：
 
@@ -80,25 +98,26 @@
 
 1. 创建任务，默认进入 `backlog`
 2. 点击“开始任务”，后端创建 worktree 并进入 `prd_generating`
-3. `run_codex_prd` 调起当前配置 runner（`codex` / `claude`）生成 PRD，成功后按任务策略分流：
+3. 默认 PRD 来源是 AI 生成：`run_codex_prd` 调起当前配置 runner（`codex` / `claude`）生成 PRD，成功后按任务策略分流：
    - 默认：推进到 `prd_waiting_confirmation`，等待用户确认
    - 自动模式（`auto_confirm_prd_and_execute=true`）：直接推进到 `implementation_in_progress` 并启动实现链路
-4. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
-5. 点击“开始执行”，后端进入 `implementation_in_progress`
-6. `run_codex_task` 调起当前配置 runner 完成实现，成功后推进到 `self_review_in_progress`
-7. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
-8. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环，并通过统一通知服务发送 `changes_requested` 邮件
-9. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
-10. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
-11. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
-12. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
-13. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
-14. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
-15. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
-16. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
-17. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
-18. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
-19. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
+4. 用户也可以在任务详情中选择非 AI 来源：从 `tasks/pending/*.md` 选择 PRD，或手动上传 / 粘贴 Markdown PRD。两者由 `backend/dsl/prd_sources/` 负责移动/导入到 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`，然后进入与 AI 生成一致的 PRD ready 后续链路。
+5. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
+6. 点击“开始执行”，后端进入 `implementation_in_progress`
+7. `run_codex_task` 调起当前配置 runner 完成实现，成功后推进到 `self_review_in_progress`
+8. `run_codex_review` 在 `self_review_in_progress` 阶段自动执行代码评审，并将输出继续写回 `DevLog`
+9. 自检若发现阻塞问题，系统会在同一个 worktree 内执行有上限的 `review -> 自动回改 -> review` 闭环，并通过统一通知服务发送 `changes_requested` 邮件
+10. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
+11. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
+12. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
+13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
+14. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
+15. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+16. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
+17. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
+18. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
+19. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
+20. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
 
 ### 调度能力（新增）
 

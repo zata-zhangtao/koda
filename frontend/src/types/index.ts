@@ -163,6 +163,20 @@ export interface Task {
   branch_health: TaskBranchHealth | null;
 }
 
+/** 可从 tasks/pending 中选择的 PRD 文件 */
+export interface PendingPrdFile {
+  file_name: string;
+  relative_path: string;
+  size_bytes: number;
+  updated_at: string;
+  title_preview?: string | null;
+}
+
+/** Pending PRD 文件列表响应 */
+export interface PendingPrdFileList {
+  files: PendingPrdFile[];
+}
+
 /** TaskSchedule 类型 */
 export interface TaskSchedule {
   id: string;

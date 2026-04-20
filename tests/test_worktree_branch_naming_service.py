@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from backend.dsl.services.worktree_branch_naming_service import WorktreeBranchNamingService
+from backend.dsl.services.worktree_branch_naming_service import (
+    WorktreeBranchNamingService,
+)
 
 
 def test_normalize_semantic_slug_replaces_invalid_chars_and_truncates() -> None:

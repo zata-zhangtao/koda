@@ -43,7 +43,10 @@ from backend.dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from backend.dsl.services.git_worktree_service import GitWorktreeService, WorktreeDestroyResult
+from backend.dsl.services.git_worktree_service import (
+    GitWorktreeService,
+    WorktreeDestroyResult,
+)
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 

@@ -81,6 +81,31 @@
         - create_task_reference
         - get_task
 
+::: backend.dsl.prd_sources.api
+    handler: python
+    options:
+      members:
+        - list_pending_prd_files
+        - select_pending_prd_file
+        - import_prd_file
+
+::: backend.dsl.prd_sources.schemas.PendingPrdFileSchema
+    handler: python
+
+::: backend.dsl.prd_sources.schemas.PendingPrdFileListSchema
+    handler: python
+
+::: backend.dsl.prd_sources.schemas.SelectPendingPrdRequestSchema
+    handler: python
+
+::: backend.dsl.prd_sources.application.use_cases
+    handler: python
+    options:
+      members:
+        - ListPendingPrdFilesUseCase
+        - SelectPendingPrdUseCase
+        - ImportPrdUseCase
+
 ::: backend.dsl.api.task_schedules
     handler: python
     options:

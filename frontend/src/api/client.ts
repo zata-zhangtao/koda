@@ -9,6 +9,7 @@ import type {
   DevLog,
   EmailSettings,
   EmailSettingsUpdate,
+  PendingPrdFileList,
   ProjectTimelineEntry,
   ProjectTimelineSummary,
   ProjectTimelineTaskDetail,
@@ -183,6 +184,42 @@ export const taskApi = {
   start: (id: string) =>
     fetchApi<Task>(`/tasks/${id}/start`, {
       method: "POST",
+    }),
+
+  /** 列出任务工作目录中的 tasks/pending PRD 文件 */
+  listPendingPrdFiles: (id: string) =>
+    fetchApi<PendingPrdFileList>(`/tasks/${id}/prd-sources/pending`),
+
+  /** 选择一个 pending PRD，并移动到任务 tasks 根目录 */
+  selectPendingPrd: (id: string, relativePath: string) =>
+    fetchApi<Task>(`/tasks/${id}/prd-sources/select-pending`, {
+      method: "POST",
+      body: JSON.stringify({ relative_path: relativePath }),
+    }),
+
+  /** 上传并导入一个 Markdown PRD */
+  importPrd: async (id: string, file: File): Promise<Task> => {
+    const formData = new FormData();
+    formData.append("uploaded_prd_file", file);
+
+    const response = await fetch(`${API_BASE}/tasks/${id}/prd-sources/import`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+
+    return response.json() as Promise<Task>;
+  },
+
+  /** 直接导入粘贴的 Markdown PRD 文本 */
+  importPrdFromText: (id: string, prdMarkdownText: string) =>
+    fetchApi<Task>(`/tasks/${id}/prd-sources/import-text`, {
+      method: "POST",
+      body: JSON.stringify({ prd_markdown_text: prdMarkdownText }),
     }),
 
   /** 基于当前需求内容、反馈与附件重新生成 PRD */
