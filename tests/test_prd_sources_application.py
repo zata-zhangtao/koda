@@ -176,7 +176,9 @@ def test_import_prd_use_case_accepts_pasted_markdown(tmp_path: Path) -> None:
     )
 
     assert repository.ensure_absent_called_bool is True
-    assert repository.imported_markdown_text == "**需求名称（AI 归纳）**：粘贴导入 PRD\n"
+    assert (
+        repository.imported_markdown_text == "**需求名称（AI 归纳）**：粘贴导入 PRD\n"
+    )
     assert workflow_port.marked_ready_bool is True
     assert outcome.staged_relative_path_str == "tasks/prd-cf2b9461-粘贴导入-prd.md"
     assert outcome.auto_started_implementation_bool is False
