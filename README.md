@@ -47,7 +47,7 @@ just docs-build
 
 ## 项目结构
 
-- `dsl/`：FastAPI 路由、服务层、ORM 模型与 Schema。
+- `backend/dsl/`：FastAPI 路由、服务层、ORM 模型与 Schema。
 - `frontend/`：React + Vite 工作台前端。
 - `docs/`：MkDocs 文档站点。
 - `ai_agent/`：模型注册、凭据解析和聊天模型工具。

@@ -13,10 +13,10 @@
 
 | 位置 | 类型 | 作用 |
 | --- | --- | --- |
-| `dsl/services/automation_runner.py` | 统一入口 | API 层使用的执行器无关编排入口 |
-| `dsl/services/codex_runner.py` | 自动化编排器 | 构造 Prompt、统一阶段编排、按配置调度 runner |
-| `dsl/services/runners/` | CLI 适配层 | Runner 协议、注册中心与 Codex / Claude 实现 |
-| `dsl/models/enums.py` | 工作流状态 | 定义 `WorkflowStage` 与 `AIProcessingStatus` |
+| `backend/dsl/services/automation_runner.py` | 统一入口 | API 层使用的执行器无关编排入口 |
+| `backend/dsl/services/codex_runner.py` | 自动化编排器 | 构造 Prompt、统一阶段编排、按配置调度 runner |
+| `backend/dsl/services/runners/` | CLI 适配层 | Runner 协议、注册中心与 Codex / Claude 实现 |
+| `backend/dsl/models/enums.py` | 工作流状态 | 定义 `WorkflowStage` 与 `AIProcessingStatus` |
 | `ai_agent/utils/model_loader.py` | 工具库 | 读取模型配置，并为 sidecar Q&A 提供聊天模型实例化能力 |
 | `ai_agent/utils/models.json` | 模型注册表 | 声明提供商、模型类别与基础 URL |
 | `ai_agent/.env.example` | 配置样例 | 提供 DashScope、OpenRouter 等密钥占位项 |
@@ -57,7 +57,7 @@
 
 - 默认通过 `TASK_QA_BACKEND=chat_model` 走 `model_loader.py`
 - `TASK_QA_MODEL_NAME` 与 `TASK_QA_MODEL_TEMPERATURE` 只作用于 sidecar Q&A，不改变主业务链路的 Codex 默认策略
-- 任务内 sidecar Q&A 与 `dsl/services/codex_runner.py` 的主执行链路解耦，不共享 `is_codex_task_running` 语义
+- 任务内 sidecar Q&A 与 `backend/dsl/services/codex_runner.py` 的主执行链路解耦，不共享 `is_codex_task_running` 语义
 
 当前 `models.json` 中已声明的提供商包括：
 

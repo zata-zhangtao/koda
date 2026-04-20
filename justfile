@@ -36,8 +36,13 @@ docs-serve port="8000":
 docs-build:
     uv run mkdocs build --strict
 
-# Run the main application
-run:
+# Run the main application; pass `all` to start the full DSL dev environment.
+run mode="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{mode}}" = "all" ]; then
+        exec just dsl-dev
+    fi
     uv run python main.py
 
 # Remove cache files and build artifacts

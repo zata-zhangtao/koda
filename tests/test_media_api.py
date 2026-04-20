@@ -11,11 +11,11 @@ from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.app import app
-from dsl.models.enums import TaskLifecycleStatus
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
+import backend.dsl.models  # noqa: F401
+from backend.dsl.app import app
+from backend.dsl.models.enums import TaskLifecycleStatus
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
 from utils.database import Base, get_db
 from utils.settings import config
 

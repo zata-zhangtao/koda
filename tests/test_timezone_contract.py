@@ -10,13 +10,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.app_config import router as app_config_router
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.task_schema import TaskResponseSchema
-from dsl.services.chronicle_service import ChronicleService
+from backend.dsl.api.app_config import router as app_config_router
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.task_schema import TaskResponseSchema
+from backend.dsl.services.chronicle_service import ChronicleService
 from utils.database import Base
 from utils.helpers import (
     app_aware_to_utc_naive,

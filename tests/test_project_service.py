@@ -9,13 +9,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.projects import _to_response
-from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
-from dsl.models.project import Project
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.project_schema import ProjectCreateSchema, ProjectUpdateSchema
-from dsl.services.project_service import ProjectService
+from backend.dsl.api.projects import _to_response
+from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.project_schema import ProjectCreateSchema, ProjectUpdateSchema
+from backend.dsl.services.project_service import ProjectService
 from utils.database import Base
 from utils.helpers import utc_now_naive
 

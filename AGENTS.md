@@ -41,6 +41,12 @@
 
 ## Code Standards
 
+### Backend Architecture Rules
+- **Backend Root**: Backend application code lives under `backend/`. The DSL FastAPI application package is `backend.dsl`.
+- **Domain Layered Architecture**: New backend capabilities must be organized by domain responsibility first. Keep HTTP routing, application/service orchestration, domain rules, persistence models, schemas/DTOs, and infrastructure integrations in explicit layers instead of mixing them in one file.
+- **Clean Architecture Inside Modules**: Within each module or domain slice, dependencies must point inward: API/routes call service/application logic; service/application logic owns use cases and coordinates repositories/infrastructure; domain rules must not depend on FastAPI request objects, UI concerns, or concrete CLI/network adapters.
+- **Boundary Discipline**: Do not put business rules in route handlers. Do not make models or schemas trigger side effects. Infrastructure adapters such as CLI runners, WebDAV, email, filesystem, and tunnels should be called through service-layer functions or small adapter abstractions.
+
 ### Input/Output & Encoding Standards (CRITICAL FOR WINDOWS)
 - **Explicit Encoding**: When reading or writing files (including `.txt`, `.json`, `.md`, `.log`) using `open()`, `pathlib.Path.read_text()`, or `pathlib.Path.write_text()`, you **MUST** explicitly set `encoding="utf-8"`.
   - *Incorrect*: `open("README.md", "r")`

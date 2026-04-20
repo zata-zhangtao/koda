@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from dsl.services import codex_runner
-from dsl.services.git_worktree_service import GitWorktreeService
+from backend.dsl.services import codex_runner
+from backend.dsl.services.git_worktree_service import GitWorktreeService
 
 
 def _run_git_command(repo_root_path: Path, git_argument_list: list[str]) -> str:

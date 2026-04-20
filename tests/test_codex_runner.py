@@ -7,17 +7,17 @@ import subprocess
 from datetime import timedelta
 from pathlib import Path
 
-import dsl.models  # noqa: F401
+import backend.dsl.models  # noqa: F401
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.services import codex_runner, email_service
-from dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.services import codex_runner, email_service
+from backend.dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
 from utils.database import Base
 from utils.helpers import utc_now_naive
 

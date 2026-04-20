@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import dsl.app as dsl_app_module
+import backend.dsl.app as dsl_app_module
 
 
 def test_packaged_runtime_serves_frontend_dist_and_spa_fallback(

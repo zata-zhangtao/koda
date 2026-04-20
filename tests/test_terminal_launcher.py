@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dsl.services.terminal_launcher import (
+from backend.dsl.services.terminal_launcher import (
     TerminalLaunchError,
     build_log_tail_terminal_command,
 )

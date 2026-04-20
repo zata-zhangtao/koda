@@ -10,18 +10,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import pytest
 
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import TaskLifecycleStatus, WorkflowStage
-from dsl.models.project import Project
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.task_schema import (
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.task_service import TaskService
+from backend.dsl.services.task_service import TaskService
 from utils.database import Base
 
 

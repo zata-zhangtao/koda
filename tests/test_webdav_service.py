@@ -7,13 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import dsl.models  # noqa: F401
+import backend.dsl.models  # noqa: F401
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.webdav_settings import upsert_webdav_settings
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import (
+from backend.dsl.api.webdav_settings import upsert_webdav_settings
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import (
     DevLogStateTag,
     TaskArtifactType,
     TaskLifecycleStatus,
@@ -22,16 +22,16 @@ from dsl.models.enums import (
     TaskQaMessageRole,
     WorkflowStage,
 )
-from dsl.models.project import Project
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.models.task_artifact import TaskArtifact
-from dsl.models.task_qa_message import TaskQaMessage
-from dsl.models.task_reference_link import TaskReferenceLink
-from dsl.models.webdav_settings import WebDAVSettings
-from dsl.schemas.webdav_settings_schema import WebDAVSettingsUpdate
-from dsl.services import webdav_business_sync_service, webdav_service
-from dsl.services.task_service import TaskService
+from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.models.task_artifact import TaskArtifact
+from backend.dsl.models.task_qa_message import TaskQaMessage
+from backend.dsl.models.task_reference_link import TaskReferenceLink
+from backend.dsl.models.webdav_settings import WebDAVSettings
+from backend.dsl.schemas.webdav_settings_schema import WebDAVSettingsUpdate
+from backend.dsl.services import webdav_business_sync_service, webdav_service
+from backend.dsl.services.task_service import TaskService
 from utils.database import Base
 from utils.helpers import utc_now_naive
 from utils.settings import config
@@ -110,7 +110,7 @@ def test_sync_database_to_webdav_appends_backup_scope_note(
         lambda: _FakeSession(),
     )
     monkeypatch.setattr(
-        "dsl.services.project_service.ProjectService.refresh_project_repo_fingerprints",
+        "backend.dsl.services.project_service.ProjectService.refresh_project_repo_fingerprints",
         lambda db_session, only_missing: 0,
     )
     monkeypatch.setattr(

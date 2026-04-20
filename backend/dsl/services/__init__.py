@@ -1,0 +1,45 @@
+"""DSL 业务逻辑服务模块.
+
+包含所有核心业务逻辑实现：
+- log_service: 日志 CRUD 和状态管理
+- task_service: 任务生命周期管理
+- media_service: 图片存储和缩略图生成
+- chronicle_service: 编年史渲染和导出
+- task_schedule_service: 任务调度规则管理与 Cron 计算
+- task_scheduler_dispatcher: 到期调度规则分发执行
+- path_opener: 可配置编辑器命令解析与目录打开
+- terminal_launcher: 终端启动命令解析与打开
+- ai_vision_service: (Phase 2) AI 图片分析
+- task_qa_service: 任务内独立问答 sidecar 逻辑
+"""
+
+from backend.dsl.services.log_service import LogService
+from backend.dsl.services.task_service import TaskService
+from backend.dsl.services.media_service import MediaService
+from backend.dsl.services.chronicle_service import ChronicleService
+from backend.dsl.services.task_schedule_service import TaskScheduleService
+from backend.dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
+from backend.dsl.services.path_opener import (
+    PathOpenCommandError,
+    PathOpenError,
+    PathOpenTargetNotFoundError,
+    open_path_in_editor,
+)
+from backend.dsl.services.task_qa_service import TaskQaService
+from backend.dsl.services.terminal_launcher import TerminalLaunchError, open_log_tail_terminal
+
+__all__ = [
+    "LogService",
+    "TaskService",
+    "MediaService",
+    "ChronicleService",
+    "TaskScheduleService",
+    "TaskSchedulerDispatcher",
+    "PathOpenCommandError",
+    "PathOpenError",
+    "PathOpenTargetNotFoundError",
+    "open_path_in_editor",
+    "TaskQaService",
+    "TerminalLaunchError",
+    "open_log_tail_terminal",
+]

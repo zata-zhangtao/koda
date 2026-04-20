@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import dsl.models  # noqa: F401
+import backend.dsl.models  # noqa: F401
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.email_settings import get_email_settings, upsert_email_settings
-from dsl.schemas.email_settings_schema import EmailSettingsUpdate
+from backend.dsl.api.email_settings import get_email_settings, upsert_email_settings
+from backend.dsl.schemas.email_settings_schema import EmailSettingsUpdate
 from utils.database import Base
 
 
@@ -55,7 +55,7 @@ def test_upsert_email_settings_round_trips_stalled_threshold() -> None:
 
 def test_upsert_email_settings_preserves_existing_password_on_blank_update() -> None:
     """Saving a blank password should keep the previously stored SMTP password."""
-    from dsl.models.email_settings import EmailSettings
+    from backend.dsl.models.email_settings import EmailSettings
 
     db_session = _build_db_session()
     try:

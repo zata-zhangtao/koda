@@ -11,16 +11,16 @@
 
 真实调用入口有四个：
 
-- `dsl/api/tasks.py` 的 `start_task` 会在后台触发 `run_codex_prd`
-- `dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
-- `dsl/api/tasks.py` 的 `review_task` 会在后台触发 `run_task_review`
-- `dsl/api/tasks.py` 的 `resume_task` 会在后台从持久化工作流阶段恢复中断的自动化
+- `backend/dsl/api/tasks.py` 的 `start_task` 会在后台触发 `run_codex_prd`
+- `backend/dsl/api/tasks.py` 的 `execute_task` 会在后台触发 `run_codex_task`
+- `backend/dsl/api/tasks.py` 的 `review_task` 会在后台触发 `run_task_review`
+- `backend/dsl/api/tasks.py` 的 `resume_task` 会在后台从持久化工作流阶段恢复中断的自动化
 
 对应的核心实现位于：
 
-- `dsl/services/automation_runner.py`（API 层统一入口）
-- `dsl/services/codex_runner.py`（执行器无关主编排）
-- `dsl/services/runners/`（Runner 协议、注册中心和 CLI 适配器）
+- `backend/dsl/services/automation_runner.py`（API 层统一入口）
+- `backend/dsl/services/codex_runner.py`（执行器无关主编排）
+- `backend/dsl/services/runners/`（Runner 协议、注册中心和 CLI 适配器）
 
 ## 当前实现方式
 

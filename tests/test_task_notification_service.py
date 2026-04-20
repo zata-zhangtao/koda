@@ -5,17 +5,17 @@ from __future__ import annotations
 from datetime import timedelta
 from types import SimpleNamespace
 
-import dsl.models  # noqa: F401
+import backend.dsl.models  # noqa: F401
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from dsl.models.enums import TaskNotificationEventType, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.models.task_notification import TaskNotification
-from dsl.services import email_service
-from dsl.services.task_notification_service import TaskNotificationService
+from backend.dsl.models.enums import TaskNotificationEventType, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.models.task_notification import TaskNotification
+from backend.dsl.services import email_service
+from backend.dsl.services.task_notification_service import TaskNotificationService
 from utils.database import Base
 from utils.helpers import utc_now_naive
 

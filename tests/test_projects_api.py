@@ -10,10 +10,10 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-import dsl.api.projects as projects_api
-from dsl.api.projects import open_project_in_editor, open_project_in_trae
-from dsl.models.project import Project
+import backend.dsl.models  # noqa: F401
+import backend.dsl.api.projects as projects_api
+from backend.dsl.api.projects import open_project_in_editor, open_project_in_trae
+from backend.dsl.models.project import Project
 from utils.database import Base
 
 

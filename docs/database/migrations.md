@@ -4,7 +4,7 @@
 
 当前项目**没有正式迁移系统**。数据库结构由一套共享初始化逻辑负责：
 
-- `dsl.app` 启动时会主动初始化数据库结构
+- `backend.dsl.app` 启动时会主动初始化数据库结构
 - 首次创建数据库会话时也会兜底执行同一套建表逻辑
 
 这意味着 Koda 目前的数据库策略更接近“开发期自动建表”，而不是“生产期可回滚迁移”。
@@ -52,7 +52,7 @@
 
 ### 当前内置补丁
 
-虽然项目没有 Alembic，但 `dsl.app` 里已经有少量启动期补丁逻辑，会对少数已知列执行 `ALTER TABLE ... ADD COLUMN`。例如：
+虽然项目没有 Alembic，但 `backend.dsl.app` 里已经有少量启动期补丁逻辑，会对少数已知列执行 `ALTER TABLE ... ADD COLUMN`。例如：
 
 - `tasks.requirement_brief`
 - `tasks.stage_updated_at`
@@ -66,7 +66,7 @@
 
 ## 推荐变更清单
 
-每次改动 `dsl/models/` 时，至少回答下面几个问题：
+每次改动 `backend/dsl/models/` 时，至少回答下面几个问题：
 
 1. 这次是新增表，还是修改已有表
 2. 现有 `data/dsl.db` 是否还能兼容
@@ -88,7 +88,7 @@
 
 1. 引入 Alembic
 2. 固化基线版本
-3. 把后续所有 `dsl/models/` 变更纳入迁移脚本
+3. 把后续所有 `backend/dsl/models/` 变更纳入迁移脚本
 4. 在 CI 或发布流程中加入迁移检查
 
 !!! note "待补充"

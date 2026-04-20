@@ -10,9 +10,9 @@ from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-import dsl.api.tasks as tasks_api
-from dsl.api.tasks import (
+import backend.dsl.models  # noqa: F401
+import backend.dsl.api.tasks as tasks_api
+from backend.dsl.api.tasks import (
     complete_task,
     create_task,
     destroy_task,
@@ -30,20 +30,20 @@ from dsl.api.tasks import (
     update_task_stage,
     update_task_status,
 )
-from dsl.services import codex_runner
-from dsl.services.prd_file_service import build_task_prd_output_path_contract
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
-from dsl.models.project import Project
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.task_schema import (
+from backend.dsl.services import codex_runner
+from backend.dsl.services.prd_file_service import build_task_prd_output_path_contract
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.task_schema import (
     TaskDestroySchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
-from dsl.services.git_worktree_service import GitWorktreeService, WorktreeDestroyResult
+from backend.dsl.services.git_worktree_service import GitWorktreeService, WorktreeDestroyResult
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 
@@ -2431,7 +2431,7 @@ def test_cancel_task_sends_manual_interruption_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancel should move the task to changes_requested and emit the manual interruption email."""
-    from dsl.services import email_service
+    from backend.dsl.services import email_service
 
     run_account_obj = RunAccount(
         account_display_name="Tester",

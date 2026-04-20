@@ -9,12 +9,12 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from dsl.api.logs import create_log, list_logs
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.dev_log_schema import DevLogCreateSchema
+from backend.dsl.api.logs import create_log, list_logs
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.dev_log_schema import DevLogCreateSchema
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
 

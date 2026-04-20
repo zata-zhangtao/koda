@@ -8,16 +8,16 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.models.enums import TaskLifecycleStatus, TaskScheduleRunStatus, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.task_schedule_schema import (
+import backend.dsl.models  # noqa: F401
+from backend.dsl.models.enums import TaskLifecycleStatus, TaskScheduleRunStatus, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.task_schedule_schema import (
     TaskScheduleCreateSchema,
     TaskScheduleUpdateSchema,
 )
-from dsl.services.task_schedule_service import TaskScheduleService
-from dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
+from backend.dsl.services.task_schedule_service import TaskScheduleService
+from backend.dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
 from utils.database import Base
 from utils.helpers import utc_now_naive
 
@@ -245,7 +245,7 @@ def test_dispatch_task_action_routes_review_schedule_to_review_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Review schedules should call the dedicated review-only task API helper."""
-    import dsl.api.tasks as task_api_module
+    import backend.dsl.api.tasks as task_api_module
 
     task_obj = _create_seed_task(db_session)
     created_task_schedule_obj = TaskScheduleService.create_task_schedule(

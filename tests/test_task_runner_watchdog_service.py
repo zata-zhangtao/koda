@@ -8,14 +8,14 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-import dsl.services.automation_runner as automation_runner
-import dsl.services.task_runner_watchdog_service as watchdog_service
-from dsl.services.task_runner_watchdog_service import TaskRunnerWatchdogService
+import backend.dsl.models  # noqa: F401
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+import backend.dsl.services.automation_runner as automation_runner
+import backend.dsl.services.task_runner_watchdog_service as watchdog_service
+from backend.dsl.services.task_runner_watchdog_service import TaskRunnerWatchdogService
 from utils.database import Base
 from utils.helpers import utc_now_naive
 

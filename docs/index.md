@@ -15,7 +15,7 @@ Koda 当前的真实主线不是“通用 Python 模板”，而是一套围绕 
 - **需求卡片工作流**：`backlog`、`prd_generating`、`implementation_in_progress` 等阶段已经进入数据模型与前端展示。
 - **任务时间线**：文本日志、图片附件、状态标记和 AI 输出统一归档到同一条需求历史里。
 - **项目绑定与 Worktree**：任务可关联本地 Git 仓库，并在启动时创建独立 worktree。新 worktree 默认创建在仓库同级的 `task/` 目录下，例如项目仓库是 `/Users/zata/code/my-app` 时，任务 worktree 默认会落到 `/Users/zata/code/task/my-app-wt-12345678`。
-- **多执行器自动化**：后端通过统一编排层调用 `dsl/services/codex_runner.py`（执行器无关主流程）与 `dsl/services/runners/`（CLI 适配层），按 `KODA_AUTOMATION_RUNNER` 选择 `codex` 或 `claude`。
+- **多执行器自动化**：后端通过统一编排层调用 `backend/dsl/services/codex_runner.py`（执行器无关主流程）与 `backend/dsl/services/runners/`（CLI 适配层），按 `KODA_AUTOMATION_RUNNER` 选择 `codex` 或 `claude`。
 - **媒体与导出**：支持图片上传、缩略图生成、Markdown 编年史导出。
 - **AI 模型配置工具**：`ai_agent/` 中保留了可复用的模型注册与凭据解析能力。
 
@@ -38,29 +38,29 @@ just dsl-dev
 
 ### 入口点
 
-- `main.py`：后端启动入口，调用 `uvicorn.run("dsl.app:app", ...)`
-- `dsl/app.py`：FastAPI 应用工厂，负责生命周期、路由注册与媒体挂载
+- `main.py`：后端启动入口，调用 `uvicorn.run("backend.dsl.app:app", ...)`
+- `backend/dsl/app.py`：FastAPI 应用工厂，负责生命周期、路由注册与媒体挂载
 - `frontend/src/main.tsx`：前端挂载入口
 - `justfile`：统一命令入口，已包含 `docs-serve`、`docs-build`、`dsl-dev`、`run`
 
 ### 核心逻辑
 
-- `dsl/api/`：HTTP 路由层，按 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 拆分
-- `dsl/services/`：任务编排、日志解析、媒体存储、编年史导出、Codex 自动化
+- `backend/dsl/api/`：HTTP 路由层，按 `run_accounts`、`projects`、`tasks`、`logs`、`media`、`chronicle` 拆分
+- `backend/dsl/services/`：任务编排、日志解析、媒体存储、编年史导出、Codex 自动化
 - `frontend/src/App.tsx`：需求工作台主界面，负责任务列表、阶段按钮、轮询与 PRD 展示
 - `utils/`：配置、日志、数据库连接等底座能力
 
 ### 数据层
 
-- ORM 模型：`dsl/models/project.py`、`dsl/models/task.py`、`dsl/models/dev_log.py`、`dsl/models/run_account.py`
-- Pydantic Schema：`dsl/schemas/`
+- ORM 模型：`backend/dsl/models/project.py`、`backend/dsl/models/task.py`、`backend/dsl/models/dev_log.py`、`backend/dsl/models/run_account.py`
+- Pydantic Schema：`backend/dsl/schemas/`
 - 数据库接入：`utils/database.py`
 - 默认数据库：`data/dsl.db`
 
 ### AI 资产
 
-- `dsl/services/codex_runner.py`：执行器无关编排、Prompt 构造、实时日志回写、阶段推进
-- `dsl/services/runners/`：Runner 协议、注册中心与 Codex / Claude CLI 适配器
+- `backend/dsl/services/codex_runner.py`：执行器无关编排、Prompt 构造、实时日志回写、阶段推进
+- `backend/dsl/services/runners/`：Runner 协议、注册中心与 Codex / Claude CLI 适配器
 - `ai_agent/utils/model_loader.py`：模型配置读取与聊天模型实例化
 - `ai_agent/utils/models.json`：提供商与模型注册表
 - `ai_agent/.env.example`：AI 服务凭据示例

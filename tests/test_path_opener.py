@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import dsl.services.path_opener as path_opener
-from dsl.services.path_opener import (
+import backend.dsl.services.path_opener as path_opener
+from backend.dsl.services.path_opener import (
     PathOpenCommandError,
     PathOpenTargetNotFoundError,
     build_path_open_command,

@@ -11,23 +11,23 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.api import chronicle as chronicle_api
-from dsl.api import tasks as tasks_api
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import (
+import backend.dsl.models  # noqa: F401
+from backend.dsl.api import chronicle as chronicle_api
+from backend.dsl.api import tasks as tasks_api
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import (
     DevLogStateTag,
     TaskArtifactType,
     TaskLifecycleStatus,
     WorkflowStage,
 )
-from dsl.models.project import Project
-from dsl.models.run_account import RunAccount
-from dsl.models.task import TASK_REQUIREMENT_BRIEF_MAX_LENGTH, Task
-from dsl.models.task_artifact import TaskArtifact
-from dsl.models.task_reference_link import TaskReferenceLink
-from dsl.schemas.chronicle_schema import ProjectTimelineSummaryRequestSchema
-from dsl.schemas.task_schema import TaskReferenceCreateSchema
+from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import TASK_REQUIREMENT_BRIEF_MAX_LENGTH, Task
+from backend.dsl.models.task_artifact import TaskArtifact
+from backend.dsl.models.task_reference_link import TaskReferenceLink
+from backend.dsl.schemas.chronicle_schema import ProjectTimelineSummaryRequestSchema
+from backend.dsl.schemas.task_schema import TaskReferenceCreateSchema
 from utils.database import Base
 
 
@@ -209,7 +209,7 @@ def test_project_timeline_detail_captures_prd_and_planning_snapshots(
                 text_content=(
                     "Planning with files:\n"
                     "- `frontend/src/App.tsx`\n"
-                    "- `dsl/api/chronicle.py`\n"
+                    "- `backend/dsl/api/chronicle.py`\n"
                 ),
                 state_tag=DevLogStateTag.OPTIMIZATION,
             )

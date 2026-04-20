@@ -7,7 +7,7 @@
 ::: main.main
     handler: python
 
-::: dsl.app.create_application
+::: backend.dsl.app.create_application
     handler: python
 
 ## 配置与基础设施
@@ -29,7 +29,7 @@
 
 ## 路由层
 
-::: dsl.api.run_accounts
+::: backend.dsl.api.run_accounts
     handler: python
     options:
       members:
@@ -38,7 +38,7 @@
         - activate_run_account
         - get_current_run_account
 
-::: dsl.api.projects
+::: backend.dsl.api.projects
     handler: python
     options:
       members:
@@ -49,7 +49,7 @@
         - open_project_in_trae
         - delete_project
 
-::: dsl.api.email_settings
+::: backend.dsl.api.email_settings
     handler: python
     options:
       members:
@@ -57,7 +57,7 @@
         - upsert_email_settings
         - test_email_settings
 
-::: dsl.api.tasks
+::: backend.dsl.api.tasks
     handler: python
     options:
       members:
@@ -81,7 +81,7 @@
         - create_task_reference
         - get_task
 
-::: dsl.api.task_schedules
+::: backend.dsl.api.task_schedules
     handler: python
     options:
       members:
@@ -91,7 +91,7 @@
         - run_task_schedule_now
         - update_task_schedule
         - delete_task_schedule
-::: dsl.api.task_qa
+::: backend.dsl.api.task_qa
     handler: python
     options:
       members:
@@ -99,28 +99,28 @@
         - create_task_qa_message
         - convert_task_qa_message_to_feedback_draft
 
-::: dsl.schemas.task_schema.TaskDestroySchema
+::: backend.dsl.schemas.task_schema.TaskDestroySchema
     handler: python
 
-::: dsl.schemas.task_schema.TaskReferenceCreateSchema
+::: backend.dsl.schemas.task_schema.TaskReferenceCreateSchema
     handler: python
 
-::: dsl.schemas.task_schema.TaskReferenceResponseSchema
+::: backend.dsl.schemas.task_schema.TaskReferenceResponseSchema
     handler: python
 
-::: dsl.schemas.chronicle_schema.ProjectTimelineEntrySchema
+::: backend.dsl.schemas.chronicle_schema.ProjectTimelineEntrySchema
     handler: python
 
-::: dsl.schemas.chronicle_schema.ProjectTimelineTaskDetailSchema
+::: backend.dsl.schemas.chronicle_schema.ProjectTimelineTaskDetailSchema
     handler: python
 
-::: dsl.schemas.chronicle_schema.ProjectTimelineSummaryRequestSchema
+::: backend.dsl.schemas.chronicle_schema.ProjectTimelineSummaryRequestSchema
     handler: python
 
-::: dsl.schemas.chronicle_schema.ProjectTimelineSummaryResponseSchema
+::: backend.dsl.schemas.chronicle_schema.ProjectTimelineSummaryResponseSchema
     handler: python
 
-::: dsl.api.logs
+::: backend.dsl.api.logs
     handler: python
     options:
       members:
@@ -131,7 +131,7 @@
         - get_review_queue
         - update_ai_review
 
-::: dsl.api.media
+::: backend.dsl.api.media
     handler: python
     options:
       members:
@@ -139,7 +139,7 @@
         - upload_attachment
         - get_image
 
-::: dsl.api.chronicle
+::: backend.dsl.api.chronicle
     handler: python
     options:
       members:
@@ -158,64 +158,64 @@
 
 ## 响应 Schema
 
-::: dsl.schemas.task_schema.TaskCreateSchema
+::: backend.dsl.schemas.task_schema.TaskCreateSchema
     handler: python
 
-::: dsl.schemas.task_schema.TaskResponseSchema
+::: backend.dsl.schemas.task_schema.TaskResponseSchema
     handler: python
 
-::: dsl.schemas.task_schema.TaskCardMetadataSchema
+::: backend.dsl.schemas.task_schema.TaskCardMetadataSchema
     handler: python
 
-::: dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
+::: backend.dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
     handler: python
 
-::: dsl.schemas.task_schedule_schema.TaskScheduleRunResponseSchema
+::: backend.dsl.schemas.task_schedule_schema.TaskScheduleRunResponseSchema
     handler: python
 
-::: dsl.schemas.task_qa_schema.TaskQaMessageResponseSchema
+::: backend.dsl.schemas.task_qa_schema.TaskQaMessageResponseSchema
     handler: python
 
-::: dsl.schemas.task_qa_schema.TaskQaCreateResponseSchema
+::: backend.dsl.schemas.task_qa_schema.TaskQaCreateResponseSchema
     handler: python
 
-::: dsl.schemas.task_qa_schema.TaskQaFeedbackDraftResponseSchema
+::: backend.dsl.schemas.task_qa_schema.TaskQaFeedbackDraftResponseSchema
     handler: python
 
 ## 数据模型
 
-::: dsl.models.run_account.RunAccount
+::: backend.dsl.models.run_account.RunAccount
     handler: python
 
-::: dsl.models.project.Project
+::: backend.dsl.models.project.Project
     handler: python
 
-::: dsl.models.task.Task
+::: backend.dsl.models.task.Task
     handler: python
 
-::: dsl.models.dev_log.DevLog
+::: backend.dsl.models.dev_log.DevLog
     handler: python
 
-::: dsl.models.task_qa_message.TaskQaMessage
+::: backend.dsl.models.task_qa_message.TaskQaMessage
     handler: python
 
-::: dsl.models.email_settings.EmailSettings
+::: backend.dsl.models.email_settings.EmailSettings
     handler: python
 
-::: dsl.models.task_notification.TaskNotification
+::: backend.dsl.models.task_notification.TaskNotification
     handler: python
 
-::: dsl.models.task_schedule.TaskSchedule
+::: backend.dsl.models.task_schedule.TaskSchedule
     handler: python
 
-::: dsl.models.task_schedule_run.TaskScheduleRun
-::: dsl.models.task_artifact.TaskArtifact
+::: backend.dsl.models.task_schedule_run.TaskScheduleRun
+::: backend.dsl.models.task_artifact.TaskArtifact
     handler: python
 
-::: dsl.models.task_reference_link.TaskReferenceLink
+::: backend.dsl.models.task_reference_link.TaskReferenceLink
     handler: python
 
-::: dsl.models.enums
+::: backend.dsl.models.enums
     handler: python
     options:
       members:
@@ -234,7 +234,7 @@
 
 ## 服务层
 
-::: dsl.services.project_service.ProjectService
+::: backend.dsl.services.project_service.ProjectService
     handler: python
     options:
       members:
@@ -243,7 +243,7 @@
         - get_project_by_id
         - delete_project
 
-::: dsl.services.task_service.TaskService
+::: backend.dsl.services.task_service.TaskService
     handler: python
     options:
       members:
@@ -258,7 +258,7 @@
         - destroy_task
         - get_active_task
 
-::: dsl.services.task_notification_service.TaskNotificationService
+::: backend.dsl.services.task_notification_service.TaskNotificationService
     handler: python
     options:
       members:
@@ -268,7 +268,7 @@
         - send_stalled_task_notification
         - scan_and_send_stalled_task_notifications
 
-::: dsl.services.task_schedule_service.TaskScheduleService
+::: backend.dsl.services.task_schedule_service.TaskScheduleService
     handler: python
     options:
       members:
@@ -278,14 +278,14 @@
         - delete_task_schedule
         - list_task_schedule_runs
 
-::: dsl.services.task_scheduler_dispatcher.TaskSchedulerDispatcher
+::: backend.dsl.services.task_scheduler_dispatcher.TaskSchedulerDispatcher
     handler: python
     options:
       members:
         - dispatch_due_schedules
         - dispatch_schedule_run_now
 
-::: dsl.services.log_service.LogService
+::: backend.dsl.services.log_service.LogService
     handler: python
     options:
       members:
@@ -297,7 +297,7 @@
         - update_ai_review
         - count_logs_by_state
 
-::: dsl.services.task_qa_service.TaskQaService
+::: backend.dsl.services.task_qa_service.TaskQaService
     handler: python
     options:
       members:
@@ -307,7 +307,7 @@
         - build_task_context_markdown
         - build_feedback_draft_from_message
 
-::: dsl.services.media_service.MediaService
+::: backend.dsl.services.media_service.MediaService
     handler: python
     options:
       members:
@@ -316,7 +316,7 @@
         - save_attachment
         - get_image_path
 
-::: dsl.services.chronicle_service.ChronicleService
+::: backend.dsl.services.chronicle_service.ChronicleService
     handler: python
     options:
       members:
@@ -327,7 +327,7 @@
         - summarize_project_timeline
         - export_markdown
 
-::: dsl.services.terminal_launcher
+::: backend.dsl.services.terminal_launcher
     handler: python
     options:
       members:
@@ -335,7 +335,7 @@
         - build_log_tail_terminal_command
         - open_log_tail_terminal
 
-::: dsl.services.automation_runner
+::: backend.dsl.services.automation_runner
     handler: python
     options:
       members:
@@ -348,7 +348,7 @@
         - run_task_post_review_lint_resume
         - run_task_completion
 
-::: dsl.services.runners.registry
+::: backend.dsl.services.runners.registry
     handler: python
     options:
       members:
@@ -356,7 +356,7 @@
         - get_runner_by_kind
         - resolve_runner_kind
 
-::: dsl.services.path_opener
+::: backend.dsl.services.path_opener
     handler: python
     options:
       members:
@@ -366,7 +366,7 @@
         - build_path_open_command
         - open_path_in_editor
 
-::: dsl.services.codex_runner
+::: backend.dsl.services.codex_runner
     handler: python
     options:
       members:

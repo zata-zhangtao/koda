@@ -6,8 +6,8 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from dsl.services import automation_runner, codex_runner
-from dsl.services.runners.registry import (
+from backend.dsl.services import automation_runner, codex_runner
+from backend.dsl.services.runners.registry import (
     get_runner_by_kind,
     list_supported_runner_kind_list,
     resolve_runner_kind,

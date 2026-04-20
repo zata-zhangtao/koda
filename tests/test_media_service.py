@@ -10,7 +10,7 @@ from fastapi import UploadFile
 from PIL import Image
 from starlette.datastructures import Headers
 
-from dsl.services.media_service import MediaService
+from backend.dsl.services.media_service import MediaService
 from utils.settings import config
 
 

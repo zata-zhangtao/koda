@@ -12,14 +12,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.api.task_qa import (
+import backend.dsl.models  # noqa: F401
+from backend.dsl.api.task_qa import (
     convert_task_qa_message_to_feedback_draft,
     create_task_qa_message,
     list_task_qa_messages,
 )
-from dsl.models.dev_log import DevLog
-from dsl.models.enums import (
+from backend.dsl.models.dev_log import DevLog
+from backend.dsl.models.enums import (
     DevLogStateTag,
     TaskLifecycleStatus,
     TaskQaContextScope,
@@ -27,11 +27,11 @@ from dsl.models.enums import (
     TaskQaMessageRole,
     WorkflowStage,
 )
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.models.task_qa_message import TaskQaMessage
-from dsl.schemas.task_qa_schema import TaskQaMessageCreateSchema
-from dsl.services.task_qa_service import TaskQaService
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.models.task_qa_message import TaskQaMessage
+from backend.dsl.schemas.task_qa_schema import TaskQaMessageCreateSchema
+from backend.dsl.services.task_qa_service import TaskQaService
 from utils.database import Base
 
 
@@ -360,11 +360,11 @@ def test_list_task_qa_messages_releases_expired_pending_reply(
     task_obj = _create_task(db_session, run_account_obj.id)
     stale_created_at = datetime(2026, 3, 26, 9, 0, 0)
     monkeypatch.setattr(
-        "dsl.services.task_qa_service._TASK_QA_PENDING_REPLY_EXPIRATION_SECONDS",
+        "backend.dsl.services.task_qa_service._TASK_QA_PENDING_REPLY_EXPIRATION_SECONDS",
         30.0,
     )
     monkeypatch.setattr(
-        "dsl.services.task_qa_service.utc_now_naive",
+        "backend.dsl.services.task_qa_service.utc_now_naive",
         lambda: datetime(2026, 3, 26, 9, 1, 0),
     )
 
@@ -418,11 +418,11 @@ def test_create_question_releases_expired_pending_reply_before_accepting_new_one
     task_obj = _create_task(db_session, run_account_obj.id)
     stale_created_at = datetime(2026, 3, 26, 9, 0, 0)
     monkeypatch.setattr(
-        "dsl.services.task_qa_service._TASK_QA_PENDING_REPLY_EXPIRATION_SECONDS",
+        "backend.dsl.services.task_qa_service._TASK_QA_PENDING_REPLY_EXPIRATION_SECONDS",
         30.0,
     )
     monkeypatch.setattr(
-        "dsl.services.task_qa_service.utc_now_naive",
+        "backend.dsl.services.task_qa_service.utc_now_naive",
         lambda: datetime(2026, 3, 26, 9, 1, 0),
     )
 
@@ -545,7 +545,7 @@ def test_process_pending_reply_marks_message_completed_on_success(
     )
 
     monkeypatch.setattr(
-        "dsl.services.task_qa_service.create_task_qa_chat_model",
+        "backend.dsl.services.task_qa_service.create_task_qa_chat_model",
         lambda **_kwargs: _FakeChatModel(),
     )
 
@@ -585,7 +585,7 @@ def test_process_pending_reply_marks_message_failed_on_model_error(
         raise RuntimeError("missing API key")
 
     monkeypatch.setattr(
-        "dsl.services.task_qa_service.create_task_qa_chat_model",
+        "backend.dsl.services.task_qa_service.create_task_qa_chat_model",
         _raise_model_error,
     )
 
@@ -637,7 +637,7 @@ def test_generate_answer_markdown_passes_timeout_controls_to_chat_model(
         return _FakeChatModel()
 
     monkeypatch.setattr(
-        "dsl.services.task_qa_service.create_task_qa_chat_model",
+        "backend.dsl.services.task_qa_service.create_task_qa_chat_model",
         _fake_create_task_qa_chat_model,
     )
 

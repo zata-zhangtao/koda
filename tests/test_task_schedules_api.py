@@ -9,8 +9,8 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-import dsl.models  # noqa: F401
-from dsl.api.task_schedules import (
+import backend.dsl.models  # noqa: F401
+from backend.dsl.api.task_schedules import (
     create_task_schedule,
     delete_task_schedule,
     list_task_schedule_runs,
@@ -18,14 +18,14 @@ from dsl.api.task_schedules import (
     run_task_schedule_now,
     update_task_schedule,
 )
-from dsl.models.enums import TaskLifecycleStatus, TaskScheduleRunStatus, WorkflowStage
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.schemas.task_schedule_schema import (
+from backend.dsl.models.enums import TaskLifecycleStatus, TaskScheduleRunStatus, WorkflowStage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.schemas.task_schedule_schema import (
     TaskScheduleCreateSchema,
     TaskScheduleUpdateSchema,
 )
-from dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
+from backend.dsl.services.task_scheduler_dispatcher import TaskSchedulerDispatcher
 from utils.database import Base
 
 

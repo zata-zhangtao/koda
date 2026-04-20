@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dsl.services.prd_file_service import (
+from backend.dsl.services.prd_file_service import (
     build_task_prd_file_prefix,
     ensure_task_prd_file_contract,
     find_task_prd_file_path,

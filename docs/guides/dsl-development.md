@@ -5,17 +5,19 @@
 当前 DSL 是一个前后端分离的单机工作台：
 
 - `frontend/` 提供需求卡片与时间线界面
-- `dsl/` 提供 FastAPI 路由、服务层与 ORM 模型
+- `backend/dsl/` 提供 FastAPI 路由、服务层与 ORM 模型
 - `utils/` 提供配置、数据库和日志底座
 - `ai_agent/` 提供与主业务链路松耦合的模型配置工具
-- `dsl/services/task_qa_service.py` 则把这层工具能力用于任务内独立问答，而不是复用 `DevLog`
+- `backend/dsl/services/task_qa_service.py` 则把这层工具能力用于任务内独立问答，而不是复用 `DevLog`
 
 ## 后端结构
 
+后端包从仓库根目录的 `backend/` 开始。当前 DSL 应用位于 `backend/dsl/`，导入路径统一写作 `backend.dsl...`。新增后端模块时，先按业务域确定目录和边界，再在模块内部保持简洁架构：路由层处理 HTTP 合同，服务层承载用例和业务规则，模型/Schema 只表达数据结构，外部系统通过服务层或适配器接入。
+
 ### 启动链路
 
-1. `main.py` 调用 `uvicorn.run("dsl.app:app", ...)`
-2. `dsl.app.create_application()` 创建 FastAPI 应用
+1. `main.py` 调用 `uvicorn.run("backend.dsl.app:app", ...)`
+2. `backend.dsl.app.create_application()` 创建 FastAPI 应用
 3. `lifespan` 在启动时调用共享数据库初始化逻辑
 4. `lifespan` 同时启动停滞任务提醒扫描器与任务调度分发循环
 5. 如果某个调用路径提前创建数据库会话，`utils.database.DatabaseSession` 也会兜底补齐缺失表结构
@@ -25,10 +27,10 @@
 
 ### 路由与服务分工
 
-- `dsl/api/`：负责参数校验、依赖注入、HTTP 异常与状态码
-- `dsl/services/`：负责业务规则与状态推进
-- `dsl/models/`：定义数据库实体
-- `dsl/schemas/`：定义请求与响应模型
+- `backend/dsl/api/`：负责参数校验、依赖注入、HTTP 异常与状态码
+- `backend/dsl/services/`：负责业务规则与状态推进
+- `backend/dsl/models/`：定义数据库实体
+- `backend/dsl/schemas/`：定义请求与响应模型
 - 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` / `review_task` 路由逻辑；其中 `review_task` 只写日志，不改变任务阶段
 - 热路径约定：任务列表要通过聚合查询计算 `log_count`，日志列表要在主查询里带出 `task_title`，不要依赖关系懒加载去补齐列表页字段
 - sidecar Q&A 约定：问答消息必须落到独立表，默认不写 `DevLog`，并且不得隐式改动 `workflow_stage`
@@ -36,8 +38,8 @@
 新增后端功能时，推荐保持下面的修改顺序：
 
 1. 先定义或调整 Pydantic Schema
-2. 在 `dsl/services/` 实现业务规则
-3. 在 `dsl/api/` 暴露路由
+2. 在 `backend/dsl/services/` 实现业务规则
+3. 在 `backend/dsl/api/` 暴露路由
 4. 在前端 `api/client.ts` 对接接口
 5. 更新文档并执行验证
 
@@ -152,13 +154,13 @@
 
 ### 改媒体上传时
 
-- 优先在 `dsl/services/media_service.py` 保持文件路径策略一致
+- 优先在 `backend/dsl/services/media_service.py` 保持文件路径策略一致
 - 任何路径字段变更都要同步更新文档与前端展示逻辑
 
 ### 改 AI 自动化时
 
-- 先看 `dsl/services/automation_runner.py`（API 入口）和 `dsl/services/codex_runner.py`（主编排）
-- 再看 `dsl/services/runners/`（runner 协议、注册中心和 Codex / Claude 适配器）
+- 先看 `backend/dsl/services/automation_runner.py`（API 入口）和 `backend/dsl/services/codex_runner.py`（主编排）
+- 再看 `backend/dsl/services/runners/`（runner 协议、注册中心和 Codex / Claude 适配器）
 - 明确是改 PRD Prompt 还是实现 Prompt
 - 注意日志写回、阶段推进和 `/tmp` 实时日志文件三者必须保持一致
 - 若修改 self-review / lint 自动化逻辑，要同时核对 review-only Prompt、review-fix Prompt、lint-fix Prompt、失败通知时机以及 `TaskService.execute_task(...)` 的入口契约

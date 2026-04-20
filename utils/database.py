@@ -242,7 +242,7 @@ engine = create_database_engine()
 
 def _import_dsl_models() -> None:
     """导入 DSL 所有 ORM 模型，确保 Base.metadata 注册完整."""
-    import dsl.models  # noqa: F401
+    import backend.dsl.models  # noqa: F401
 
 
 def _run_incremental_schema_patches(database_engine: Engine) -> None:

@@ -94,7 +94,7 @@ KODA_OPEN_PATH_COMMAND_TEMPLATE='trae-cn {target_path_shell}'
 
 ### 注意点
 
-- `SERVE_FRONTEND_DIST=true` 时，`dsl/app.py` 会要求 `FRONTEND_DIST_PATH/index.html` 存在；如果未先构建前端，会直接失败并提示重新执行 `npm --prefix frontend run build`。
+- `SERVE_FRONTEND_DIST=true` 时，`backend/dsl/app.py` 会要求 `FRONTEND_DIST_PATH/index.html` 存在；如果未先构建前端，会直接失败并提示重新执行 `npm --prefix frontend run build`。
 - `just dsl-dev` 不依赖上述打包参数，仍然使用 Vite 开发服务器。
 - 调度器是单实例轮询模型；若暂不需要自动触发，可把 `SCHEDULER_ENABLE` 设为 `false`。
 - 根目录 `.env.example` 故意保持 `SERVE_FRONTEND_DIST=false`；如果要直接套用公网打包模式，请复制 `deploy/public-forward/agent.env.example`。
@@ -179,7 +179,7 @@ KODA_OPEN_PATH_COMMAND_TEMPLATE='trae-cn {target_path_shell}'
 至少同步检查：
 
 1. `frontend/vite.config.ts`
-2. `dsl/app.py` 的 CORS 白名单
+2. `backend/dsl/app.py` 的 CORS 白名单
 3. `justfile`
 4. `deploy/public-forward/docker-compose.yml`
 5. 本页和[部署说明](./deployment.md)

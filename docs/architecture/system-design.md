@@ -29,11 +29,17 @@ flowchart LR
 | 位置 | 角色 | 说明 |
 | --- | --- | --- |
 | `main.py` | 后端启动入口 | 启动 Uvicorn，开发模式监听 `8000` |
-| `dsl/app.py` | 应用工厂 | 注册路由、生命周期、媒体挂载与健康检查 |
+| `backend/dsl/app.py` | 应用工厂 | 注册路由、生命周期、媒体挂载与健康检查 |
 | `frontend/src/main.tsx` | 前端入口 | 挂载 React 应用 |
 | `justfile` | 命令编排入口 | 提供 `run`、`dsl-dev`、`docs-serve`、`docs-build` 等命令 |
 
 ## 模块职责
+
+### 后端架构规则
+
+后端代码统一放在 `backend/` 下，当前 DSL 应用的 Python 包路径是 `backend.dsl`。后续新增后端能力时，默认采用领域分层架构：先按业务域划分边界，再在域内保持路由层、应用/服务层、领域规则、数据模型/Schema、基础设施适配器的明确分工。
+
+模块内部采用简洁架构约束依赖方向：API/路由层只负责 HTTP 合同、参数校验、依赖注入和异常映射；服务层负责用例编排与业务规则；模型和 Schema 不触发副作用；CLI runner、WebDAV、邮件、文件系统、隧道等外部能力通过服务层或小型适配器调用。新的业务规则不要写进路由函数，也不要让领域逻辑依赖 FastAPI 请求对象或前端展示细节。
 
 ### 前端层
 
@@ -45,12 +51,12 @@ flowchart LR
 
 ### 路由层
 
-- `dsl/api/tasks.py`：任务创建、阶段更新、执行触发、PRD 读取、打开目录与日志窗口
-- `dsl/api/task_qa.py`：任务内独立问答查询、提问与“整理成反馈草稿”
-- `dsl/api/logs.py`：日志创建、命令解析、AI 校正队列
-- `dsl/api/media.py`：图片与附件上传
-- `dsl/api/chronicle.py`：时间线与 Markdown 导出
-- `dsl/api/projects.py` 与 `dsl/api/run_accounts.py`：项目与运行环境上下文管理
+- `backend/dsl/api/tasks.py`：任务创建、阶段更新、执行触发、PRD 读取、打开目录与日志窗口
+- `backend/dsl/api/task_qa.py`：任务内独立问答查询、提问与“整理成反馈草稿”
+- `backend/dsl/api/logs.py`：日志创建、命令解析、AI 校正队列
+- `backend/dsl/api/media.py`：图片与附件上传
+- `backend/dsl/api/chronicle.py`：时间线与 Markdown 导出
+- `backend/dsl/api/projects.py` 与 `backend/dsl/api/run_accounts.py`：项目与运行环境上下文管理
 
 ### 服务层
 

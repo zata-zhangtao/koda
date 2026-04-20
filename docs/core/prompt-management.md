@@ -4,7 +4,7 @@
 
 当前仓库里的 Prompt 还没有独立成模板文件，而是直接写在 Python 代码里。这是一个典型的“先把自动化跑通，再逐步沉淀治理”的状态。
 
-如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `dsl/services/codex_runner.py`（执行器无关主编排）与 `dsl/services/runners/`（CLI 适配层）。
+如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `backend/dsl/services/codex_runner.py`（执行器无关主编排）与 `backend/dsl/services/runners/`（CLI 适配层）。
 
 ## Prompt 位置
 
@@ -96,7 +96,7 @@
 
 ## 推荐变更流程
 
-1. 修改 `dsl/services/codex_runner.py`
+1. 修改 `backend/dsl/services/codex_runner.py`
 2. 为 Prompt 合同补充或更新单元测试
 3. 重新启动或重新触发对应任务
 4. 观察 `/tmp/koda-<task短ID>.log`

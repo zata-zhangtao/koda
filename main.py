@@ -20,7 +20,7 @@ def main():
     logger.info("Starting DevStream Log (DSL) server on port %d...", server_port)
 
     uvicorn.run(
-        "dsl.app:app",
+        "backend.dsl.app:app",
         host="0.0.0.0",
         port=server_port,
         reload=not config.SERVE_FRONTEND_DIST,

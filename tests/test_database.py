@@ -9,16 +9,16 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
-import dsl.models  # noqa: F401
+import backend.dsl.models  # noqa: F401
 import utils.database as database_module
-from dsl.models.enums import (
+from backend.dsl.models.enums import (
     TaskQaContextScope,
     TaskQaGenerationStatus,
     TaskQaMessageRole,
 )
-from dsl.models.run_account import RunAccount
-from dsl.models.task import Task
-from dsl.models.task_qa_message import TaskQaMessage
+from backend.dsl.models.run_account import RunAccount
+from backend.dsl.models.task import Task
+from backend.dsl.models.task_qa_message import TaskQaMessage
 from utils.database import DatabaseSession
 
 
