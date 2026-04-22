@@ -4749,6 +4749,11 @@ function App() {
                           </span>
                         </span>
                       </div>
+                      <p className="devflow-branch-health-banner__tip">
+                        <strong>Tip:</strong> 未开始任务时，这里先显示按 task
+                        ID 推导的占位 branch。开始任务并创建 worktree 后，这里会刷新为真实分支名；
+                        如果命名阶段生成了语义后缀，也会一并显示。
+                      </p>
 
                       {isSelectedTaskManualCompletionCandidate ? (
                         <div className="devflow-branch-health-banner__checklist">

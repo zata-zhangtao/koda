@@ -1017,6 +1017,20 @@ img {
   font-weight: 700;
 }
 
+.devflow-branch-health-banner__tip {
+  margin: -2px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 118, 110, 0.08);
+  color: #115e59;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.devflow-branch-health-banner__tip strong {
+  font-weight: 900;
+}
+
 .devflow-branch-health-banner__checklist {
   display: flex;
   flex-direction: column;
