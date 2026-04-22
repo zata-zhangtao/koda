@@ -204,6 +204,7 @@ type MutationName =
   | "open_trae"
   | "open_terminal"
   | "cancel"
+  | "force_interrupt"
   | null;
 
 const GUEST_USER_LABEL = "Guest User";
@@ -211,6 +212,13 @@ const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_ABANDON_MARKER = "<!-- requirement-change:abandon -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
 const DESTROY_REASON_MIN_LENGTH = 5;
+const FORCE_INTERRUPTIBLE_STAGE_SET = new Set<WorkflowStage>([
+  WorkflowStage.PRD_GENERATING,
+  WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+  WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+  WorkflowStage.TEST_IN_PROGRESS,
+  WorkflowStage.PR_PREPARING,
+]);
 
 const CONTINUE_COMMAND_PATTERNS = [
   /^go\s+on$/i,
@@ -274,6 +282,10 @@ let hasInitializedMermaidRenderer = false;
 function _isContinueCommand(text: string): boolean {
   const trimmed = text.trim();
   return CONTINUE_COMMAND_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+function isForceInterruptibleStage(workflowStage: WorkflowStage | null): boolean {
+  return workflowStage !== null && FORCE_INTERRUPTIBLE_STAGE_SET.has(workflowStage);
 }
 
 function resolveBrowserTimezoneName(): string | null {
@@ -1283,6 +1295,11 @@ function App() {
 
   const isSelectedTaskInActiveExecution =
     selectedTask?.is_codex_task_running ?? false;
+  const canForceInterruptSelectedTask =
+    selectedTask !== null &&
+    isForceInterruptibleStage(selectedTaskStage) &&
+    selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+    selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED;
   const hasAnyTaskInActiveExecution = useMemo(
     () => taskList.some((taskItem) => taskItem.is_codex_task_running),
     [taskList]
@@ -2716,6 +2733,35 @@ function App() {
       console.error(err);
       setErrorMessage(
         err instanceof Error ? err.message : "中断失败，请手动刷新页面。"
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleForceInterruptTask(taskItem: Task): Promise<void> {
+    const isForceInterruptConfirmed = window.confirm(
+      "强制中断会立即清理任务运行态，并把阶段回退到“待修改”。这适用于自动化卡死或必须立刻停止的场景。继续吗？"
+    );
+    if (!isForceInterruptConfirmed) {
+      return;
+    }
+
+    setActiveMutationName("force_interrupt");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const updatedTask = await taskApi.forceInterrupt(taskItem.id);
+      setTaskList((prev) =>
+        prev.map((existingTask) =>
+          existingTask.id === updatedTask.id ? updatedTask : existingTask
+        )
+      );
+      setSuccessMessage("已强制中断当前任务，任务已回退到待修改阶段。");
+    } catch (err) {
+      console.error(err);
+      setErrorMessage(
+        err instanceof Error ? err.message : "强制中断失败，请手动刷新页面。"
       );
     } finally {
       setActiveMutationName(null);
@@ -4564,6 +4610,20 @@ function App() {
                         </>
                       ) : null}
 
+                      {/* ── 执行阶段卡死兜底: 强制中断 ── */}
+                      {canForceInterruptSelectedTask && !isSelectedTaskInActiveExecution ? (
+                        <ActionButton
+                          variant="outline"
+                          busy={activeMutationName === "force_interrupt"}
+                          onClick={() => {
+                            void handleForceInterruptTask(selectedTask);
+                          }}
+                        >
+                          <AlertTriangleIcon className="devflow-icon devflow-icon--small" />
+                          <span>强制中断</span>
+                        </ActionButton>
+                      ) : null}
+
                       {/* ── 打开项目根目录（有关联项目时始终显示） ── */}
                       {selectedTask.project_id &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
@@ -5207,10 +5267,28 @@ function App() {
                               type="button"
                               className="devflow-execution-banner__cancel-btn"
                               title="中断 codex 并回退至修改请求阶段"
-                              disabled={activeMutationName === "cancel"}
+                              disabled={
+                                activeMutationName === "cancel" ||
+                                activeMutationName === "force_interrupt"
+                              }
                               onClick={() => { void handleCancelTask(selectedTask); }}
                             >
                               <span>⏹ 中断</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="devflow-execution-banner__force-btn"
+                              title="强制清理运行态并回退至修改请求阶段"
+                              disabled={
+                                activeMutationName === "cancel" ||
+                                activeMutationName === "force_interrupt"
+                              }
+                              onClick={() => {
+                                void handleForceInterruptTask(selectedTask);
+                              }}
+                            >
+                              <AlertTriangleIcon className="devflow-icon devflow-icon--tiny" />
+                              <span>强制中断</span>
                             </button>
                           </div>
                         ) : null}

@@ -119,6 +119,13 @@ _WORKFLOW_STAGE_LABEL_MAP: dict[WorkflowStage, str] = {
     WorkflowStage.CHANGES_REQUESTED: "Changes Requested",
     WorkflowStage.DONE: "Done",
 }
+_FORCE_INTERRUPTIBLE_STAGE_SET = {
+    WorkflowStage.PRD_GENERATING,
+    WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+    WorkflowStage.TEST_IN_PROGRESS,
+    WorkflowStage.PR_PREPARING,
+}
 _REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->"
 
 
@@ -146,6 +153,21 @@ class RequirementChangeSnapshot:
 
     change_kind: str
     summary_text: str | None
+
+
+@dataclass(frozen=True)
+class TaskInterruptionOutcome:
+    """Describe the result of a task interruption request.
+
+    Attributes:
+        updated_task: 已回退阶段后的任务对象
+        previous_workflow_stage: 中断前的真实阶段
+        running_process_was_interrupted: 是否发现并终止了活跃 runner 进程
+    """
+
+    updated_task: Task
+    previous_workflow_stage: WorkflowStage
+    running_process_was_interrupted: bool
 
 
 def _get_current_run_account_id(db_session: Session) -> str:
@@ -1289,6 +1311,45 @@ def _build_task_destroy_log_text(
     return "\n".join(audit_line_list)
 
 
+def _build_force_interrupt_log_text(
+    *,
+    task_title_str: str,
+    previous_workflow_stage: WorkflowStage,
+    running_process_was_interrupted_bool: bool,
+) -> str:
+    """Build the audit log for a force-interrupt action.
+
+    Args:
+        task_title_str: 任务标题
+        previous_workflow_stage: 强制中断前的阶段
+        running_process_was_interrupted_bool: 是否成功终止活跃 runner
+
+    Returns:
+        str: 标准化的强制中断审计日志正文
+    """
+    runner_cleanup_summary_str = (
+        "Found a live runner process and terminated it immediately."
+        if running_process_was_interrupted_bool
+        else "No live runner process was found, but runtime flags were still cleared."
+    )
+    return "\n".join(
+        [
+            "## Force Interrupt Triggered",
+            "",
+            f"- Task title: {task_title_str}",
+            (
+                "- Stage before force interrupt: "
+                f"{_format_workflow_stage_label(previous_workflow_stage)}"
+            ),
+            f"- Runner cleanup: {runner_cleanup_summary_str}",
+            "- Result: task automation was forcefully stopped and the workflow "
+            "stage was reset to `changes_requested`.",
+            "- Note: use this action when automation is stuck or must be halted "
+            "immediately.",
+        ]
+    )
+
+
 def _build_destroy_cleanup_failure_reason(
     *,
     worktree_removed: bool,
@@ -1309,6 +1370,78 @@ def _build_destroy_cleanup_failure_reason(
     if not branch_deleted:
         cleanup_gap_list.append("task branch still exists locally")
     return "Destroy cleanup did not finish completely: " + "; ".join(cleanup_gap_list)
+
+
+def _interrupt_task_to_changes_requested(
+    *,
+    db_session: Session,
+    task_obj: Task,
+) -> TaskInterruptionOutcome:
+    """Interrupt automation and move the task back to `changes_requested`.
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 要中断的任务对象
+
+    Returns:
+        TaskInterruptionOutcome: 包含更新后任务与中断细节的结果对象
+
+    Raises:
+        HTTPException: 当任务在更新阶段前被删除时返回 404
+    """
+    previous_workflow_stage = task_obj.workflow_stage
+    running_process_was_interrupted_bool = cancel_codex_task(task_obj.id)
+    clear_task_background_activity(task_obj.id)
+
+    stage_update_schema = TaskStageUpdateSchema(
+        workflow_stage=WorkflowStage.CHANGES_REQUESTED
+    )
+    updated_task = TaskService.update_workflow_stage(
+        db_session,
+        task_obj.id,
+        stage_update_schema,
+    )
+    if updated_task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_obj.id} not found",
+        )
+    return TaskInterruptionOutcome(
+        updated_task=updated_task,
+        previous_workflow_stage=previous_workflow_stage,
+        running_process_was_interrupted=running_process_was_interrupted_bool,
+    )
+
+
+def _send_manual_interruption_notification_safely(
+    *,
+    task_id_str: str,
+    task_title_str: str,
+    previous_workflow_stage: WorkflowStage,
+) -> None:
+    """Send manual interruption email without breaking the main API response.
+
+    Args:
+        task_id_str: 任务 ID
+        task_title_str: 任务标题
+        previous_workflow_stage: 中断前阶段
+    """
+    try:
+        from backend.dsl.services.email_service import (
+            send_manual_interruption_notification,
+        )
+
+        send_manual_interruption_notification(
+            task_id_str=task_id_str,
+            task_title_str=task_title_str,
+            interrupted_stage_value_str=previous_workflow_stage.value,
+        )
+    except Exception as email_error:
+        logger.warning(
+            "Failed to send manual interruption email for task %s...: %s",
+            task_id_str[:8],
+            email_error,
+        )
 
 
 def _build_business_sync_status_note(task_obj: Task) -> str | None:
@@ -2477,55 +2610,101 @@ def cancel_task(
     Raises:
         HTTPException: 当任务不存在时返回 404
     """
-    from backend.dsl.schemas.task_schema import TaskStageUpdateSchema
-    from backend.dsl.models.enums import WorkflowStage
-
     task_obj = TaskService.get_task_by_id(db_session, task_id)
     if not task_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
-    previous_workflow_stage_value_str = task_obj.workflow_stage.value
-    task_title_str = task_obj.task_title
-
-    # 尝试终止正在运行的 codex 进程
-    cancel_codex_task(task_id)
-    clear_task_background_activity(task_id)
-
-    # 强制将阶段回退至 changes_requested，解除 UI 阻塞
-    stage_update_schema = TaskStageUpdateSchema(
-        workflow_stage=WorkflowStage.CHANGES_REQUESTED
+    interruption_outcome = _interrupt_task_to_changes_requested(
+        db_session=db_session,
+        task_obj=task_obj,
     )
-    updated_task = TaskService.update_workflow_stage(
-        db_session, task_id, stage_update_schema
+    _send_manual_interruption_notification_safely(
+        task_id_str=task_id,
+        task_title_str=task_obj.task_title,
+        previous_workflow_stage=interruption_outcome.previous_workflow_stage,
     )
-    if not updated_task:
+    return _hydrate_task_response(
+        interruption_outcome.updated_task,
+        db_session=db_session,
+        is_task_running_override=False,
+    )
+
+
+@router.post("/{task_id}/force-interrupt", response_model=TaskResponseSchema)
+def force_interrupt_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """强制中断运行中或卡死的任务自动化，并回退到 changes_requested.
+
+    这个入口用于 break-glass 场景：即使当前已经没有活跃 runner，只要任务仍停留
+    在 AI 运行阶段，也允许用户清理运行态、回退阶段，并写入一条审计日志说明
+    这是人工强制接管。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已回退为 changes_requested 的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；当任务不处于可强制中断的 AI
+            运行阶段时返回 422
+    """
+    task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not task_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
         )
 
-    try:
-        from backend.dsl.services.email_service import (
-            send_manual_interruption_notification,
+    if task_obj.workflow_stage not in _FORCE_INTERRUPTIBLE_STAGE_SET:
+        allowed_stage_value_list = sorted(
+            workflow_stage.value for workflow_stage in _FORCE_INTERRUPTIBLE_STAGE_SET
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "Force interrupt is only available for active automation stages. "
+                f"Allowed: {allowed_stage_value_list}"
+            ),
         )
 
-        send_manual_interruption_notification(
-            task_id_str=task_id,
-            task_title_str=task_title_str,
-            interrupted_stage_value_str=previous_workflow_stage_value_str,
-        )
-    except Exception as email_error:
-        logger.warning(
-            "Failed to send manual interruption email for task %s...: %s",
-            task_id[:8],
-            email_error,
-        )
+    interruption_outcome = _interrupt_task_to_changes_requested(
+        db_session=db_session,
+        task_obj=task_obj,
+    )
+    LogService.create_internal_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_id,
+            text_content=_build_force_interrupt_log_text(
+                task_title_str=task_obj.task_title,
+                previous_workflow_stage=interruption_outcome.previous_workflow_stage,
+                running_process_was_interrupted_bool=(
+                    interruption_outcome.running_process_was_interrupted
+                ),
+            ),
+            state_tag=DevLogStateTag.TRANSFERRED,
+        ),
+        interruption_outcome.updated_task.run_account_id,
+    )
+    _send_manual_interruption_notification_safely(
+        task_id_str=task_id,
+        task_title_str=task_obj.task_title,
+        previous_workflow_stage=interruption_outcome.previous_workflow_stage,
+    )
+    updated_task_log_count_map = TaskService.get_task_log_count_map(
+        db_session, [task_id]
+    )
     return _hydrate_task_response(
-        updated_task,
+        interruption_outcome.updated_task,
         db_session=db_session,
         is_task_running_override=False,
+        log_count_override=updated_task_log_count_map.get(task_id, 0),
     )
 
 

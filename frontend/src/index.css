@@ -3787,6 +3787,30 @@ img {
   cursor: not-allowed;
 }
 
+.devflow-execution-banner__force-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: rgba(120, 53, 15, 0.08);
+  border: 1px solid #fdba74;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #9a3412;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.devflow-execution-banner__force-btn:hover {
+  background: rgba(120, 53, 15, 0.15);
+}
+
+.devflow-execution-banner__force-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Project panel ─────────────────────────────────────────── */
 
 .devflow-projects-btn {

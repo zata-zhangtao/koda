@@ -86,6 +86,12 @@
 3. 若 `self_review_in_progress` 已经出现最近一轮“通过”标记，或 `test_in_progress` 已经出现最近一轮 lint 通过标记，则不会恢复，而是要求用户直接点击 `Complete`
 4. 若阶段仍处于真正的中断态，后端会从该阶段重新挂起对应后台任务，继续 PRD、实现、自检、lint 或 Git 收尾链路
 
+如果用户不希望继续恢复，而是要立即解除卡死或人工接管，也可以调用 `POST /api/tasks/{task_id}/force-interrupt`：
+
+1. 后端只允许在以下阶段强制中断：`prd_generating`、`implementation_in_progress`、`self_review_in_progress`、`test_in_progress`、`pr_preparing`
+2. 即使此时已经没有活跃 runner，后端仍会清理进程内运行标记并把任务回退到 `changes_requested`
+3. 系统会写入一条“Force Interrupt Triggered”审计日志，并继续发送统一的“手动中断”通知邮件
+
 ## Prompt 来源
 
 ### PRD Prompt
@@ -296,6 +302,7 @@ tasks/prd-{task_id[:8]}-<requirement-slug>.md
 
 - 若任务已经落到 `changes_requested`，仍走正常的 `execute` 重试入口
 - 若任务卡在可恢复的运行阶段且当前没有活跃后台进程，则会调用 `POST /api/tasks/{task_id}/resume`
+- 若任务卡在运行阶段但用户明确要求立即终止当前链路，则可以改走 `POST /api/tasks/{task_id}/force-interrupt`
 - 若任务其实已经停在 self-review 或 lint 的“等待用户点击 Complete”状态，则不会重跑自动化，而是提示用户直接完成收尾
 
 ### PRD 重新生成

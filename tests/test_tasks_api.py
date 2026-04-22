@@ -2485,6 +2485,110 @@ def test_cancel_task_sends_manual_interruption_notification(
     ]
 
 
+def test_force_interrupt_task_resets_running_stage_and_writes_audit_log(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force interrupt should reset the task and leave an audit log behind."""
+    from backend.dsl.services import email_service
+
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Force interruption target",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PR_PREPARING,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    recorded_notification_argument_list: list[tuple[str, str, str | None]] = []
+
+    monkeypatch.setattr(tasks_api, "cancel_codex_task", lambda task_id: False)
+    monkeypatch.setattr(
+        tasks_api, "clear_task_background_activity", lambda task_id: None
+    )
+    monkeypatch.setattr(
+        email_service,
+        "send_manual_interruption_notification",
+        lambda task_id_str, task_title_str, interrupted_stage_value_str=None: (
+            recorded_notification_argument_list.append(
+                (task_id_str, task_title_str, interrupted_stage_value_str)
+            )
+            or True
+        ),
+    )
+
+    updated_task = tasks_api.force_interrupt_task(task_obj.id, db_session)
+
+    db_session.refresh(task_obj)
+    force_interrupt_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc())
+        .all()
+    )
+
+    assert updated_task.workflow_stage == WorkflowStage.CHANGES_REQUESTED
+    assert updated_task.is_codex_task_running is False
+    assert len(force_interrupt_log_list) == 1
+    assert force_interrupt_log_list[0].state_tag == DevLogStateTag.TRANSFERRED
+    assert "## Force Interrupt Triggered" in force_interrupt_log_list[0].text_content
+    assert "PR Prep" in force_interrupt_log_list[0].text_content
+    assert (
+        "No live runner process was found, but runtime flags were still cleared."
+        in force_interrupt_log_list[0].text_content
+    )
+    assert recorded_notification_argument_list == [
+        (
+            task_obj.id,
+            "Force interruption target",
+            WorkflowStage.PR_PREPARING.value,
+        )
+    ]
+
+
+def test_force_interrupt_task_rejects_non_running_stage(
+    db_session: Session,
+) -> None:
+    """Force interrupt should reject stages that are not active automation."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Non-running stage target",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        tasks_api.force_interrupt_task(task_obj.id, db_session)
+
+    assert raised_http_error.value.status_code == 422
+    assert "Force interrupt is only available for active automation stages" in str(
+        raised_http_error.value.detail
+    )
+
+
 def test_update_task_rebinds_backlog_project_and_emits_audit_log(
     db_session: Session,
 ) -> None:

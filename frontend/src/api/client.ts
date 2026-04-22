@@ -304,6 +304,12 @@ export const taskApi = {
       method: "POST",
     }),
 
+  /** 强制中断卡死或运行中的自动化，并将任务回退至 changes_requested */
+  forceInterrupt: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/force-interrupt`, {
+      method: "POST",
+    }),
+
   /** 把历史需求引用到目标任务卡片 */
   createReference: (targetTaskId: string, data: TaskReferenceCreateRequest) =>
     fetchApi<TaskReferenceCreateResponse>(`/tasks/${targetTaskId}/references`, {

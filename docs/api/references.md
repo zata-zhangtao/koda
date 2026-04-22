@@ -72,6 +72,7 @@
         - review_task
         - resume_task
         - cancel_task
+        - force_interrupt_task
         - destroy_task
         - get_task_prd_file
         - open_task_in_editor
