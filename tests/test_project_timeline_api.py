@@ -954,3 +954,24 @@ def test_app_exposes_abandon_action_for_abandoned_status() -> None:
     )
     assert "buildRequirementAbandonLog(" in app_source_text
     assert "<span>Abandon</span>" in app_source_text
+
+
+def test_app_exposes_restore_action_for_abandoned_status() -> None:
+    """Archived abandoned tasks should expose a restore path."""
+    app_source_text = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert (
+        "async function handleRestoreRequirement(taskItem: Task): Promise<void>"
+        in app_source_text
+    )
+    assert "await taskApi.restore(taskItem.id);" in app_source_text
+    assert "<span>Restore</span>" in app_source_text
+
+
+def test_app_places_changes_tab_before_completed_tab() -> None:
+    """Workspace nav should surface Changes before Completed."""
+    app_source_text = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert app_source_text.index(
+        '["changes", "Changes", changedTaskList.length]'
+    ) < app_source_text.index('["completed", "Completed", completedTaskList.length]')

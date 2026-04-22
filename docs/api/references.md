@@ -74,6 +74,7 @@
         - cancel_task
         - force_interrupt_task
         - destroy_task
+        - restore_task
         - get_task_prd_file
         - open_task_in_editor
         - open_task_in_trae
@@ -282,6 +283,7 @@
         - execute_task
         - update_task
         - destroy_task
+        - restore_task
         - get_active_task
 
 ::: backend.dsl.services.task_notification_service.TaskNotificationService

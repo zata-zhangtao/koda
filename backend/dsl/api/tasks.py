@@ -2855,6 +2855,66 @@ def destroy_task(
     return _hydrate_task_response(updated_task, is_task_running_override=False)
 
 
+@router.post("/{task_id}/restore", response_model=TaskResponseSchema)
+def restore_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """Restore an abandoned task back into the active workspace.
+
+    该入口只允许恢复 `ABANDONED` 任务，不会自动继续后台自动化。
+    它会保留当前 `workflow_stage`，仅把 lifecycle 恢复为活动态：
+    backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`。
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已恢复到活动工作区的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在、生命周期不是 abandoned，或后台自动化
+            仍被错误标记为运行中时返回错误
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    existing_task_obj = TaskService.get_task_by_id(db_session, task_id)
+    if not existing_task_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    try:
+        restored_task = TaskService.restore_task(db_session, task_id)
+    except ValueError as restore_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(restore_error),
+        ) from restore_error
+
+    if not restored_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    _create_internal_archive_audit_log(
+        db_session,
+        restored_task,
+        log_text_content=(
+            "Requirement restored from abandoned history and moved back into the active workspace."
+        ),
+        log_state_tag=DevLogStateTag.TRANSFERRED,
+    )
+    return _hydrate_task_response(restored_task, db_session=db_session)
+
+
 @router.get("/{task_id}/prd-file")
 def get_task_prd_file(
     task_id: str,

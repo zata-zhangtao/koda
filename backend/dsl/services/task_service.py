@@ -1057,6 +1057,52 @@ class TaskService:
         return task_obj
 
     @staticmethod
+    def restore_task(
+        db_session: Session,
+        task_id: str,
+    ) -> Task | None:
+        """将 abandoned 任务恢复回活动工作区.
+
+        恢复时保留原有 `workflow_stage`，仅把生命周期从 `ABANDONED`
+        切回活动态：
+        - 尚未启动的 backlog 任务恢复为 `PENDING`
+        - 已启动或已有 worktree 的任务恢复为 `OPEN`
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            Task | None: 更新后的任务对象；若任务不存在则返回 None
+
+        Raises:
+            ValueError: 当任务当前不是 abandoned 时抛出
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status != TaskLifecycleStatus.ABANDONED:
+            raise ValueError("Only abandoned tasks can be restored.")
+
+        task_obj.lifecycle_status = (
+            TaskLifecycleStatus.OPEN
+            if TaskService.has_task_started(task_obj)
+            else TaskLifecycleStatus.PENDING
+        )
+        task_obj.closed_at = None
+
+        db_session.commit()
+        db_session.refresh(task_obj)
+
+        logger.info(
+            "Restored Task %s... from abandoned history to %s",
+            task_id[:8],
+            task_obj.lifecycle_status.value,
+        )
+        return task_obj
+
+    @staticmethod
     def prepare_task_completion(
         db_session: Session,
         task_id: str,

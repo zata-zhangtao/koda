@@ -25,6 +25,7 @@ from backend.dsl.api.tasks import (
     manual_complete_task,
     regenerate_task_prd,
     review_task,
+    restore_task,
     resume_task,
     update_task,
     update_task_stage,
@@ -2951,3 +2952,49 @@ def test_destroy_task_rejects_partial_cleanup_results(
     assert "task worktree directory still exists" in str(raised_http_error.value.detail)
     assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
     assert task_obj.destroyed_at is None
+
+
+def test_restore_task_moves_abandoned_task_back_to_active_workspace(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restore should reactivate abandoned tasks and record an audit log."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Restore me",
+        lifecycle_status=TaskLifecycleStatus.ABANDONED,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path="/tmp/project-one-wt-12345678",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    updated_task = restore_task(task_obj.id, db_session)
+
+    recorded_log_list = (
+        db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
+        .all()
+    )
+
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert updated_task.workflow_stage == WorkflowStage.IMPLEMENTATION_IN_PROGRESS
+    assert updated_task.closed_at is None
+    assert recorded_log_list[-1].state_tag == DevLogStateTag.TRANSFERRED
+    assert (
+        recorded_log_list[-1].text_content
+        == "Requirement restored from abandoned history and moved back into the active workspace."
+    )

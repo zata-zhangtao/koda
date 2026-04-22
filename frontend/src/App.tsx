@@ -198,6 +198,7 @@ type MutationName =
   | "complete"
   | "manual_complete"
   | "abandon"
+  | "restore"
   | "delete"
   | "destroy"
   | "open_editor"
@@ -1256,6 +1257,8 @@ function App() {
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED
     : false;
+  const canRestoreSelectedTask =
+    selectedTask?.lifecycle_status === TaskLifecycleStatus.ABANDONED;
   const canRenderComposer = selectedTask !== null;
   const canRebindSelectedTaskProject = selectedTask
     ? canRebindTaskProject(selectedTask)
@@ -3097,6 +3100,37 @@ function App() {
     }
   }
 
+  async function handleRestoreRequirement(taskItem: Task): Promise<void> {
+    const isRestoreConfirmed = window.confirm(
+      "Restore this abandoned requirement to the active workspace?"
+    );
+    if (!isRestoreConfirmed) {
+      return;
+    }
+
+    setActiveMutationName("restore");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      await taskApi.restore(taskItem.id);
+      setWorkspaceView("active");
+      setSuccessMessage(
+        "Requirement restored from abandoned history. If you need to continue automation, use the current stage's normal action or send continue/resume in feedback."
+      );
+      await loadDashboardData(true);
+    } catch (restoreError) {
+      console.error(restoreError);
+      setErrorMessage(
+        restoreError instanceof Error
+          ? restoreError.message
+          : "Failed to restore requirement."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
   async function handleFeedbackSubmit(): Promise<void> {
     if (!selectedTask || !canSendFeedback) {
       return;
@@ -3611,8 +3645,8 @@ function App() {
               {(
                 [
                   ["active", "Active", activeTaskList.length],
-                  ["completed", "Completed", completedTaskList.length],
                   ["changes", "Changes", changedTaskList.length],
+                  ["completed", "Completed", completedTaskList.length],
                 ] as const
               ).map(([viewName, viewLabel, viewCount]) => (
                 <button
@@ -4657,7 +4691,32 @@ function App() {
                       ) : null}
 
                       {/* ── 通用操作 ── */}
-                      {canEditSelectedTask ? (
+                      {canRestoreSelectedTask ? (
+                        <>
+                          <ActionButton
+                            variant="secondary"
+                            busy={activeMutationName === "restore"}
+                            onClick={() => {
+                              void handleRestoreRequirement(selectedTask);
+                            }}
+                          >
+                            <HistoryIcon className="devflow-icon devflow-icon--small" />
+                            <span>Restore</span>
+                          </ActionButton>
+                          {canDestroySelectedTask ? (
+                            <ActionButton
+                              variant="ghost"
+                              busy={activeMutationName === "destroy"}
+                              onClick={() => {
+                                handleOpenDestroyTaskModal();
+                              }}
+                            >
+                              <TrashIcon className="devflow-icon devflow-icon--small" />
+                              <span>Destroy</span>
+                            </ActionButton>
+                          ) : null}
+                        </>
+                      ) : canEditSelectedTask ? (
                         <>
                           <ActionButton
                             variant="outline"

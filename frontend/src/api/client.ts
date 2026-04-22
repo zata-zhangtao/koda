@@ -279,6 +279,12 @@ export const taskApi = {
       body: JSON.stringify(data),
     }),
 
+  /** 将 abandoned 任务恢复回活动工作区 */
+  restore: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/restore`, {
+      method: "POST",
+    }),
+
   /** 获取任务详情 */
   get: (id: string) => fetchApi<Task>(`/tasks/${id}`),
 

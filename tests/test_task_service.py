@@ -23,6 +23,7 @@ from backend.dsl.schemas.task_schema import (
 )
 from backend.dsl.services.task_service import TaskService
 from utils.database import Base
+from utils.helpers import utc_now_naive
 
 
 @pytest.fixture
@@ -349,6 +350,72 @@ def test_destroy_task_records_reason_and_clears_worktree_path(
     assert destroyed_task.destroy_reason == "Wrong repo binding, recreate from scratch"
     assert destroyed_task.destroyed_at is not None
     assert destroyed_task.worktree_path is None
+
+
+def test_restore_task_reactivates_abandoned_backlog_as_pending(
+    db_session: Session,
+) -> None:
+    """Backlog abandoned tasks should restore to the pending queue."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    abandoned_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Abandoned backlog task",
+        lifecycle_status=TaskLifecycleStatus.ABANDONED,
+        workflow_stage=WorkflowStage.BACKLOG,
+        closed_at=utc_now_naive(),
+    )
+    db_session.add(abandoned_task)
+    db_session.commit()
+
+    restored_task = TaskService.restore_task(db_session, abandoned_task.id)
+
+    assert restored_task is not None
+    assert restored_task.lifecycle_status == TaskLifecycleStatus.PENDING
+    assert restored_task.workflow_stage == WorkflowStage.BACKLOG
+    assert restored_task.closed_at is None
+
+
+def test_restore_task_reactivates_abandoned_started_task_as_open(
+    db_session: Session,
+) -> None:
+    """Started abandoned tasks should restore to the open lifecycle."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    abandoned_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Abandoned started task",
+        lifecycle_status=TaskLifecycleStatus.ABANDONED,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path="/tmp/project-wt-12345678",
+        closed_at=utc_now_naive(),
+    )
+    db_session.add(abandoned_task)
+    db_session.commit()
+
+    restored_task = TaskService.restore_task(db_session, abandoned_task.id)
+
+    assert restored_task is not None
+    assert restored_task.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert restored_task.workflow_stage == WorkflowStage.IMPLEMENTATION_IN_PROGRESS
+    assert restored_task.worktree_path == "/tmp/project-wt-12345678"
+    assert restored_task.closed_at is None
 
 
 def test_update_task_status_rejects_started_task_deletion_via_legacy_status_route(
