@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "node scripts/run_all_tests.mjs",
     "test:task-card-metadata-fallback": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_card_metadata_fallback.test.ts",
     "test:task-project-filter": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_project_filter.test.ts",
     "test:prd-pending-questions": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_pending_questions.test.ts",
@@ -13,6 +14,8 @@
     "test:selected-task-prd-file": "node --experimental-strip-types --experimental-specifier-resolution=node tests/use_selected_task_prd_file.test.ts",
     "test:prd-source-selection": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_source_selection.test.ts",
     "test:timeline-continuity": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_timeline_continuity.test.ts",
+    "test:compact-timeline-attention": "node --experimental-strip-types --experimental-specifier-resolution=node tests/compact_timeline_attention.test.ts",
+    "test:task-list": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_list.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
