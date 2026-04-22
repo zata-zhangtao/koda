@@ -46,7 +46,7 @@ flowchart LR
 - 主工作台位于 `frontend/src/App.tsx`
 - `frontend/src/api/client.ts` 统一封装 HTTP 请求
 - `frontend/src/types/index.ts` 提供与后端一致的数据结构
-- 界面当前围绕三类视图组织：进行中任务、已完成任务、发生变更的任务
+- 界面当前围绕三类视图组织：进行中任务（包含需求已修改但仍在推进中的任务）、已完成/已销毁任务、已删除或已放弃的归档任务
 - 任务详情底部 composer 现在明确区分“反馈给执行链路”和“问 AI”两条通道
 
 ### 路由层

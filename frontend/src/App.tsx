@@ -1456,8 +1456,8 @@ function App() {
   }, [selectedTaskId, visibleTaskList]);
 
   // Auto-switch workspace view when the selected task moves out of the current view
-  // (e.g. task completes its git ops and lifecycle_status becomes CLOSED while the
-  // user is still on the "active" tab).
+  // (e.g. task completes or is destroyed while the user is still on the "active"
+  // tab).
   useEffect(() => {
     const nextWorkspaceView = resolveAutoWorkspaceSwitchTargetView({
       changedTaskIdSet,
@@ -2835,7 +2835,7 @@ function App() {
           "Requirement changes were saved. Cancel the running automation if you want to regenerate the PRD now.";
       }
 
-      setWorkspaceView("changes");
+      setWorkspaceView("active");
       closeRequirementEditor();
       setSuccessMessage(nextSuccessMessage);
       await loadDashboardData(true);
@@ -2874,8 +2874,10 @@ function App() {
         destroy_reason: normalizedDestroyReason,
       });
       closeDestroyTaskModal();
-      setWorkspaceView("changes");
-      setSuccessMessage("Started task destroyed and moved to deleted history.");
+      setWorkspaceView("completed");
+      setSuccessMessage(
+        "Started task destroyed and archived under Completed."
+      );
       await loadDashboardData(true);
     } catch (destroyError) {
       console.error(destroyError);
@@ -8166,11 +8168,11 @@ function mapMediaPathToPublicUrl(rawMediaPath: string | null): string | null {
 
 function getWorkspaceHeading(workspaceView: WorkspaceView): string {
   if (workspaceView === "completed") {
-    return "Completed Tasks";
+    return "Completed / Destroyed";
   }
 
   if (workspaceView === "changes") {
-    return "Changed Requirements";
+    return "Deleted / Abandoned";
   }
 
   return "Requirements";
@@ -8183,22 +8185,22 @@ function getWorkspaceEmptyState(
 ): string {
   if (selectedTaskProjectFilterValue !== ALL_TASK_PROJECT_FILTER_VALUE) {
     if (workspaceView === "completed") {
-      return `${selectedTaskProjectFilterLabel} 下暂无已完成需求。`;
+      return `${selectedTaskProjectFilterLabel} 下暂无已完成或已销毁需求。`;
     }
 
     if (workspaceView === "changes") {
-      return `${selectedTaskProjectFilterLabel} 下暂无变更或已删除需求。`;
+      return `${selectedTaskProjectFilterLabel} 下暂无已删除或已放弃需求。`;
     }
 
     return `${selectedTaskProjectFilterLabel} 下暂无需求卡片。`;
   }
 
   if (workspaceView === "completed") {
-    return "No completed requirements yet.";
+    return "No completed or destroyed requirements yet.";
   }
 
   if (workspaceView === "changes") {
-    return "No modified or deleted requirements yet.";
+    return "No deleted or abandoned requirements yet.";
   }
 
   return "No requirements yet.";
@@ -8218,11 +8220,11 @@ function buildProjectMapById(
 
 function getWorkspaceDetailEmptyState(workspaceView: WorkspaceView): string {
   if (workspaceView === "completed") {
-    return "Select a completed requirement to inspect its archived history.";
+    return "Select a completed or destroyed requirement to inspect its archived history.";
   }
 
   if (workspaceView === "changes") {
-    return "Select a modified or deleted requirement to inspect the appended change history.";
+    return "Select a deleted or abandoned requirement to inspect the archived history.";
   }
 
   return "Select a requirement to view details and start the pipeline.";

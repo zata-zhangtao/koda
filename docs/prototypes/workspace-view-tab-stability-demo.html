@@ -649,9 +649,9 @@
 
     <section class="switcher" aria-label="workspace view controller">
       <div class="workspace-tabs" role="tablist" aria-label="Workspace view">
-        <button type="button" class="is-active" data-tab-button="active">Active 3</button>
-        <button type="button" data-tab-button="completed">Completed 7</button>
-        <button type="button" data-tab-button="changes">Changes 20</button>
+        <button type="button" class="is-active" data-tab-button="active">Active 4</button>
+        <button type="button" data-tab-button="completed">Completed 8</button>
+        <button type="button" data-tab-button="changes">Changes 18</button>
       </div>
     </section>
 
@@ -726,7 +726,7 @@
     const workspaceData = {
       active: {
         label: "Active",
-        count: 3,
+        count: 4,
         items: [
           {
             title: "修复顶部 tab 点击闪动",
@@ -754,12 +754,21 @@
               "后台轮询继续更新计数，但头部 tab 宽度应稳定，不能因数字变化带来 pill 抖动。",
             detailMetaA: "状态：implementation in progress",
             detailMetaB: "要求：按钮布局固定，计数更新不触发整体抖动。"
+          },
+          {
+            title: "需求改动待回看",
+            summary: "用户追加入变更后，需求继续留在 active view。",
+            detailTitle: "Requirement Changed",
+            detailCopy:
+              "修改需求后仍应保留在 ACTIVE，便于继续执行、补充 PRD 或再次发起自动化，不需要额外切到 changes。",
+            detailMetaA: "状态：active with requirement update",
+            detailMetaB: "验收：保存 Requirement Revision 后仍留在 active 列表。"
           }
         ]
       },
       completed: {
         label: "Completed",
-        count: 7,
+        count: 8,
         items: [
           {
             title: "Runner argv 长度修复",
@@ -787,31 +796,22 @@
               "详情副作用应在选中任务确认后执行，不能在 tab click 的第一拍就把辅助面板全部 reset。",
             detailMetaA: "状态：done",
             detailMetaB: "要求：减少 useEffect 级联重置。"
+          },
+          {
+            title: "销毁原因补录",
+            summary: "已销毁任务归入 completed view。",
+            detailTitle: "Destroyed Task Review",
+            detailCopy:
+              "任务销毁后应作为已归档记录落到 COMPLETED，方便和正常完成的任务一起查阅最终状态与销毁原因。",
+            detailMetaA: "状态：destroyed / archived",
+            detailMetaB: "要求：destroy 成功后自动切到 completed。"
           }
         ]
       },
       changes: {
         label: "Changes",
-        count: 20,
+        count: 18,
         items: [
-          {
-            title: "需求改动待回看",
-            summary: "用户追加入变更，卡片进入 changes view。",
-            detailTitle: "Requirement Changed",
-            detailCopy:
-              "切到 CHANGES 时，新的详情应直接替换到位，避免先渲染“请选择需求”这类占位文案。",
-            detailMetaA: "状态：changes requested",
-            detailMetaB: "验收：切到 changes view 不出现中间空帧。"
-          },
-          {
-            title: "销毁原因补录",
-            summary: "已销毁任务进入变更视图。",
-            detailTitle: "Destroyed Task Review",
-            detailCopy:
-              "自动跳转只应响应真实工作流变更，不应和用户主动点击 tab 形成竞态，导致界面反复切换。",
-            detailMetaA: "风险：auto-switch effect 抢回 workspaceView",
-            detailMetaB: "要求：区分用户点击与后台状态迁移。"
-          },
           {
             title: "变更摘要待同步",
             summary: "需要补充一次 Requirement Revision。",

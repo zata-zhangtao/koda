@@ -78,7 +78,7 @@
 6. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
 7. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
 8. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
-9. 提交 destroy 后，确认任务进入 deleted history，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+9. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
 10. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，且后台运行态已清除
 
 ### 媒体与导出

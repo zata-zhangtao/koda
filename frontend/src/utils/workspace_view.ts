@@ -62,20 +62,33 @@ const CLOSED_TASK_LIFECYCLE_STATUS = "CLOSED";
 const DELETED_TASK_LIFECYCLE_STATUS = "DELETED";
 const ABANDONED_TASK_LIFECYCLE_STATUS = "ABANDONED";
 
+function isDestroyedTask(taskItem: Task): boolean {
+  return (
+    taskItem.lifecycle_status === DELETED_TASK_LIFECYCLE_STATUS &&
+    Boolean(taskItem.destroy_reason)
+  );
+}
+
 export function resolveWorkspaceViewForTask(
   taskItem: Task,
   changedTaskIdSet: ReadonlySet<string>
 ): WorkspaceView {
-  if (taskItem.lifecycle_status === CLOSED_TASK_LIFECYCLE_STATUS) {
+  if (
+    taskItem.lifecycle_status === CLOSED_TASK_LIFECYCLE_STATUS ||
+    isDestroyedTask(taskItem)
+  ) {
     return "completed";
   }
 
   if (
     taskItem.lifecycle_status === DELETED_TASK_LIFECYCLE_STATUS ||
-    taskItem.lifecycle_status === ABANDONED_TASK_LIFECYCLE_STATUS ||
-    changedTaskIdSet.has(taskItem.id)
+    taskItem.lifecycle_status === ABANDONED_TASK_LIFECYCLE_STATUS
   ) {
     return "changes";
+  }
+
+  if (changedTaskIdSet.has(taskItem.id)) {
+    return "active";
   }
 
   return "active";

@@ -73,29 +73,42 @@ function buildTask(taskId: string, lifecycleStatus: string) {
 const activeTask = buildTask("task-active", "OPEN");
 const completedTask = buildTask("task-completed", "CLOSED");
 const changedTask = buildTask("task-changed", "OPEN");
+const destroyedTask = {
+  ...buildTask("task-destroyed", "DELETED"),
+  destroy_reason: "Wrong repository binding",
+  destroyed_at: "2026-03-30T09:00:00+08:00",
+};
 const deletedTask = buildTask("task-deleted", "DELETED");
 const changedTaskIdSet = new Set<string>(["task-changed"]);
+const allTaskList = [
+  activeTask,
+  completedTask,
+  changedTask,
+  destroyedTask,
+  deletedTask,
+];
 const workspaceTaskBuckets = buildWorkspaceTaskBuckets({
-  taskList: [activeTask, completedTask, changedTask, deletedTask],
+  taskList: allTaskList,
   changedTaskIdSet,
 });
 
 assert.equal(resolveWorkspaceViewForTask(activeTask, changedTaskIdSet), "active");
 assert.equal(resolveWorkspaceViewForTask(completedTask, changedTaskIdSet), "completed");
-assert.equal(resolveWorkspaceViewForTask(changedTask, changedTaskIdSet), "changes");
+assert.equal(resolveWorkspaceViewForTask(changedTask, changedTaskIdSet), "active");
+assert.equal(resolveWorkspaceViewForTask(destroyedTask, changedTaskIdSet), "completed");
 assert.equal(resolveWorkspaceViewForTask(deletedTask, changedTaskIdSet), "changes");
 
 assert.deepEqual(
   workspaceTaskBuckets.activeTaskList.map((taskItem) => taskItem.id),
-  ["task-active"]
+  ["task-active", "task-changed"]
 );
 assert.deepEqual(
   workspaceTaskBuckets.completedTaskList.map((taskItem) => taskItem.id),
-  ["task-completed"]
+  ["task-completed", "task-destroyed"]
 );
 assert.deepEqual(
   workspaceTaskBuckets.changedTaskList.map((taskItem) => taskItem.id),
-  ["task-changed", "task-deleted"]
+  ["task-deleted"]
 );
 
 assert.equal(
@@ -155,12 +168,12 @@ assert.deepEqual(
 
 assert.deepEqual(
   resolveManualWorkspaceSwitch({
-    currentSelectedTaskId: "task-changed",
+    currentSelectedTaskId: "task-deleted",
     targetWorkspaceView: "changes",
     workspaceTaskBuckets,
   }),
   {
-    nextSelectedTaskId: "task-changed",
+    nextSelectedTaskId: "task-deleted",
     nextWorkspaceView: "changes",
   }
 );
@@ -182,7 +195,7 @@ assert.deepEqual(
     workspaceTaskBuckets,
   }),
   {
-    nextSelectedTaskId: "task-changed",
+    nextSelectedTaskId: "task-deleted",
     nextWorkspaceView: "changes",
   }
 );
@@ -210,7 +223,7 @@ assert.equal(
     currentWorkspaceView: "active",
     lastManualWorkspaceSwitchAt: stableCurrentTimestamp - 300,
     selectedTaskId: "task-completed",
-    taskList: [activeTask, completedTask, changedTask, deletedTask],
+    taskList: allTaskList,
     visibleTaskList: workspaceTaskBuckets.activeTaskList,
   }),
   null
@@ -222,7 +235,19 @@ assert.equal(
     currentWorkspaceView: "active",
     lastManualWorkspaceSwitchAt: null,
     selectedTaskId: "task-completed",
-    taskList: [activeTask, completedTask, changedTask, deletedTask],
+    taskList: allTaskList,
+    visibleTaskList: workspaceTaskBuckets.activeTaskList,
+  }),
+  "completed"
+);
+assert.equal(
+  resolveAutoWorkspaceSwitchTargetView({
+    changedTaskIdSet,
+    currentTimestamp: stableCurrentTimestamp,
+    currentWorkspaceView: "active",
+    lastManualWorkspaceSwitchAt: null,
+    selectedTaskId: "task-destroyed",
+    taskList: allTaskList,
     visibleTaskList: workspaceTaskBuckets.activeTaskList,
   }),
   "completed"
@@ -234,10 +259,10 @@ assert.equal(
     currentWorkspaceView: "active",
     lastManualWorkspaceSwitchAt: null,
     selectedTaskId: "task-changed",
-    taskList: [activeTask, completedTask, changedTask, deletedTask],
+    taskList: allTaskList,
     visibleTaskList: workspaceTaskBuckets.activeTaskList,
   }),
-  "changes"
+  null
 );
 assert.equal(
   resolveAutoWorkspaceSwitchTargetView({
@@ -246,7 +271,7 @@ assert.equal(
     currentWorkspaceView: "completed",
     lastManualWorkspaceSwitchAt: null,
     selectedTaskId: "task-active",
-    taskList: [activeTask, completedTask, changedTask, deletedTask],
+    taskList: allTaskList,
     visibleTaskList: workspaceTaskBuckets.completedTaskList,
   }),
   null
@@ -258,7 +283,7 @@ assert.equal(
     currentWorkspaceView: "active",
     lastManualWorkspaceSwitchAt: null,
     selectedTaskId: "task-active",
-    taskList: [activeTask, completedTask, changedTask, deletedTask],
+    taskList: allTaskList,
     visibleTaskList: workspaceTaskBuckets.activeTaskList,
   }),
   null
