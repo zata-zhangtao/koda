@@ -50,13 +50,6 @@ export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
   const handlePaste = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
 
@@ -111,11 +104,10 @@ export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
         ref={textareaRef}
         value={inputText}
         onChange={(e) => setInputText(e.target.value)}
-        onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         placeholder={
           activeTask
-            ? `Type your log... (Shift+Enter for new line, Ctrl+V to paste image)\nCommands: /bug, /fix, /opt, /transfer, /task <title>`
+            ? `Type your log... (Enter for new line, click Send to submit, Ctrl+V to paste image)\nCommands: /bug, /fix, /opt, /transfer, /task <title>`
             : "Create a task first to start logging..."
         }
         style={styles.textarea}
@@ -149,7 +141,7 @@ export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
           onClick={handleSubmit}
           disabled={(!inputText.trim() && !pastedImage) || !activeTask || isUploading}
         >
-          {isUploading ? "Uploading..." : "Enter to Submit"}
+          {isUploading ? "Uploading..." : "Send"}
         </button>
       </div>
     </div>

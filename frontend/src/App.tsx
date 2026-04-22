@@ -7,7 +7,6 @@ import type {
   ChangeEvent,
   ClipboardEvent,
   Dispatch,
-  KeyboardEvent,
   ReactNode,
   SetStateAction,
   SVGProps,
@@ -3335,24 +3334,6 @@ function App() {
     }
   }
 
-  function handleFeedbackKeyDown(
-    keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
-  ): void {
-    if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
-      keyboardEvent.preventDefault();
-      void handleFeedbackSubmit();
-    }
-  }
-
-  function handleTaskQaKeyDown(
-    keyboardEvent: KeyboardEvent<HTMLTextAreaElement>
-  ): void {
-    if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
-      keyboardEvent.preventDefault();
-      void handleTaskQaSubmit();
-    }
-  }
-
   function handleFeedbackPaste(
     clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
   ): void {
@@ -5670,7 +5651,6 @@ function App() {
                             onChange={(changeEvent) =>
                               setFeedbackInputText(changeEvent.target.value)
                             }
-                            onKeyDown={handleFeedbackKeyDown}
                             onPaste={handleFeedbackPaste}
                           />
 
@@ -5698,7 +5678,7 @@ function App() {
                         </div>
                         <p className="devflow-feedback__hint">
                           {canSendFeedback
-                            ? "Formal feedback can regenerate the PRD, resume execution, or influence the main automation history. Press Enter to send, Shift + Enter for new line, or paste an image/video/file directly into the composer."
+                            ? "Formal feedback can regenerate the PRD, resume execution, or influence the main automation history. Enter inserts a new line, and sending now requires the button. You can still paste an image/video/file directly into the composer."
                             : "This task has already been completed. Draft text stays visible for reference, but the formal feedback channel is now read-only."}
                         </p>
                       </>
@@ -5860,7 +5840,6 @@ function App() {
                             onChange={(changeEvent) =>
                               setTaskQaInputText(changeEvent.target.value)
                             }
-                            onKeyDown={handleTaskQaKeyDown}
                           />
 
                           <button
@@ -5881,7 +5860,7 @@ function App() {
                         </div>
                         <p className="devflow-feedback__hint">
                           {canSendTaskQa
-                            ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Press Enter to ask, Shift + Enter for new line."
+                            ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Enter inserts a new line, and sending now requires the button."
                             : "Archived sidecar history stays readable here. You can still review past answers and convert the latest completed conclusion into a feedback draft."}
                         </p>
                       </>
