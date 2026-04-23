@@ -51,6 +51,15 @@ import {
   type TaskTimelineRenderableLog,
 } from "./utils/task_timeline_continuity";
 import {
+  groupRequiresAttention,
+  logIndicatesSuccess,
+  logRequiresAttention,
+} from "./utils/compact_timeline_attention";
+import {
+  deriveCompactTimelineCategoryFromPhaseLabel,
+  logMatchesExplicitPrdCategory,
+} from "./utils/compact_timeline_category";
+import {
   buildPrdPendingQuestionsFeedbackText,
   derivePrdPendingQuestionActionBlockReason,
   getTaskScopedPrdPendingQuestionAnswerSelectionMap,
@@ -157,6 +166,7 @@ interface CompactTimelineGroup {
   category: CompactTimelineCategory;
   label: string;
   tone: "default" | "error" | "success";
+  requiresAttention: boolean;
 }
 
 type TimelineRenderBlock =
@@ -268,7 +278,7 @@ const INITIAL_VISIBLE_CONVERSATION_TURN_COUNT = 12;
 const VISIBLE_CONVERSATION_TURN_INCREMENT = 20;
 const COMPACT_TIMELINE_GROUP_VISIBLE_COUNT = 3;
 const COMPACT_TIMELINE_GROUP_MAX_SIZE = 6;
-const COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT = 5;
+const COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT = 3;
 const MARKDOWN_REMARK_PLUGIN_LIST = [remarkGfm];
 const MARKDOWN_MERMAID_LANGUAGE_PATTERN = /\blanguage-mermaid\b/;
 const IMAGE_FILE_NAME_PATTERN = /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/i;
@@ -6279,7 +6289,7 @@ function CompactTimelineGroupCard({
   const groupSourceLabel = buildCompactTimelineGroupSourceLabel(group);
   const groupSummaryText = buildCompactTimelineGroupSummaryText(group);
   const groupStatusLabel =
-    group.tone === "error"
+    group.requiresAttention
       ? "需处理"
       : group.tone === "success"
         ? "已完成"
@@ -6935,6 +6945,9 @@ function buildCompactTimelineGroup(
     category: groupCategory,
     label: deriveCompactTimelineGroupLabel(timelineItemList),
     tone: deriveCompactTimelineGroupTone(timelineItemList),
+    requiresAttention: groupRequiresAttention(
+      timelineItemList.map((timelineItem) => timelineItem.log)
+    ),
   };
 }
 
@@ -7020,27 +7033,11 @@ function deriveCompactTimelineGroupTone(
 function deriveCompactTimelineItemTone(
   timelineItem: TimelineViewModel
 ): "default" | "error" | "success" {
-  const normalizedTimelineText = timelineItem.log.text_content.toLowerCase();
-  if (
-    timelineItem.log.state_tag === DevLogStateTag.BUG ||
-    normalizedTimelineText.includes("error") ||
-    normalizedTimelineText.includes("failed") ||
-    normalizedTimelineText.includes("failure") ||
-    normalizedTimelineText.includes("exception") ||
-    normalizedTimelineText.includes("429") ||
-    normalizedTimelineText.includes("exit 1") ||
-    normalizedTimelineText.includes("失败")
-  ) {
+  if (logRequiresAttention(timelineItem.log)) {
     return "error";
   }
 
-  if (
-    timelineItem.log.state_tag === DevLogStateTag.FIXED ||
-    normalizedTimelineText.includes("success") ||
-    normalizedTimelineText.includes("completed") ||
-    normalizedTimelineText.includes("完成") ||
-    normalizedTimelineText.includes("已完成")
-  ) {
+  if (logIndicatesSuccess(timelineItem.log)) {
     return "success";
   }
 
@@ -7052,17 +7049,19 @@ function deriveCompactTimelineItemCategory(
 ): CompactTimelineCategory {
   const normalizedTimelineText = timelineItem.log.text_content.toLowerCase();
 
-  if (
-    deriveCompactTimelineItemTone(timelineItem) === "error" ||
-    normalizedTimelineText.includes("changes requested") ||
-    normalizedTimelineText.includes("rollback") ||
-    normalizedTimelineText.includes("回退") ||
-    normalizedTimelineText.includes("待修改")
-  ) {
+  if (logRequiresAttention(timelineItem.log)) {
     return "changes";
   }
 
-  if (normalizedTimelineText.includes("prd")) {
+  const categoryFromAutomationPhaseLabel =
+    deriveCompactTimelineCategoryFromPhaseLabel(
+      timelineItem.log.automation_phase_label
+    );
+  if (categoryFromAutomationPhaseLabel) {
+    return categoryFromAutomationPhaseLabel;
+  }
+
+  if (logMatchesExplicitPrdCategory(timelineItem.log)) {
     return "prd";
   }
 
@@ -7283,7 +7282,7 @@ function buildCompactTimelineGroupSourceLabel(group: CompactTimelineGroup): stri
 function getCompactTimelineGroupCollapsedVisibleCount(
   group: CompactTimelineGroup
 ): number {
-  if (group.tone === "error" || group.category === "changes") {
+  if (group.requiresAttention) {
     return COMPACT_TIMELINE_ALERT_GROUP_VISIBLE_COUNT;
   }
 

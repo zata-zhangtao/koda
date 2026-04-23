@@ -15,6 +15,7 @@
     "test:prd-source-selection": "node --experimental-strip-types --experimental-specifier-resolution=node tests/prd_source_selection.test.ts",
     "test:timeline-continuity": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_timeline_continuity.test.ts",
     "test:compact-timeline-attention": "node --experimental-strip-types --experimental-specifier-resolution=node tests/compact_timeline_attention.test.ts",
+    "test:compact-timeline-category": "node --experimental-strip-types --experimental-specifier-resolution=node tests/compact_timeline_category.test.ts",
     "test:task-list": "node --experimental-strip-types --experimental-specifier-resolution=node tests/task_list.test.ts",
     "preview": "vite preview"
   },
