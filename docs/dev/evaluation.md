@@ -79,7 +79,7 @@
 7. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
 8. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
 9. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
-10. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，且后台运行态已清除
+10. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
 11. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
 12. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
 

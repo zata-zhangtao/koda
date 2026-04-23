@@ -1371,7 +1371,9 @@ def _build_destroy_cleanup_failure_reason(
     """
     cleanup_gap_list: list[str] = []
     if not worktree_removed:
-        cleanup_gap_list.append("task worktree directory still exists")
+        cleanup_gap_list.append(
+            "task worktree directory or Git registration still exists"
+        )
     if not branch_deleted:
         cleanup_gap_list.append("task branch still exists locally")
     return "Destroy cleanup did not finish completely: " + "; ".join(cleanup_gap_list)
