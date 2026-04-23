@@ -333,6 +333,292 @@ class GitWorktreeService:
         )
 
     @staticmethod
+    def resolve_preferred_remote_name(
+        repo_root_path: Path,
+        branch_name_str: str = "main",
+    ) -> str | None:
+        """Resolve the best remote name for sync operations on one branch.
+
+        Args:
+            repo_root_path: Repository root path.
+            branch_name_str: Branch name whose configured remote should be preferred.
+
+        Returns:
+            str | None: Preferred remote name, or ``None`` when no safe choice exists.
+        """
+        configured_remote_process = subprocess.run(
+            ["git", "config", "--get", f"branch.{branch_name_str}.remote"],
+            cwd=str(repo_root_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        configured_remote_name_str = (configured_remote_process.stdout or "").strip()
+        if configured_remote_name_str:
+            remote_probe_process = subprocess.run(
+                ["git", "remote", "get-url", configured_remote_name_str],
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if remote_probe_process.returncode == 0:
+                return configured_remote_name_str
+
+        remote_list_process = subprocess.run(
+            ["git", "remote"],
+            cwd=str(repo_root_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if remote_list_process.returncode != 0:
+            return None
+
+        remote_name_list = [
+            raw_remote_name_str.strip()
+            for raw_remote_name_str in remote_list_process.stdout.splitlines()
+            if raw_remote_name_str.strip()
+        ]
+        if len(remote_name_list) == 1:
+            return remote_name_list[0]
+        if "origin" in remote_name_list:
+            return "origin"
+        if "zata" in remote_name_list:
+            return "zata"
+        return None
+
+    @staticmethod
+    def cleanup_completed_task_worktree(
+        repo_root_path: Path,
+        feature_branch_name: str,
+        worktree_path: Path | None,
+    ) -> WorktreeDestroyResult:
+        """Clean up a successfully merged task worktree and branch.
+
+        Args:
+            repo_root_path: Repository root path.
+            feature_branch_name: Task branch name already merged into ``main``.
+            worktree_path: Task worktree path, if one was recorded.
+
+        Returns:
+            WorktreeDestroyResult: Cleanup execution summary after script and fallback.
+        """
+        resolved_worktree_path = worktree_path.resolve() if worktree_path else None
+        output_line_list: list[str] = []
+        cleanup_script_path = GitWorktreeService.resolve_cleanup_script_path(
+            repo_root_path
+        )
+        registered_worktree_exists = False
+        if resolved_worktree_path is not None:
+            registered_worktree_exists = (
+                GitWorktreeService._is_worktree_path_registered(
+                    repo_root_path=repo_root_path,
+                    worktree_path=resolved_worktree_path,
+                )
+            )
+
+        if cleanup_script_path is not None and (
+            registered_worktree_exists
+            or GitWorktreeService._branch_exists(repo_root_path, feature_branch_name)
+        ):
+            cleanup_command_argument_list = [
+                str(cleanup_script_path),
+                feature_branch_name,
+                "main",
+                "--delete",
+            ]
+            if resolved_worktree_path is not None:
+                cleanup_command_argument_list.extend(
+                    ["--worktree-path", str(resolved_worktree_path)]
+                )
+            cleanup_process = subprocess.run(
+                cleanup_command_argument_list,
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            output_line_list.extend((cleanup_process.stdout or "").splitlines())
+            output_line_list.extend((cleanup_process.stderr or "").splitlines())
+            script_worktree_removed = (
+                GitWorktreeService._is_task_worktree_fully_removed(
+                    repo_root_path=repo_root_path,
+                    worktree_path=resolved_worktree_path,
+                )
+            )
+            script_branch_deleted = not GitWorktreeService._branch_exists(
+                repo_root_path,
+                feature_branch_name,
+            )
+            if (
+                cleanup_process.returncode == 0
+                and script_worktree_removed
+                and script_branch_deleted
+            ):
+                return WorktreeDestroyResult(
+                    cleanup_succeeded=True,
+                    worktree_removed=True,
+                    branch_deleted=True,
+                    output_line_list=output_line_list,
+                )
+
+            output_line_list.append(
+                "Repo-local cleanup script did not fully finish completion cleanup; "
+                "falling back to direct cleanup."
+            )
+
+        if resolved_worktree_path is not None:
+            registered_worktree_exists = (
+                GitWorktreeService._is_worktree_path_registered(
+                    repo_root_path=repo_root_path,
+                    worktree_path=resolved_worktree_path,
+                )
+            )
+            if registered_worktree_exists:
+                remove_worktree_process = subprocess.run(
+                    [
+                        "git",
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(resolved_worktree_path),
+                    ],
+                    cwd=str(repo_root_path),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                output_line_list.extend(
+                    (remove_worktree_process.stdout or "").splitlines()
+                )
+                output_line_list.extend(
+                    (remove_worktree_process.stderr or "").splitlines()
+                )
+
+            prune_process = subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            output_line_list.extend((prune_process.stdout or "").splitlines())
+            output_line_list.extend((prune_process.stderr or "").splitlines())
+
+            if (
+                resolved_worktree_path.exists()
+                and not GitWorktreeService._is_worktree_path_registered(
+                    repo_root_path=repo_root_path,
+                    worktree_path=resolved_worktree_path,
+                )
+            ):
+                try:
+                    GitWorktreeService._remove_orphaned_task_worktree_directory(
+                        repo_root_path=repo_root_path,
+                        worktree_path=resolved_worktree_path,
+                    )
+                    output_line_list.append(
+                        "Removed orphaned task worktree directory directly because "
+                        "Git no longer registered it."
+                    )
+                except OSError as remove_error:
+                    return WorktreeDestroyResult(
+                        cleanup_succeeded=False,
+                        worktree_removed=False,
+                        branch_deleted=not GitWorktreeService._branch_exists(
+                            repo_root_path,
+                            feature_branch_name,
+                        ),
+                        output_line_list=output_line_list,
+                        failure_reason_text=(
+                            "Failed to remove orphaned task worktree directory during "
+                            f"completion cleanup: {remove_error}"
+                        ),
+                    )
+
+        branch_deleted = not GitWorktreeService._branch_exists(
+            repo_root_path,
+            feature_branch_name,
+        )
+        if not branch_deleted:
+            delete_branch_process = subprocess.run(
+                ["git", "branch", "-d", feature_branch_name],
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            output_line_list.extend((delete_branch_process.stdout or "").splitlines())
+            output_line_list.extend((delete_branch_process.stderr or "").splitlines())
+
+            branch_deleted = not GitWorktreeService._branch_exists(
+                repo_root_path,
+                feature_branch_name,
+            )
+            if not branch_deleted:
+                force_delete_branch_process = subprocess.run(
+                    ["git", "branch", "-D", feature_branch_name],
+                    cwd=str(repo_root_path),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                output_line_list.extend(
+                    (force_delete_branch_process.stdout or "").splitlines()
+                )
+                output_line_list.extend(
+                    (force_delete_branch_process.stderr or "").splitlines()
+                )
+                if force_delete_branch_process.returncode == 0:
+                    output_line_list.append(
+                        "Force-deleted completed task branch after standard branch "
+                        "delete failed."
+                    )
+                branch_deleted = not GitWorktreeService._branch_exists(
+                    repo_root_path,
+                    feature_branch_name,
+                )
+
+        worktree_removed = GitWorktreeService._is_task_worktree_fully_removed(
+            repo_root_path=repo_root_path,
+            worktree_path=resolved_worktree_path,
+        )
+        if not worktree_removed or not branch_deleted:
+            cleanup_gap_list: list[str] = []
+            if not worktree_removed:
+                cleanup_gap_list.append(
+                    "task worktree directory or Git registration still exists"
+                )
+            if not branch_deleted:
+                cleanup_gap_list.append("task branch still exists locally")
+            return WorktreeDestroyResult(
+                cleanup_succeeded=False,
+                worktree_removed=worktree_removed,
+                branch_deleted=branch_deleted,
+                output_line_list=output_line_list,
+                failure_reason_text=(
+                    "Completed task cleanup did not finish completely: "
+                    + "; ".join(cleanup_gap_list)
+                ),
+            )
+
+        return WorktreeDestroyResult(
+            cleanup_succeeded=True,
+            worktree_removed=True,
+            branch_deleted=True,
+            output_line_list=output_line_list,
+        )
+
+    @staticmethod
     def resolve_repo_root_path(
         *,
         project_repo_path: Path | None = None,

@@ -76,6 +76,25 @@ _POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST = [
     "--all-files",
 ]
 
+_COMMIT_MESSAGE_GENERATION_TIMEOUT_SECONDS = 120
+_ALLOWED_CONVENTIONAL_COMMIT_TYPE_TUPLE = (
+    "feat",
+    "fix",
+    "docs",
+    "style",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore",
+    "revert",
+)
+_CONVENTIONAL_COMMIT_MESSAGE_PATTERN = re.compile(
+    rf"^({'|'.join(_ALLOWED_CONVENTIONAL_COMMIT_TYPE_TUPLE)})"
+    r"(\([a-z0-9._/-]+\))?!?: .{1,100}$"
+)
+
 
 def _resolve_active_runner() -> AutomationRunner:
     """Resolve the currently configured automation runner.
@@ -586,6 +605,281 @@ def _build_completion_commit_message(
             return normalized_commit_subject_str[:72].rstrip()
 
     return f"Task update {task_id_str[:8]}"
+
+
+def _truncate_text_for_runner_prompt(raw_text_str: str, max_length_int: int) -> str:
+    """Truncate prompt context while preserving a clear omission marker.
+
+    Args:
+        raw_text_str: Text to truncate.
+        max_length_int: Maximum returned length.
+
+    Returns:
+        str: Truncated text with an omission marker when needed.
+    """
+    if len(raw_text_str) <= max_length_int:
+        return raw_text_str
+    return raw_text_str[:max_length_int].rstrip() + "\n...（内容过长，已截断）"
+
+
+def _build_runner_commit_message_prompt(
+    *,
+    task_title_str: str,
+    commit_information_text_str: str | None,
+    dev_log_text_list: list[str],
+    worktree_path: Path,
+    staged_status_text_str: str,
+    staged_name_status_text_str: str,
+    staged_diff_stat_text_str: str,
+    runner_display_name_str: str,
+) -> str:
+    """Build the runner prompt for a Conventional Commit message.
+
+    Args:
+        task_title_str: Task title.
+        commit_information_text_str: Resolved task summary text.
+        dev_log_text_list: Recent task history.
+        worktree_path: Task worktree path.
+        staged_status_text_str: Output from ``git status --short`` after staging.
+        staged_name_status_text_str: Output from ``git diff --cached --name-status``.
+        staged_diff_stat_text_str: Output from ``git diff --cached --stat``.
+        runner_display_name_str: Runner display name shown in prompt.
+
+    Returns:
+        str: Prompt text for non-interactive runner execution.
+    """
+    recent_context_block_str = _build_recent_context_block(
+        dev_log_text_list=dev_log_text_list,
+        max_items_int=8,
+        separator_str="\n\n---\n",
+        empty_context_text_str="（暂无额外上下文，请仅基于 staged diff 摘要判断）",
+    )
+    resolved_commit_information_str = (
+        commit_information_text_str.strip()
+        if commit_information_text_str and commit_information_text_str.strip()
+        else "（无额外 commit information）"
+    )
+    allowed_type_text_str = ", ".join(_ALLOWED_CONVENTIONAL_COMMIT_TYPE_TUPLE)
+    return f"""你现在处于 Koda 的 Git Complete 阶段，需要用 {runner_display_name_str} 为即将执行的 `git commit` 生成符合 Conventional Commits 规范的提交信息。
+
+## 任务标题
+{task_title_str}
+
+## 已解析的任务摘要
+{resolved_commit_information_str}
+
+## 最近上下文
+{recent_context_block_str}
+
+## 当前 worktree
+`{worktree_path}`
+
+## staged 状态
+```text
+{_truncate_text_for_runner_prompt(staged_status_text_str.strip() or "(empty)", 4000)}
+```
+
+## staged 文件
+```text
+{_truncate_text_for_runner_prompt(staged_name_status_text_str.strip() or "(empty)", 4000)}
+```
+
+## staged diff 统计
+```text
+{_truncate_text_for_runner_prompt(staged_diff_stat_text_str.strip() or "(empty)", 4000)}
+```
+
+## 输出要求
+1. 只输出一行，不要 Markdown、不要解释、不要引号、不要正文。
+2. 格式必须是：`COMMIT_MESSAGE: type(scope): subject` 或 `COMMIT_MESSAGE: type: subject`。
+3. `type` 只能从这些值中选择：{allowed_type_text_str}。
+4. subject 使用英文祈使句，描述 staged diff 的实际改动，不要用句号结尾。
+5. `type(scope): subject` 部分必须不超过 100 个字符。
+
+请现在只输出这一行。"""
+
+
+def _extract_runner_commit_message(runner_output_text_str: str) -> str | None:
+    """Extract a commit message from runner output.
+
+    Args:
+        runner_output_text_str: Combined runner stdout and stderr text.
+
+    Returns:
+        str | None: Extracted commit message, or None when no marker exists.
+    """
+    for raw_output_line_str in runner_output_text_str.splitlines():
+        stripped_output_line_str = raw_output_line_str.strip()
+        if not stripped_output_line_str:
+            continue
+        if stripped_output_line_str.upper().startswith("COMMIT_MESSAGE:"):
+            raw_commit_message_str = stripped_output_line_str.split(":", 1)[1].strip()
+            return raw_commit_message_str.strip("`\"'")
+    return None
+
+
+def _is_valid_conventional_commit_message(commit_message_str: str) -> bool:
+    """Validate a generated Conventional Commit message.
+
+    Args:
+        commit_message_str: Candidate commit message.
+
+    Returns:
+        bool: Whether the message follows the configured project convention.
+    """
+    if "\n" in commit_message_str or "\r" in commit_message_str:
+        return False
+    if commit_message_str.endswith("."):
+        return False
+    return bool(_CONVENTIONAL_COMMIT_MESSAGE_PATTERN.fullmatch(commit_message_str))
+
+
+def _run_logged_runner_commit_message_generation(
+    *,
+    task_id_str: str,
+    run_account_id_str: str,
+    task_log_path: Path,
+    task_title_str: str,
+    commit_information_text_str: str | None,
+    dev_log_text_list: list[str],
+    worktree_path: Path,
+    staged_status_text_str: str,
+    staged_name_status_text_str: str,
+    staged_diff_stat_text_str: str,
+) -> tuple[str | None, list[str], str | None]:
+    """Invoke the active runner to generate a Conventional Commit message.
+
+    Args:
+        task_id_str: Task UUID.
+        run_account_id_str: Run account UUID.
+        task_log_path: Task log file path.
+        task_title_str: Task title.
+        commit_information_text_str: Resolved task summary text.
+        dev_log_text_list: Recent task history.
+        worktree_path: Task worktree path.
+        staged_status_text_str: Output from ``git status --short`` after staging.
+        staged_name_status_text_str: Output from ``git diff --cached --name-status``.
+        staged_diff_stat_text_str: Output from ``git diff --cached --stat``.
+
+    Returns:
+        tuple[str | None, list[str], str | None]: Generated commit message,
+            runner output lines, and failure reason when generation failed.
+    """
+    active_runner_obj = _resolve_active_runner()
+    runner_executable_path_str = shutil.which(active_runner_obj.executable_name)
+    if not runner_executable_path_str:
+        missing_runner_text = (
+            "需要生成规范 commit message，但当前环境未找到 "
+            f"runner_kind={active_runner_obj.runner_kind} 的可执行文件 "
+            f"`{active_runner_obj.executable_name}`。\n"
+            f"{active_runner_obj.build_missing_cli_hint()}"
+        )
+        _append_text_to_task_log(task_log_path, missing_runner_text)
+        _write_log_to_db(task_id_str, run_account_id_str, missing_runner_text, "BUG")
+        return None, [missing_runner_text], missing_runner_text
+
+    runner_prompt_text_str = _build_runner_commit_message_prompt(
+        task_title_str=task_title_str,
+        commit_information_text_str=commit_information_text_str,
+        dev_log_text_list=dev_log_text_list,
+        worktree_path=worktree_path,
+        staged_status_text_str=staged_status_text_str,
+        staged_name_status_text_str=staged_name_status_text_str,
+        staged_diff_stat_text_str=staged_diff_stat_text_str,
+        runner_display_name_str=active_runner_obj.runner_display_name,
+    )
+    command_display_str = active_runner_obj.build_command_preview().replace(
+        "<prompt>",
+        "<commit-message-prompt>",
+    )
+    _append_text_to_task_log(
+        task_log_path,
+        f"$ (runner-commit-message) {command_display_str}",
+    )
+    runner_stdin_prompt_text = active_runner_obj.build_stdin_prompt_text(
+        runner_prompt_text_str
+    )
+
+    try:
+        completed_process = subprocess.run(
+            [
+                runner_executable_path_str,
+                *active_runner_obj.build_exec_argument_list(runner_prompt_text_str),
+            ],
+            cwd=str(worktree_path),
+            capture_output=True,
+            input=runner_stdin_prompt_text,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_COMMIT_MESSAGE_GENERATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        timeout_text = (
+            f"runner_kind={active_runner_obj.runner_kind} commit message generation "
+            f"timed out after {_COMMIT_MESSAGE_GENERATION_TIMEOUT_SECONDS}s."
+        )
+        _append_text_to_task_log(task_log_path, timeout_text)
+        _write_log_to_db(task_id_str, run_account_id_str, timeout_text, "BUG")
+        return None, [timeout_text], timeout_text
+
+    output_text_part_list = [
+        text_part.strip()
+        for text_part in [completed_process.stdout, completed_process.stderr]
+        if text_part and text_part.strip()
+    ]
+    combined_output_text_str = "\n".join(output_text_part_list)
+    if combined_output_text_str:
+        _append_output_block_to_task_log(task_log_path, combined_output_text_str)
+    else:
+        _append_text_to_task_log(task_log_path, "(no output)")
+    _append_exit_code_to_task_log(task_log_path, completed_process.returncode)
+
+    runner_output_line_list = _extract_completed_process_output_lines(completed_process)
+    generation_status_text_str = (
+        f"runner_kind={active_runner_obj.runner_kind} commit message generation "
+        f"-> exit {completed_process.returncode}"
+    )
+    if combined_output_text_str:
+        generation_status_text_str += f"\n{combined_output_text_str}"
+    _write_log_to_db(
+        task_id_str,
+        run_account_id_str,
+        generation_status_text_str,
+        "OPTIMIZATION" if completed_process.returncode == 0 else "BUG",
+    )
+
+    if completed_process.returncode != 0:
+        failure_reason_text = "AI 生成 commit message 失败。"
+        return None, runner_output_line_list, failure_reason_text
+
+    generated_commit_message_str = _extract_runner_commit_message(
+        combined_output_text_str
+    )
+    if generated_commit_message_str is None:
+        failure_reason_text = "AI 未输出 `COMMIT_MESSAGE:` 标记，无法执行 git commit。"
+        _write_log_to_db(task_id_str, run_account_id_str, failure_reason_text, "BUG")
+        return None, runner_output_line_list, failure_reason_text
+
+    if not _is_valid_conventional_commit_message(generated_commit_message_str):
+        failure_reason_text = (
+            "AI 生成的 commit message 不符合 Conventional Commits 规范："
+            f"`{generated_commit_message_str}`"
+        )
+        _write_log_to_db(task_id_str, run_account_id_str, failure_reason_text, "BUG")
+        return None, runner_output_line_list, failure_reason_text
+
+    accepted_message_text = (
+        f"📝 AI 已生成符合规范的 commit message：`{generated_commit_message_str}`"
+    )
+    _append_text_to_task_log(task_log_path, accepted_message_text)
+    _write_log_to_db(
+        task_id_str,
+        run_account_id_str,
+        accepted_message_text,
+        "OPTIMIZATION",
+    )
+    return generated_commit_message_str, runner_output_line_list, None
 
 
 def _resolve_primary_repo_root_from_worktree(worktree_path: Path) -> Path:
@@ -1348,43 +1642,61 @@ def _execute_git_completion_flow(
             failure_reason_text=failure_reason_text,
         )
 
-    fetch_process = _run_logged_command(
-        task_id_str=task_id_str,
-        run_account_id_str=run_account_id_str,
-        task_log_path=task_log_path,
-        command_argument_list=["git", "fetch", "origin"],
-        cwd_path=merge_target_worktree_path,
-        command_log_label_str="git-fetch-origin",
+    preferred_remote_name_str = GitWorktreeService.resolve_preferred_remote_name(
+        repo_root_path=repo_root_path,
+        branch_name_str="main",
     )
-    output_line_list.extend((fetch_process.stdout or "").splitlines())
-    output_line_list.extend((fetch_process.stderr or "").splitlines())
-    if fetch_process.returncode != 0:
-        _append_text_to_task_log(
-            task_log_path, "无法从远程拉取更新（git fetch origin），跳过拉取继续执行。"
+    if preferred_remote_name_str is None:
+        no_remote_log_text = (
+            "无法为 `main` 解析可用 remote，跳过远程同步，继续执行本地 rebase/merge。"
         )
+        _append_text_to_task_log(task_log_path, no_remote_log_text)
+        output_line_list.append(no_remote_log_text)
     else:
-        pull_process = _run_logged_command(
+        fetch_process = _run_logged_command(
             task_id_str=task_id_str,
             run_account_id_str=run_account_id_str,
             task_log_path=task_log_path,
-            command_argument_list=["git", "merge", "--ff-only", "origin/main"],
+            command_argument_list=["git", "fetch", preferred_remote_name_str],
             cwd_path=merge_target_worktree_path,
-            command_log_label_str="git-pull-ff-only",
+            command_log_label_str=f"git-fetch-{preferred_remote_name_str}",
         )
-        output_line_list.extend((pull_process.stdout or "").splitlines())
-        output_line_list.extend((pull_process.stderr or "").splitlines())
-        if pull_process.returncode != 0:
-            failure_reason_text = (
-                "远程 `main` 分支有分叉更新，无法自动快进合并，请手动处理后重试。"
+        output_line_list.extend((fetch_process.stdout or "").splitlines())
+        output_line_list.extend((fetch_process.stderr or "").splitlines())
+        if fetch_process.returncode != 0:
+            _append_text_to_task_log(
+                task_log_path,
+                "无法从远程拉取更新（"
+                f"git fetch {preferred_remote_name_str}），跳过拉取继续执行。",
             )
-            _append_text_to_task_log(task_log_path, failure_reason_text)
-            return GitCompletionExecutionResult(
-                merged_to_main=False,
-                cleanup_succeeded=False,
-                output_lines=output_line_list,
-                feature_branch_name=feature_branch_name,
-                failure_reason_text=failure_reason_text,
+        else:
+            pull_process = _run_logged_command(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_log_path=task_log_path,
+                command_argument_list=[
+                    "git",
+                    "merge",
+                    "--ff-only",
+                    f"{preferred_remote_name_str}/main",
+                ],
+                cwd_path=merge_target_worktree_path,
+                command_log_label_str=f"git-pull-ff-only-{preferred_remote_name_str}",
             )
+            output_line_list.extend((pull_process.stdout or "").splitlines())
+            output_line_list.extend((pull_process.stderr or "").splitlines())
+            if pull_process.returncode != 0:
+                failure_reason_text = (
+                    "远程 `main` 分支有分叉更新，无法自动快进合并，请手动处理后重试。"
+                )
+                _append_text_to_task_log(task_log_path, failure_reason_text)
+                return GitCompletionExecutionResult(
+                    merged_to_main=False,
+                    cleanup_succeeded=False,
+                    output_lines=output_line_list,
+                    feature_branch_name=feature_branch_name,
+                    failure_reason_text=failure_reason_text,
+                )
 
     merge_target_branch_process = _run_logged_command(
         task_id_str=task_id_str,
@@ -1408,28 +1720,10 @@ def _execute_git_completion_flow(
     current_merge_target_branch_name = (
         merge_target_branch_process.stdout or ""
     ).strip()
-    commit_message_str = _build_completion_commit_message(
-        task_id_str=task_id_str,
-        task_title_str=task_title_str,
-        commit_information_text_str=commit_information_text_str,
-    )
     command_plan = [
         ("worktree-status", ["git", "status", "--short"], worktree_path),
         ("git-add", ["git", "add", "."], worktree_path),
-        ("git-commit", ["git", "commit", "-m", commit_message_str], worktree_path),
-        ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
     ]
-    if current_merge_target_branch_name != "main":
-        command_plan.append(
-            ("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path)
-        )
-    command_plan.append(
-        (
-            "merge-feature",
-            ["git", "merge", feature_branch_name],
-            merge_target_worktree_path,
-        )
-    )
 
     merge_completed_bool = False
     for command_log_label_str, command_argument_list, command_cwd_path in command_plan:
@@ -1444,27 +1738,194 @@ def _execute_git_completion_flow(
         output_line_list.extend((completed_process.stdout or "").splitlines())
         output_line_list.extend((completed_process.stderr or "").splitlines())
         if completed_process.returncode != 0:
-            if command_log_label_str == "git-commit":
-                (
-                    retried_commit_process,
-                    retry_output_line_list,
-                    retry_command_log_label_str,
-                ) = _retry_git_commit_once_after_hook_fixes(
-                    task_id_str=task_id_str,
-                    run_account_id_str=run_account_id_str,
-                    task_log_path=task_log_path,
-                    worktree_path=worktree_path,
-                    commit_message_str=commit_message_str,
+            failure_reason_text = f"命令失败：{shlex.join(command_argument_list)}"
+            return GitCompletionExecutionResult(
+                merged_to_main=merge_completed_bool,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+
+    post_add_status_process = _run_logged_command(
+        task_id_str=task_id_str,
+        run_account_id_str=run_account_id_str,
+        task_log_path=task_log_path,
+        command_argument_list=["git", "status", "--short"],
+        cwd_path=worktree_path,
+        command_log_label_str="post-add-status",
+    )
+    output_line_list.extend((post_add_status_process.stdout or "").splitlines())
+    output_line_list.extend((post_add_status_process.stderr or "").splitlines())
+    if post_add_status_process.returncode != 0:
+        failure_reason_text = "无法检查任务 worktree 的 staged 状态。"
+        return GitCompletionExecutionResult(
+            merged_to_main=False,
+            cleanup_succeeded=False,
+            output_lines=output_line_list,
+            feature_branch_name=feature_branch_name,
+            failure_reason_text=failure_reason_text,
+        )
+
+    if not (post_add_status_process.stdout or "").strip():
+        skip_commit_text_str = (
+            "ℹ️ 任务 worktree 已经没有未提交变更，Koda 将跳过 `git commit`，"
+            "直接继续 `git rebase main` 与 merge。"
+        )
+        _append_text_to_task_log(task_log_path, skip_commit_text_str)
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            skip_commit_text_str,
+            "OPTIMIZATION",
+        )
+        output_line_list.append(skip_commit_text_str)
+    else:
+        staged_name_status_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=["git", "diff", "--cached", "--name-status"],
+            cwd_path=worktree_path,
+            command_log_label_str="staged-diff-name-status",
+        )
+        output_line_list.extend((staged_name_status_process.stdout or "").splitlines())
+        output_line_list.extend((staged_name_status_process.stderr or "").splitlines())
+        if staged_name_status_process.returncode != 0:
+            failure_reason_text = (
+                "无法读取 staged diff 文件列表，无法生成 commit message。"
+            )
+            return GitCompletionExecutionResult(
+                merged_to_main=False,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+
+        staged_diff_stat_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=["git", "diff", "--cached", "--stat"],
+            cwd_path=worktree_path,
+            command_log_label_str="staged-diff-stat",
+        )
+        output_line_list.extend((staged_diff_stat_process.stdout or "").splitlines())
+        output_line_list.extend((staged_diff_stat_process.stderr or "").splitlines())
+        if staged_diff_stat_process.returncode != 0:
+            failure_reason_text = "无法读取 staged diff 统计，无法生成 commit message。"
+            return GitCompletionExecutionResult(
+                merged_to_main=False,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+
+        (
+            commit_message_str,
+            commit_message_output_line_list,
+            commit_message_failure_reason_text,
+        ) = _run_logged_runner_commit_message_generation(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            task_title_str=task_title_str,
+            commit_information_text_str=commit_information_text_str,
+            dev_log_text_list=dev_log_text_list,
+            worktree_path=worktree_path,
+            staged_status_text_str=post_add_status_process.stdout or "",
+            staged_name_status_text_str=staged_name_status_process.stdout or "",
+            staged_diff_stat_text_str=staged_diff_stat_process.stdout or "",
+        )
+        output_line_list.extend(commit_message_output_line_list)
+        if commit_message_str is None:
+            failure_reason_text = commit_message_failure_reason_text or (
+                "无法生成符合规范的 commit message。"
+            )
+            return GitCompletionExecutionResult(
+                merged_to_main=False,
+                cleanup_succeeded=False,
+                output_lines=output_line_list,
+                feature_branch_name=feature_branch_name,
+                failure_reason_text=failure_reason_text,
+            )
+
+        commit_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=["git", "commit", "-m", commit_message_str],
+            cwd_path=worktree_path,
+            command_log_label_str="git-commit",
+        )
+        output_line_list.extend((commit_process.stdout or "").splitlines())
+        output_line_list.extend((commit_process.stderr or "").splitlines())
+        if commit_process.returncode != 0:
+            (
+                retried_commit_process,
+                retry_output_line_list,
+                retry_command_log_label_str,
+            ) = _retry_git_commit_once_after_hook_fixes(
+                task_id_str=task_id_str,
+                run_account_id_str=run_account_id_str,
+                task_log_path=task_log_path,
+                worktree_path=worktree_path,
+                commit_message_str=commit_message_str,
+            )
+            output_line_list.extend(retry_output_line_list)
+            if retried_commit_process is not None:
+                commit_process = retried_commit_process
+
+            if commit_process.returncode != 0:
+                effective_command_label_str = (
+                    retry_command_log_label_str or "git-commit"
                 )
-                output_line_list.extend(retry_output_line_list)
-                if retried_commit_process is not None:
-                    completed_process = retried_commit_process
-                    if retry_command_log_label_str is not None:
-                        command_log_label_str = retry_command_log_label_str
+                failure_reason_text = (
+                    "命令失败："
+                    f"{effective_command_label_str} "
+                    f"{shlex.join(['git', 'commit', '-m', commit_message_str])}"
+                )
+                return GitCompletionExecutionResult(
+                    merged_to_main=False,
+                    cleanup_succeeded=False,
+                    output_lines=output_line_list,
+                    feature_branch_name=feature_branch_name,
+                    failure_reason_text=failure_reason_text,
+                )
 
-            if completed_process.returncode == 0:
-                continue
+    finish_command_plan = [
+        ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
+    ]
+    if current_merge_target_branch_name != "main":
+        finish_command_plan.append(
+            ("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path)
+        )
+    finish_command_plan.append(
+        (
+            "merge-feature",
+            ["git", "merge", feature_branch_name],
+            merge_target_worktree_path,
+        )
+    )
 
+    for (
+        command_log_label_str,
+        command_argument_list,
+        command_cwd_path,
+    ) in finish_command_plan:
+        completed_process = _run_logged_command(
+            task_id_str=task_id_str,
+            run_account_id_str=run_account_id_str,
+            task_log_path=task_log_path,
+            command_argument_list=command_argument_list,
+            cwd_path=command_cwd_path,
+            command_log_label_str=command_log_label_str,
+        )
+        output_line_list.extend((completed_process.stdout or "").splitlines())
+        output_line_list.extend((completed_process.stderr or "").splitlines())
+        if completed_process.returncode != 0:
             operation_kind_str = ""
             if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(
                 command_cwd_path
@@ -1521,82 +1982,23 @@ def _execute_git_completion_flow(
         if command_log_label_str == "merge-feature":
             merge_completed_bool = True
 
-    cleanup_script_path = GitWorktreeService.resolve_cleanup_script_path(repo_root_path)
-    if cleanup_script_path is not None:
-        cleanup_process = _run_logged_command(
-            task_id_str=task_id_str,
-            run_account_id_str=run_account_id_str,
-            task_log_path=task_log_path,
-            command_argument_list=[
-                str(cleanup_script_path),
-                feature_branch_name,
-                "main",
-                "--delete",
-                "--worktree-path",
-                worktree_path_str,
-            ],
-            cwd_path=merge_target_worktree_path,
-            command_log_label_str="cleanup-script",
-        )
-        output_line_list.extend((cleanup_process.stdout or "").splitlines())
-        output_line_list.extend((cleanup_process.stderr or "").splitlines())
-        cleanup_succeeded_bool = cleanup_process.returncode == 0
-        return GitCompletionExecutionResult(
-            merged_to_main=True,
-            cleanup_succeeded=cleanup_succeeded_bool,
-            output_lines=output_line_list,
-            feature_branch_name=feature_branch_name,
-            failure_reason_text=(
-                None
-                if cleanup_succeeded_bool
-                else "分支已合并到 main，但 repo-local cleanup 脚本执行失败。"
-            ),
-            worktree_removed=not worktree_path.exists(),
-        )
-
-    cleanup_command_plan = [
-        (
-            "remove-worktree",
-            ["git", "worktree", "remove", worktree_path_str],
-            merge_target_worktree_path,
-        ),
-        (
-            "delete-branch",
-            ["git", "branch", "-d", feature_branch_name],
-            merge_target_worktree_path,
-        ),
-    ]
-    for (
-        command_log_label_str,
-        command_argument_list,
-        command_cwd_path,
-    ) in cleanup_command_plan:
-        completed_process = _run_logged_command(
-            task_id_str=task_id_str,
-            run_account_id_str=run_account_id_str,
-            task_log_path=task_log_path,
-            command_argument_list=command_argument_list,
-            cwd_path=command_cwd_path,
-            command_log_label_str=command_log_label_str,
-        )
-        output_line_list.extend((completed_process.stdout or "").splitlines())
-        output_line_list.extend((completed_process.stderr or "").splitlines())
-        if completed_process.returncode != 0:
-            return GitCompletionExecutionResult(
-                merged_to_main=True,
-                cleanup_succeeded=False,
-                output_lines=output_line_list,
-                feature_branch_name=feature_branch_name,
-                failure_reason_text="分支已合并到 main，但清理 task worktree 或分支失败。",
-                worktree_removed=not worktree_path.exists(),
-            )
-
+    cleanup_result = GitWorktreeService.cleanup_completed_task_worktree(
+        repo_root_path=repo_root_path,
+        feature_branch_name=feature_branch_name,
+        worktree_path=worktree_path,
+    )
+    for cleanup_output_line_str in cleanup_result.output_line_list:
+        stripped_cleanup_output_line_str = cleanup_output_line_str.strip()
+        if stripped_cleanup_output_line_str:
+            _append_text_to_task_log(task_log_path, stripped_cleanup_output_line_str)
+    output_line_list.extend(cleanup_result.output_line_list)
     return GitCompletionExecutionResult(
         merged_to_main=True,
-        cleanup_succeeded=True,
+        cleanup_succeeded=cleanup_result.cleanup_succeeded,
         output_lines=output_line_list,
         feature_branch_name=feature_branch_name,
-        worktree_removed=not worktree_path.exists(),
+        failure_reason_text=cleanup_result.failure_reason_text,
+        worktree_removed=cleanup_result.worktree_removed,
     )
 
 
@@ -2107,16 +2509,16 @@ def build_codex_completion_prompt(
 
 ## Git Worktree 说明
 当前工作目录就是任务对应的 git worktree：`{worktree_path_str}`
-- `git add .`、`git commit`、`git rebase main` 在当前 worktree 中执行
+- `git add .`、必要时 `git commit`、`git rebase main` 在当前 worktree 中执行
 - merge 会复用当前持有 `main` 分支的工作区；只有找不到该工作区时才会尝试 `git checkout main`
 - 不要创建新 worktree、不要 push
 
 ## 执行要求
 1. 先查看当前 `git status`，确认本次任务的工作区状态。
-2. 严格按顺序执行：`git add .`、`git commit -m "<resolved commit information>"`、`git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
-3. `git commit` 的提交消息要优先使用最近一轮通过的 AI summary；若缺失则回退到 requirement brief，再缺失时回退到任务标题。
+2. 严格按顺序执行：`git add .`；若 staging 后仍有变更，则由当前 AI runner 基于 staged diff 生成 Conventional Commit 格式的 message 后执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后工作区已经干净，说明用户已经提交过，跳过 `git commit`。
+3. 继续执行 `git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
 4. 如果 `git rebase main` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
-5. 如果工作区没有可提交的变更、缺少 `main`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
+5. 如果缺少 `main`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
 6. merge 成功后，需要清理 task worktree 与本地任务分支；不要 push。
 7. 最后简要输出：提交结果、rebase 结果、merge 结果、是否还需要人工处理。
 
@@ -3866,7 +4268,8 @@ async def run_codex_completion(
     """在任务 worktree 中执行确定性的 Git 收尾与合并动作.
 
     完成阶段会在后台按顺序执行：
-    `git add .` -> `git commit -m "<resolved commit information>"` -> `git rebase main`
+    `git add .` -> 如存在 staged 变更则让当前 runner 生成 Conventional Commit
+    message 并执行 `git commit`，否则跳过 commit -> `git rebase main`
     -> 复用承载 `main` 的工作区执行 `git merge <task branch>` -> 清理 worktree/分支。
     若 `git rebase main` 发生冲突，会自动调用 Codex 修复冲突并继续 rebase。
     若合并成功，任务自动推进到 `done`；若在合并前失败，任务回退到 `changes_requested`。
@@ -3891,8 +4294,9 @@ async def run_codex_completion(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            "🚀 已收到完成请求，Koda 正在执行：`git add .` -> `git commit` -> "
-            "`git rebase main`。若 rebase 冲突，会自动调用 "
+            "🚀 已收到完成请求，Koda 正在执行：`git add .` -> "
+            "如有未提交变更则由 AI 生成规范 commit message 并执行 `git commit`，"
+            "若已提交则跳过 commit -> `git rebase main`。若 rebase 冲突，会自动调用 "
             f"runner_kind={active_runner_kind_str} 修复；随后会在承载 `main` "
             "的工作区完成 merge 与清理。",
             "OPTIMIZATION",

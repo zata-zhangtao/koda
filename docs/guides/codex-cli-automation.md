@@ -59,10 +59,10 @@
 
 1. 前端点击“Complete”
 2. 后端将任务推进到 `pr_preparing`
-3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`、`git commit -m "<resolved commit information>"`、`git rebase main`
+3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后已经干净，则跳过 commit，继续 `git rebase main`
 4. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
-5. 后端会复用当前持有 `main` 分支的工作区完成 `git merge <task branch>`
-6. merge 成功后继续清理 task worktree 与本地任务分支
+5. 后端会优先解析 `main` 分支已配置的 remote；若无显式配置，则回退到仓库唯一 remote，再回退到 `origin` / `zata`，并在当前持有 `main` 分支的工作区完成远程同步与 `git merge <task branch>`
+6. merge 成功后继续清理 task worktree 与本地任务分支；repo-local cleanup script 即使返回非零，后端也会继续核验 worktree / branch 的真实状态，并尝试 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理作为 fallback
 7. 日志继续写入 `DevLog`
 8. 若收尾成功，任务自动推进到 `done`
 9. 若在合并到 `main` 前失败，任务回退到 `changes_requested`
@@ -198,7 +198,7 @@
 
 它描述的真实后台行为是：
 
-- 当前 task worktree 中执行 `git add .`、优先基于最近一轮通过的 AI summary 生成 `git commit -m ...`；若缺失则回退到 `requirement_brief`，再缺失时回退到 `task_title`，随后执行 `git rebase main`
+- 当前 task worktree 中执行 `git add .`；若 staging 后仍有变更，则当前 AI runner 会基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m ...`；若 staging 后已经干净，说明用户已经提交过，系统会跳过 commit，随后执行 `git rebase main`
 - 优先复用已经持有 `main` 分支的工作区，而不是假定可以随时 `checkout main`
 - 若 `rebase` / `merge` 冲突，则自动调用 Codex 修复并继续
 - merge 成功后清理 worktree 与本地任务分支，不会 push

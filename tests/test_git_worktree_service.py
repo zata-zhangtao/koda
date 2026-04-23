@@ -398,8 +398,56 @@ def test_destroy_task_worktree_removes_orphaned_directory_and_semantic_branch(
     )
 
 
+def test_cleanup_completed_task_worktree_falls_back_when_cleanup_script_leaves_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Completion cleanup should fall back when the repo-local script leaves artifacts."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    explicit_branch_name_str = "task/12345678-fix-login-timeout"
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+        task_branch_name_str=explicit_branch_name_str,
+    )
+    changed_file_path = created_worktree_path / "README.md"
+    changed_file_path.write_text("hello\nfeature change\n", encoding="utf-8")
+    _commit_all_changes(created_worktree_path, "feature change")
+    _run_git_command(
+        repo_root_path,
+        ["merge", "--no-ff", explicit_branch_name_str, "-m", "merge feature"],
+    )
+    _write_shell_script(
+        repo_root_path / "scripts" / "git_worktree_merge.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+echo "noop cleanup"
+exit 1
+""",
+    )
+
+    cleanup_result = GitWorktreeService.cleanup_completed_task_worktree(
+        repo_root_path=repo_root_path,
+        feature_branch_name=explicit_branch_name_str,
+        worktree_path=created_worktree_path,
+    )
+
+    assert cleanup_result.cleanup_succeeded is True
+    assert cleanup_result.worktree_removed is True
+    assert cleanup_result.branch_deleted is True
+    assert created_worktree_path.exists() is False
+    assert (
+        _run_git_command(repo_root_path, ["branch", "--list", explicit_branch_name_str])
+        == ""
+    )
+    assert any(
+        "falling back to direct cleanup" in output_line
+        for output_line in cleanup_result.output_line_list
+    )
+
+
 def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """The deterministic completion flow should merge the task branch into main and remove the worktree."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
@@ -408,6 +456,72 @@ def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
         task_id="12345678-task-id",
     )
 
+    changed_file_path = created_worktree_path / "README.md"
+    changed_file_path.write_text("hello\nfeature change\n", encoding="utf-8")
+
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner._write_log_to_db = lambda *args, **kwargs: None
+        codex_runner._CODEX_LOG_DIR = tmp_path
+        monkeypatch.setattr(
+            codex_runner,
+            "_run_logged_runner_commit_message_generation",
+            lambda **kwargs: (
+                "fix(complete): summarize completed branch behavior",
+                ["COMMIT_MESSAGE: fix(complete): summarize completed branch behavior"],
+                None,
+            ),
+        )
+
+        completion_result = codex_runner._execute_git_completion_flow(
+            task_id_str="12345678-task-id",
+            run_account_id_str="run-account-1",
+            task_title_str="Finalize branch",
+            commit_information_text_str="Summarize the completed branch behavior",
+            dev_log_text_list=["Implementation already passed review."],
+            worktree_path_str=str(created_worktree_path),
+        )
+    finally:
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+
+    assert completion_result.merged_to_main is True
+    assert completion_result.cleanup_succeeded is True
+    assert completion_result.worktree_removed is True
+    assert created_worktree_path.exists() is False
+    assert _run_git_command(repo_root_path, ["branch", "--show-current"]) == "main"
+    assert "feature change" in (repo_root_path / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert _run_git_command(repo_root_path, ["branch", "--list", "task/12345678"]) == ""
+    assert (
+        _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
+        == "fix(complete): summarize completed branch behavior"
+    )
+
+
+def test_execute_git_completion_flow_uses_non_origin_main_remote(
+    tmp_path: Path,
+) -> None:
+    """Completion should resolve and use the configured non-origin remote for main."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    bare_remote_path = tmp_path / "demo-remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(bare_remote_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    _run_git_command(repo_root_path, ["remote", "add", "zata", str(bare_remote_path)])
+    _run_git_command(repo_root_path, ["push", "-u", "zata", "main"])
+
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+    )
     changed_file_path = created_worktree_path / "README.md"
     changed_file_path.write_text("hello\nfeature change\n", encoding="utf-8")
 
@@ -433,20 +547,15 @@ def test_execute_git_completion_flow_merges_and_cleans_up_worktree(
     assert completion_result.merged_to_main is True
     assert completion_result.cleanup_succeeded is True
     assert completion_result.worktree_removed is True
-    assert created_worktree_path.exists() is False
-    assert _run_git_command(repo_root_path, ["branch", "--show-current"]) == "main"
-    assert "feature change" in (repo_root_path / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert _run_git_command(repo_root_path, ["branch", "--list", "task/12345678"]) == ""
-    assert (
-        _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
-        == "Summarize the completed branch behavior"
-    )
+    task_log_path = tmp_path / "koda-12345678.log"
+    task_log_text = task_log_path.read_text(encoding="utf-8")
+    assert "git-fetch-zata" in task_log_text
+    assert "git-pull-ff-only-zata" in task_log_text
 
 
 def test_execute_git_completion_flow_retries_commit_after_hook_autofix(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """Completion should restage and retry once when commit hooks mutate files."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
@@ -477,6 +586,15 @@ fi
     try:
         codex_runner._write_log_to_db = lambda *args, **kwargs: None
         codex_runner._CODEX_LOG_DIR = tmp_path
+        monkeypatch.setattr(
+            codex_runner,
+            "_run_logged_runner_commit_message_generation",
+            lambda **kwargs: (
+                "docs: document feature change",
+                ["COMMIT_MESSAGE: docs: document feature change"],
+                None,
+            ),
+        )
 
         completion_result = codex_runner._execute_git_completion_flow(
             task_id_str="12345678-task-id",
@@ -498,7 +616,7 @@ fi
     )
     assert (
         _run_git_command(repo_root_path, ["log", "--format=%s", "-1"])
-        == "Summarize the completed branch behavior"
+        == "docs: document feature change"
     )
 
     task_log_path = tmp_path / "koda-12345678.log"

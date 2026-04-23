@@ -157,8 +157,9 @@ def test_watchdog_does_not_clear_active_pr_preparing_task_with_start_log(
             task_id=task_obj.id,
             run_account_id=run_account_obj.id,
             text_content=(
-                "🚀 已收到完成请求，Koda 正在执行：`git add .` -> `git commit` -> "
-                "`git rebase main`。"
+                "🚀 已收到完成请求，Koda 正在执行：`git add .` -> "
+                "如有未提交变更则由 AI 生成规范 commit message 并执行 `git commit`，"
+                "若已提交则跳过 commit -> `git rebase main`。"
             ),
             state_tag=DevLogStateTag.OPTIMIZATION,
         )

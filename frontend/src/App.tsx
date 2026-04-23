@@ -3047,8 +3047,8 @@ function App() {
         await taskApi.complete(taskItem.id);
         setSuccessMessage(
           isManualSelfReviewOverride
-            ? "已记录人工接管，Koda 正在执行 Git 收尾：git add .、优先使用最近一轮通过的 AI summary 提交；若缺失则回退到 requirement brief 或 task title，随后 rebase main、必要时自动修复冲突、合并到 main，并清理 worktree。"
-            : "Koda is finalizing the branch: git add ., commit from the latest passed AI summary when available, otherwise fall back to the requirement brief or task title, rebase main, auto-fix conflicts with Codex if needed, merge into main, and clean up the worktree."
+            ? "已记录人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase main、必要时自动修复冲突、合并到 main，并清理 worktree。"
+            : "Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase main, auto-fix conflicts if needed, merge into main, and clean up the worktree."
         );
         await loadDashboardData(true);
         return;

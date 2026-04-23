@@ -17,6 +17,7 @@ from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.services import codex_runner, email_service
+from backend.dsl.services.git_worktree_service import WorktreeDestroyResult
 from backend.dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
 from utils.database import Base
 from utils.helpers import utc_now_naive
@@ -360,8 +361,9 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
     assert "`git add .`" in completion_prompt_text
     assert "承载 `main` 的工作区" in completion_prompt_text
     assert "`git merge <task branch>`" in completion_prompt_text
-    assert "AI summary" in completion_prompt_text
-    assert "requirement brief" in completion_prompt_text
+    assert "AI runner 基于 staged diff" in completion_prompt_text
+    assert "Conventional Commit" in completion_prompt_text
+    assert "跳过 `git commit`" in completion_prompt_text
     assert "不要 push" in completion_prompt_text
 
 
@@ -1061,6 +1063,285 @@ def test_run_logged_runner_conflict_resolution_passes_prompt_via_stdin(
     assert recorded_run_kwargs["input"] is not None
     assert "ARG_LENGTH_GUARD_TITLE" in recorded_run_kwargs["input"]
     assert "ARG_LENGTH_GUARD_TITLE" not in " ".join(recorded_command_argument_list)
+
+
+def test_run_logged_runner_commit_message_generation_requires_conventional_commit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Commit message generation should use runner stdin and validate convention."""
+    recorded_run_call_dict: dict[str, object] = {}
+    task_log_path = tmp_path / "task.log"
+
+    def fake_subprocess_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_run_call_dict["args"] = args
+        recorded_run_call_dict["kwargs"] = kwargs
+        return build_completed_process(
+            command_argument_list=list(args[0]),
+            return_code_int=0,
+            stdout_text=(
+                "COMMIT_MESSAGE: fix(complete): skip commit when already clean\n"
+            ),
+        )
+
+    monkeypatch.setattr(codex_runner.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(codex_runner.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(codex_runner, "_write_log_to_db", lambda *args, **kwargs: None)
+
+    generated_commit_message, output_line_list, failure_reason_text = (
+        codex_runner._run_logged_runner_commit_message_generation(
+            task_id_str="12345678-commit-msg",
+            run_account_id_str="run-account-1",
+            task_log_path=task_log_path,
+            task_title_str="Complete should skip redundant commits",
+            commit_information_text_str="Let Complete merge already committed work.",
+            dev_log_text_list=["Complete failed on an already committed branch."],
+            worktree_path=tmp_path,
+            staged_status_text_str="M  backend/dsl/services/codex_runner.py",
+            staged_name_status_text_str="M\tbackend/dsl/services/codex_runner.py",
+            staged_diff_stat_text_str="1 file changed, 20 insertions(+)",
+        )
+    )
+
+    recorded_command_argument_list = list(recorded_run_call_dict["args"][0])
+    recorded_run_kwargs = recorded_run_call_dict["kwargs"]
+
+    assert generated_commit_message == "fix(complete): skip commit when already clean"
+    assert output_line_list == [
+        "COMMIT_MESSAGE: fix(complete): skip commit when already clean"
+    ]
+    assert failure_reason_text is None
+    assert recorded_command_argument_list == [
+        "/usr/bin/codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-",
+    ]
+    assert recorded_run_kwargs["input"] is not None
+    assert "Complete should skip redundant commits" in recorded_run_kwargs["input"]
+    assert "Conventional Commits" in recorded_run_kwargs["input"]
+    assert "Complete should skip redundant commits" not in " ".join(
+        recorded_command_argument_list
+    )
+
+
+def test_execute_git_completion_flow_skips_commit_when_worktree_is_already_clean(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Already committed task branches should still rebase, merge, and clean up."""
+    from backend.dsl.services.git_worktree_service import GitWorktreeService
+
+    worktree_path = tmp_path / "repo-wt-12345678"
+    main_worktree_path = tmp_path / "repo"
+    worktree_path.mkdir()
+    main_worktree_path.mkdir()
+    recorded_command_label_list: list[str] = []
+
+    def fake_run_logged_command(**kwargs) -> subprocess.CompletedProcess[str]:
+        command_log_label_str = kwargs["command_log_label_str"]
+        recorded_command_label_list.append(command_log_label_str)
+        command_argument_list = kwargs["command_argument_list"]
+        stdout_by_label_dict = {
+            "resolve-branch": "task/12345678-clean\n",
+            "repo-status": "",
+            "git-fetch-zata": "",
+            "git-pull-ff-only-zata": "",
+            "main-worktree-branch": "main\n",
+            "worktree-status": "",
+            "git-add": "",
+            "post-add-status": "",
+            "git-rebase-main": "",
+            "merge-feature": "Already up to date.\n",
+            "remove-worktree": "",
+            "delete-branch": "",
+        }
+        return build_completed_process(
+            command_argument_list=command_argument_list,
+            return_code_int=0,
+            stdout_text=stdout_by_label_dict[command_log_label_str],
+        )
+
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_primary_repo_root_from_worktree",
+        lambda _worktree_path: main_worktree_path,
+    )
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_worktree_path_for_branch",
+        lambda _repo_root_path, _branch_name_str: main_worktree_path,
+    )
+    monkeypatch.setattr(codex_runner, "_run_logged_command", fake_run_logged_command)
+    monkeypatch.setattr(codex_runner, "_write_log_to_db", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "resolve_preferred_remote_name",
+        staticmethod(lambda repo_root_path, branch_name_str="main": "zata"),
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "cleanup_completed_task_worktree",
+        staticmethod(
+            lambda repo_root_path, feature_branch_name, worktree_path: (
+                WorktreeDestroyResult(
+                    cleanup_succeeded=True,
+                    worktree_removed=True,
+                    branch_deleted=True,
+                    output_line_list=[],
+                )
+            )
+        ),
+    )
+
+    completion_result = codex_runner._execute_git_completion_flow(
+        task_id_str="12345678-clean-case",
+        run_account_id_str="run-account-1",
+        task_title_str="Finalize already committed branch",
+        commit_information_text_str="Finalize already committed branch.",
+        dev_log_text_list=["User already committed the work."],
+        worktree_path_str=str(worktree_path),
+    )
+
+    assert completion_result.merged_to_main is True
+    assert completion_result.cleanup_succeeded is True
+    assert "git-commit" not in recorded_command_label_list
+    assert recorded_command_label_list.index("post-add-status") < (
+        recorded_command_label_list.index("git-rebase-main")
+    )
+    assert any("跳过 `git commit`" in line for line in completion_result.output_lines)
+
+
+def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Dirty task worktrees should commit with an AI-generated conventional message."""
+    from backend.dsl.services.git_worktree_service import GitWorktreeService
+
+    worktree_path = tmp_path / "repo-wt-12345678"
+    main_worktree_path = tmp_path / "repo"
+    worktree_path.mkdir()
+    main_worktree_path.mkdir()
+    recorded_command_label_list: list[str] = []
+    recorded_commit_argument_list: list[str] = []
+    recorded_generation_context_dict: dict[str, str] = {}
+
+    def fake_run_logged_command(**kwargs) -> subprocess.CompletedProcess[str]:
+        command_log_label_str = kwargs["command_log_label_str"]
+        recorded_command_label_list.append(command_log_label_str)
+        command_argument_list = kwargs["command_argument_list"]
+        if command_log_label_str == "git-commit":
+            recorded_commit_argument_list.extend(command_argument_list)
+        stdout_by_label_dict = {
+            "resolve-branch": "task/12345678-dirty\n",
+            "repo-status": "",
+            "git-fetch-zata": "",
+            "git-pull-ff-only-zata": "",
+            "main-worktree-branch": "main\n",
+            "worktree-status": " M backend/dsl/services/codex_runner.py\n",
+            "git-add": "",
+            "post-add-status": "M  backend/dsl/services/codex_runner.py\n",
+            "staged-diff-name-status": "M\tbackend/dsl/services/codex_runner.py\n",
+            "staged-diff-stat": (
+                " backend/dsl/services/codex_runner.py | 40 ++++++++++++++++++\n"
+            ),
+            "git-commit": (
+                "[task/12345678-dirty abc123] "
+                "fix(complete): generate commit message with ai\n"
+            ),
+            "git-rebase-main": "",
+            "merge-feature": "Merge made by the 'ort' strategy.\n",
+            "remove-worktree": "",
+            "delete-branch": "",
+        }
+        return build_completed_process(
+            command_argument_list=command_argument_list,
+            return_code_int=0,
+            stdout_text=stdout_by_label_dict[command_log_label_str],
+        )
+
+    def fake_commit_message_generation(**kwargs) -> tuple[str, list[str], str | None]:
+        recorded_generation_context_dict["staged_status"] = kwargs[
+            "staged_status_text_str"
+        ]
+        recorded_generation_context_dict["staged_name_status"] = kwargs[
+            "staged_name_status_text_str"
+        ]
+        recorded_generation_context_dict["staged_diff_stat"] = kwargs[
+            "staged_diff_stat_text_str"
+        ]
+        return (
+            "fix(complete): generate commit message with ai",
+            ["COMMIT_MESSAGE: fix(complete): generate commit message with ai"],
+            None,
+        )
+
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_primary_repo_root_from_worktree",
+        lambda _worktree_path: main_worktree_path,
+    )
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_worktree_path_for_branch",
+        lambda _repo_root_path, _branch_name_str: main_worktree_path,
+    )
+    monkeypatch.setattr(codex_runner, "_run_logged_command", fake_run_logged_command)
+    monkeypatch.setattr(
+        codex_runner,
+        "_run_logged_runner_commit_message_generation",
+        fake_commit_message_generation,
+    )
+    monkeypatch.setattr(codex_runner, "_write_log_to_db", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "resolve_preferred_remote_name",
+        staticmethod(lambda repo_root_path, branch_name_str="main": "zata"),
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "cleanup_completed_task_worktree",
+        staticmethod(
+            lambda repo_root_path, feature_branch_name, worktree_path: (
+                WorktreeDestroyResult(
+                    cleanup_succeeded=True,
+                    worktree_removed=True,
+                    branch_deleted=True,
+                    output_line_list=[],
+                )
+            )
+        ),
+    )
+
+    completion_result = codex_runner._execute_git_completion_flow(
+        task_id_str="12345678-dirty-case",
+        run_account_id_str="run-account-1",
+        task_title_str="Finalize dirty branch",
+        commit_information_text_str="Finalize dirty branch.",
+        dev_log_text_list=["There are staged completion fixes."],
+        worktree_path_str=str(worktree_path),
+    )
+
+    assert completion_result.merged_to_main is True
+    assert completion_result.cleanup_succeeded is True
+    assert recorded_commit_argument_list == [
+        "git",
+        "commit",
+        "-m",
+        "fix(complete): generate commit message with ai",
+    ]
+    assert recorded_generation_context_dict == {
+        "staged_status": "M  backend/dsl/services/codex_runner.py\n",
+        "staged_name_status": "M\tbackend/dsl/services/codex_runner.py\n",
+        "staged_diff_stat": (
+            " backend/dsl/services/codex_runner.py | 40 ++++++++++++++++++\n"
+        ),
+    }
+    assert "git-fetch-zata" in recorded_command_label_list
+    assert recorded_command_label_list.index("git-commit") < (
+        recorded_command_label_list.index("git-rebase-main")
+    )
 
 
 def test_run_codex_prd_moves_to_changes_requested_and_sends_failure_notification(
