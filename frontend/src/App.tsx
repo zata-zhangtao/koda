@@ -584,6 +584,9 @@ function App() {
     useState<TaskQaContextScope>(TaskQaContextScope.PRD_CONFIRMATION);
   const [isDestroyModalOpen, setIsDestroyModalOpen] = useState(false);
   const [destroyReasonInputText, setDestroyReasonInputText] = useState("");
+  const [destroyModalErrorMessage, setDestroyModalErrorMessage] = useState<string | null>(
+    null
+  );
   const [activeMutationName, setActiveMutationName] = useState<MutationName>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -704,6 +707,7 @@ function App() {
   function closeDestroyTaskModal(): void {
     setIsDestroyModalOpen(false);
     setDestroyReasonInputText("");
+    setDestroyModalErrorMessage(null);
     setErrorMessage(null);
     setSuccessMessage(null);
   }
@@ -2800,6 +2804,7 @@ function App() {
     }
 
     setDestroyReasonInputText("");
+    setDestroyModalErrorMessage(null);
     setIsDestroyModalOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -2916,14 +2921,16 @@ function App() {
 
     const normalizedDestroyReason = destroyReasonInputText.trim();
     if (normalizedDestroyReason.length < DESTROY_REASON_MIN_LENGTH) {
-      setErrorMessage(
+      setDestroyModalErrorMessage(
         `Destroy reason must be at least ${DESTROY_REASON_MIN_LENGTH} characters.`
       );
+      setErrorMessage(null);
       setSuccessMessage(null);
       return;
     }
 
     setActiveMutationName("destroy");
+    setDestroyModalErrorMessage(null);
     setErrorMessage(null);
     setSuccessMessage(null);
 
@@ -2939,7 +2946,7 @@ function App() {
       await loadDashboardData(true);
     } catch (destroyError) {
       console.error(destroyError);
-      setErrorMessage(
+      setDestroyModalErrorMessage(
         destroyError instanceof Error
           ? destroyError.message
           : "Failed to destroy task."
@@ -5923,6 +5930,7 @@ function App() {
           stageLabel={selectedTaskStageLabel ?? formatStageLabel(selectedTask.workflow_stage)}
           projectLabel={selectedTaskProjectLabel}
           destroyReasonInputText={destroyReasonInputText}
+          errorMessage={destroyModalErrorMessage}
           onDestroyReasonChange={setDestroyReasonInputText}
           onClose={closeDestroyTaskModal}
           onConfirm={() => {
@@ -6147,6 +6155,7 @@ interface DestroyTaskModalProps {
   stageLabel: string;
   projectLabel: string;
   destroyReasonInputText: string;
+  errorMessage: string | null;
   onDestroyReasonChange: Dispatch<SetStateAction<string>>;
   onClose: () => void;
   onConfirm: () => void;
@@ -6159,6 +6168,7 @@ function DestroyTaskModal({
   stageLabel,
   projectLabel,
   destroyReasonInputText,
+  errorMessage,
   onDestroyReasonChange,
   onClose,
   onConfirm,
@@ -6236,6 +6246,17 @@ function DestroyTaskModal({
               ? `请至少再输入 ${remainingCharacterCount} 个字符。`
               : "销毁原因会写入任务详情和时间线，便于后续审计。"}
           </p>
+
+          {errorMessage ? (
+            <div
+              className="devflow-inline-message devflow-inline-message--error"
+              role="alert"
+              aria-live="polite"
+            >
+              <RobotIcon className="devflow-icon devflow-icon--tiny" />
+              <span>{errorMessage}</span>
+            </div>
+          ) : null}
 
           <div className="devflow-destroy-modal__actions">
             <ActionButton variant="ghost" onClick={onClose} disabled={isSubmitting}>

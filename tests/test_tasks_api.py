@@ -2936,7 +2936,10 @@ def test_destroy_task_rejects_partial_cleanup_results(
             cleanup_succeeded=True,
             worktree_removed=False,
             branch_deleted=True,
-            output_line_list=["cleanup script exited 0"],
+            output_line_list=[
+                "Repo-local cleanup script failed; falling back to force cleanup.",
+                "fatal: '/tmp/repo-wt-12345678' contains modified or untracked files, use --force to delete it",
+            ],
         ),
     )
 
@@ -2950,6 +2953,8 @@ def test_destroy_task_rejects_partial_cleanup_results(
     db_session.refresh(task_obj)
     assert raised_http_error.value.status_code == 422
     assert "task worktree directory still exists" in str(raised_http_error.value.detail)
+    assert "Latest git output:" in str(raised_http_error.value.detail)
+    assert "contains modified or untracked files" in str(raised_http_error.value.detail)
     assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
     assert task_obj.destroyed_at is None
 

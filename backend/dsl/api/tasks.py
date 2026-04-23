@@ -100,6 +100,11 @@ _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
 _BRANCH_MISSING_DISPLAY_STAGE_KEY = "branch_missing"
 _BRANCH_MISSING_DISPLAY_STAGE_LABEL = "缺失分支待确认"
+_DESTROY_CLEANUP_INTERNAL_OUTPUT_PREFIX_LIST = [
+    "Repo-local cleanup script exited successfully",
+    "Repo-local cleanup script failed",
+]
+_DESTROY_CLEANUP_OUTPUT_SUMMARY_MAX_LENGTH = 240
 _REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->"
 _REQUIREMENT_BRIEF_APPENDIX_HEADER = "## Referenced Requirement Context"
 _REQUIREMENT_BRIEF_APPENDIX_SEPARATOR = "\n\n---\n\n"
@@ -1370,6 +1375,84 @@ def _build_destroy_cleanup_failure_reason(
     if not branch_deleted:
         cleanup_gap_list.append("task branch still exists locally")
     return "Destroy cleanup did not finish completely: " + "; ".join(cleanup_gap_list)
+
+
+def _summarize_destroy_cleanup_output_line_list(
+    output_line_list: list[str],
+) -> str | None:
+    """Extract recent actionable git output from destroy cleanup logs.
+
+    Args:
+        output_line_list: Captured cleanup stdout/stderr lines
+
+    Returns:
+        str | None: Condensed recent output summary for user-facing error detail
+    """
+    recent_relevant_output_line_list: list[str] = []
+    seen_output_line_set: set[str] = set()
+    for output_line_str in reversed(output_line_list):
+        normalized_output_line_str = " ".join(output_line_str.split())
+        if not normalized_output_line_str:
+            continue
+        if any(
+            normalized_output_line_str.startswith(internal_prefix_str)
+            for internal_prefix_str in _DESTROY_CLEANUP_INTERNAL_OUTPUT_PREFIX_LIST
+        ):
+            continue
+        if normalized_output_line_str in seen_output_line_set:
+            continue
+        seen_output_line_set.add(normalized_output_line_str)
+        recent_relevant_output_line_list.append(normalized_output_line_str)
+        if len(recent_relevant_output_line_list) >= 2:
+            break
+
+    if not recent_relevant_output_line_list:
+        return None
+
+    cleanup_output_summary_str = " | ".join(reversed(recent_relevant_output_line_list))
+    if len(cleanup_output_summary_str) <= _DESTROY_CLEANUP_OUTPUT_SUMMARY_MAX_LENGTH:
+        return cleanup_output_summary_str
+    return (
+        cleanup_output_summary_str[
+            : _DESTROY_CLEANUP_OUTPUT_SUMMARY_MAX_LENGTH - 3
+        ].rstrip()
+        + "..."
+    )
+
+
+def _build_destroy_cleanup_error_detail(
+    *,
+    worktree_removed: bool,
+    branch_deleted: bool,
+    failure_reason_text: str | None,
+    output_line_list: list[str],
+) -> str:
+    """Build an actionable destroy cleanup error detail.
+
+    Args:
+        worktree_removed: worktree 目录是否已被移除
+        branch_deleted: 任务分支是否已被删除
+        failure_reason_text: 稳定失败概述
+        output_line_list: cleanup 原始输出
+
+    Returns:
+        str: 兼顾稳定概述与最近 git 输出的失败文案
+    """
+    stable_failure_reason_text = (
+        failure_reason_text
+        or _build_destroy_cleanup_failure_reason(
+            worktree_removed=worktree_removed,
+            branch_deleted=branch_deleted,
+        )
+    )
+    cleanup_output_summary_str = _summarize_destroy_cleanup_output_line_list(
+        output_line_list
+    )
+    if not cleanup_output_summary_str:
+        return stable_failure_reason_text
+    return (
+        f"{stable_failure_reason_text} Latest git output: {cleanup_output_summary_str}"
+    )
 
 
 def _interrupt_task_to_changes_requested(
@@ -2805,10 +2888,11 @@ def destroy_task(
         if not cleanup_completed_fully:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=cleanup_result.failure_reason_text
-                or _build_destroy_cleanup_failure_reason(
+                detail=_build_destroy_cleanup_error_detail(
                     worktree_removed=cleanup_result.worktree_removed,
                     branch_deleted=cleanup_result.branch_deleted,
+                    failure_reason_text=cleanup_result.failure_reason_text,
+                    output_line_list=cleanup_result.output_line_list,
                 ),
             )
         cleanup_summary_str = (
