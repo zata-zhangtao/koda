@@ -6,7 +6,9 @@
 import type {
   ChangeEvent,
   ClipboardEvent,
+  CompositionEvent,
   Dispatch,
+  KeyboardEvent,
   ReactNode,
   SetStateAction,
   SVGProps,
@@ -60,6 +62,7 @@ import {
   deriveCompactTimelineCategoryFromPhaseLabel,
   logMatchesExplicitPrdCategory,
 } from "./utils/compact_timeline_category";
+import { hasRetryableCompletionFailure } from "./utils/completion_retry";
 import {
   buildPrdPendingQuestionsFeedbackText,
   derivePrdPendingQuestionActionBlockReason,
@@ -111,6 +114,7 @@ import {
   type TaskCardMetadata,
   type TaskDisplayStageKey,
   type PendingPrdFile,
+  type PrdPendingQuestion,
   type PrdPendingQuestionAnswerSelectionMap,
   type PrdPendingQuestionAnswerSelectionMapByTaskId,
   TaskQaContextScope,
@@ -1222,6 +1226,13 @@ function App() {
         : false,
     [selectedTask, selectedTaskDevLogs]
   );
+  const selectedTaskHasRetryableCompletionFailure = useMemo(
+    () =>
+      selectedTask
+        ? hasRetryableCompletionFailure(selectedTaskDevLogs)
+        : false,
+    [selectedTask, selectedTaskDevLogs]
+  );
   const selectedTaskStageLabel = useMemo(
     () => selectedTaskCardMetadata?.display_stage_label ?? null,
     [selectedTaskCardMetadata]
@@ -1325,7 +1336,8 @@ function App() {
     ? canCompleteTask(
         selectedTask,
         selectedTaskStage,
-        selectedTaskBranchHealth
+        selectedTaskBranchHealth,
+        selectedTaskHasRetryableCompletionFailure
       ) &&
       !selectedTask.is_codex_task_running
     : false;
@@ -4266,18 +4278,6 @@ function App() {
                       </div>
 
                       <div className="devflow-detail__fact-list">
-                        <div className="devflow-detail__fact-card">
-                          <span className="devflow-detail__fact-label">关联项目</span>
-                          <span className="devflow-detail__fact-value">
-                            {selectedTaskProjectLabel}
-                          </span>
-                          <p className="devflow-detail__fact-hint">
-                            {canRebindSelectedTaskProject
-                              ? "Backlog 或 WebDAV 恢复且尚未创建 worktree 的任务，可在编辑面板中改绑项目。"
-                              : "任务开始后项目绑定会锁定，避免 project_id 与 worktree / 运行上下文脱钩。"}
-                          </p>
-                        </div>
-
                         {selectedTaskBusinessSyncStatusNote ||
                         selectedTaskBusinessSyncRestoredAt ? (
                           <div className="devflow-detail__fact-card devflow-detail__fact-card--sync">
@@ -5311,7 +5311,13 @@ function App() {
                     </CardSurface>
                   </div>
 
-                  <div className="devflow-detail-grid">
+                  <div
+                    className={joinClassNames(
+                      "devflow-detail-grid",
+                      activeComposerMode === "sidecar_qa" &&
+                        "devflow-detail-grid--sidecar-qa"
+                    )}
+                  >
                     <div className="devflow-detail-section">
                       <h3 className="devflow-detail-section__title">
                         <HistoryIcon className="devflow-icon devflow-icon--small" />
@@ -5518,103 +5524,129 @@ function App() {
                       ) : null}
                     </div>
 
-                    <div className="devflow-detail-section">
-                      <div className="devflow-detail-section__header">
-                        <h3 className="devflow-detail-section__title">
-                          <FileTextIcon className="devflow-icon devflow-icon--small" />
-                          <span>PRD Document</span>
-                        </h3>
-                        <button
-                          type="button"
-                          className="devflow-detail-section__action"
-                          onClick={() => setIsPrdFullscreenOpen(true)}
-                        >
-                          <ExpandIcon className="devflow-icon devflow-icon--tiny" />
-                          <span>全屏查看</span>
-                        </button>
-                      </div>
-
-                      {selectedTaskPrdPendingQuestionParseErrorText !== null ? (
-                        <CardSurface className="devflow-prd-pending-panel devflow-prd-pending-panel--error">
-                          <div className="devflow-prd-pending-panel__header">
-                            <div className="devflow-prd-pending-panel__copy">
-                              <span className="devflow-prd-pending-panel__eyebrow devflow-prd-pending-panel__eyebrow--error">
-                                Structured Block Invalid
-                              </span>
-                              <h4 className="devflow-prd-pending-panel__title">
-                                待确认问题区块需要修复
-                              </h4>
-                              <p className="devflow-prd-pending-panel__hint devflow-prd-pending-panel__hint--error">
-                                检测到 PRD 中存在固定的结构化待确认问题章节，但其 JSON /
-                                Schema 未通过校验。为避免未确认问题被静默绕过，当前已阻断
-                                “确认 PRD”和“开始执行”。
-                              </p>
-                              <p className="devflow-prd-pending-panel__action-hint">
-                                解析错误：{selectedTaskPrdPendingQuestionParseErrorText}
-                              </p>
-                            </div>
-                          </div>
-                        </CardSurface>
-                      ) : null}
-
-                      {shouldRenderSelectedTaskPrdPendingQuestionsPanel ? (
-                        <PrdPendingQuestionsPanel
-                          pendingQuestionList={selectedTaskPrdPendingQuestionList}
-                          selectedAnswerMap={
+                    {activeComposerMode === "sidecar_qa" ? null : (
+                      <div className="devflow-detail-section">
+                        <TaskPrdDocumentPanel
+                          taskTitle={selectedTask.task_title}
+                          isPrdGenerating={isSelectedTaskPrdGenerating}
+                          selectedTaskRenderablePrdMarkdown={
+                            selectedTaskRenderablePrdMarkdown
+                          }
+                          selectedTaskPrdPendingQuestionParseErrorText={
+                            selectedTaskPrdPendingQuestionParseErrorText
+                          }
+                          shouldRenderSelectedTaskPrdPendingQuestionsPanel={
+                            shouldRenderSelectedTaskPrdPendingQuestionsPanel
+                          }
+                          selectedTaskPrdPendingQuestionList={
+                            selectedTaskPrdPendingQuestionList
+                          }
+                          selectedTaskPrdPendingQuestionAnswerSelectionMap={
                             selectedTaskPrdPendingQuestionAnswerSelectionMap
                           }
-                          unansweredRequiredQuestionCount={
+                          selectedTaskUnansweredRequiredPrdPendingQuestionCount={
                             selectedTaskUnansweredRequiredPrdPendingQuestionCount
                           }
-                          feedbackPreviewText={
+                          selectedTaskPrdPendingQuestionsFeedbackPreviewText={
                             selectedTaskPrdPendingQuestionsFeedbackPreviewText
                           }
-                          isSubmitting={activeMutationName === "pending_questions"}
-                          isSubmitDisabled={
-                            selectedTaskPrdPendingQuestionSubmitDisabledReasonText !== null ||
-                            activeMutationName === "pending_questions"
-                          }
-                          submitDisabledReasonText={
+                          isPrdFullscreenOpen={isPrdFullscreenOpen}
+                          selectedTaskPrdPendingQuestionSubmitDisabledReasonText={
                             selectedTaskPrdPendingQuestionSubmitDisabledReasonText
                           }
-                          onSelectAnswer={handleSelectPrdPendingQuestionAnswer}
-                          onApplyAllRecommended={
+                          activeMutationName={activeMutationName}
+                          onOpenPrdFullscreen={() => setIsPrdFullscreenOpen(true)}
+                          onClosePrdFullscreen={() => setIsPrdFullscreenOpen(false)}
+                          onSelectPrdPendingQuestionAnswer={
+                            handleSelectPrdPendingQuestionAnswer
+                          }
+                          onApplyAllRecommendedPrdPendingQuestionAnswers={
                             handleApplyAllRecommendedPrdPendingQuestionAnswers
                           }
-                          onSubmit={() => {
+                          onSubmitPrdPendingQuestionAnswers={() => {
                             void handleSubmitPrdPendingQuestionAnswers();
                           }}
                         />
-                      ) : null}
-
-                      <CardSurface className="devflow-document-card">
-                        {isSelectedTaskPrdGenerating ? (
-                          <div className="devflow-execution-banner">
-                            <span className="devflow-footer__pulse" />
-                            <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
-                          </div>
-                        ) : (
-                          <MarkdownBlock
-                            className="devflow-markdown devflow-markdown--document"
-                            markdownText={selectedTaskRenderablePrdMarkdown}
-                            enableMermaid
-                          />
-                        )}
-                      </CardSurface>
-
-                      {isPrdFullscreenOpen ? (
-                        <PrdFullscreenModal
-                          taskTitle={selectedTask.task_title}
-                          markdownText={selectedTaskRenderablePrdMarkdown}
-                          isGenerating={isSelectedTaskPrdGenerating}
-                          onClose={() => setIsPrdFullscreenOpen(false)}
-                        />
-                      ) : null}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {canRenderComposer ? (
+                  activeComposerMode === "sidecar_qa" ? (
+                    <div className="devflow-sidecar-workspace">
+                      <div className="devflow-detail-section devflow-detail-section--sidecar">
+                        <TaskPrdDocumentPanel
+                          taskTitle={selectedTask.task_title}
+                          isPrdGenerating={isSelectedTaskPrdGenerating}
+                          selectedTaskRenderablePrdMarkdown={
+                            selectedTaskRenderablePrdMarkdown
+                          }
+                          selectedTaskPrdPendingQuestionParseErrorText={
+                            selectedTaskPrdPendingQuestionParseErrorText
+                          }
+                          shouldRenderSelectedTaskPrdPendingQuestionsPanel={
+                            shouldRenderSelectedTaskPrdPendingQuestionsPanel
+                          }
+                          selectedTaskPrdPendingQuestionList={
+                            selectedTaskPrdPendingQuestionList
+                          }
+                          selectedTaskPrdPendingQuestionAnswerSelectionMap={
+                            selectedTaskPrdPendingQuestionAnswerSelectionMap
+                          }
+                          selectedTaskUnansweredRequiredPrdPendingQuestionCount={
+                            selectedTaskUnansweredRequiredPrdPendingQuestionCount
+                          }
+                          selectedTaskPrdPendingQuestionsFeedbackPreviewText={
+                            selectedTaskPrdPendingQuestionsFeedbackPreviewText
+                          }
+                          isPrdFullscreenOpen={isPrdFullscreenOpen}
+                          selectedTaskPrdPendingQuestionSubmitDisabledReasonText={
+                            selectedTaskPrdPendingQuestionSubmitDisabledReasonText
+                          }
+                          activeMutationName={activeMutationName}
+                          onOpenPrdFullscreen={() => setIsPrdFullscreenOpen(true)}
+                          onClosePrdFullscreen={() => setIsPrdFullscreenOpen(false)}
+                          onSelectPrdPendingQuestionAnswer={
+                            handleSelectPrdPendingQuestionAnswer
+                          }
+                          onApplyAllRecommendedPrdPendingQuestionAnswers={
+                            handleApplyAllRecommendedPrdPendingQuestionAnswers
+                          }
+                          onSubmitPrdPendingQuestionAnswers={() => {
+                            void handleSubmitPrdPendingQuestionAnswers();
+                          }}
+                        />
+                      </div>
+
+                      <TaskQaConversationPanel
+                        canSendTaskQa={canSendTaskQa}
+                        isTaskRunning={selectedTask.is_codex_task_running}
+                        currentUserLabel={currentUserLabel}
+                        taskQaMessageList={selectedTaskQaMessageList}
+                        selectedTaskQaContextScope={selectedTaskQaContextScope}
+                        activeMutationName={activeMutationName}
+                        hasPendingTaskQaReply={hasPendingTaskQaReply}
+                        hasTaskQaPayload={hasTaskQaPayload}
+                        taskQaInputText={taskQaInputText}
+                        latestCompletedAssistantTaskQaMessage={
+                          latestCompletedAssistantTaskQaMessage
+                        }
+                        onSwitchComposerMode={setActiveComposerMode}
+                        onSelectTaskQaContextScope={setSelectedTaskQaContextScope}
+                        onConvertLatestTaskQaToFeedbackDraft={() => {
+                          void handleConvertLatestTaskQaToFeedbackDraft();
+                        }}
+                        onTaskQaInputChange={setTaskQaInputText}
+                        onTaskQaSubmit={() => {
+                          void handleTaskQaSubmit();
+                        }}
+                        onTaskQaCompositionStart={handleTaskQaCompositionStart}
+                        onTaskQaCompositionEnd={handleTaskQaCompositionEnd}
+                        onTaskQaKeyDown={handleTaskQaKeyDown}
+                      />
+                    </div>
+                  ) : (
                   <div className="devflow-feedback">
                     <div className="devflow-feedback__channel-tabs">
                       <button
@@ -5631,11 +5663,7 @@ function App() {
                       </button>
                       <button
                         type="button"
-                        className={joinClassNames(
-                          "devflow-feedback__channel-tab",
-                          activeComposerMode === "sidecar_qa" &&
-                            "devflow-feedback__channel-tab--active"
-                        )}
+                        className="devflow-feedback__channel-tab"
                         onClick={() => setActiveComposerMode("sidecar_qa")}
                       >
                         <RobotIcon className="devflow-icon devflow-icon--small" />
@@ -5915,7 +5943,7 @@ function App() {
                       </>
                     )}
                   </div>
-                ) : null}
+                )) : null}
               </div>
             ) : (
               <div className="devflow-empty-detail">
@@ -6122,6 +6150,363 @@ interface PrdFullscreenModalProps {
   markdownText: string;
   isGenerating: boolean;
   onClose: () => void;
+}
+
+interface TaskPrdDocumentPanelProps {
+  taskTitle: string;
+  isPrdGenerating: boolean;
+  selectedTaskRenderablePrdMarkdown: string;
+  selectedTaskPrdPendingQuestionParseErrorText: string | null;
+  shouldRenderSelectedTaskPrdPendingQuestionsPanel: boolean;
+  selectedTaskPrdPendingQuestionList: PrdPendingQuestion[];
+  selectedTaskPrdPendingQuestionAnswerSelectionMap: PrdPendingQuestionAnswerSelectionMap;
+  selectedTaskUnansweredRequiredPrdPendingQuestionCount: number;
+  selectedTaskPrdPendingQuestionsFeedbackPreviewText: string;
+  isPrdFullscreenOpen: boolean;
+  selectedTaskPrdPendingQuestionSubmitDisabledReasonText: string | null;
+  activeMutationName: MutationName;
+  onOpenPrdFullscreen: () => void;
+  onClosePrdFullscreen: () => void;
+  onSelectPrdPendingQuestionAnswer: (questionId: string, optionKey: string) => void;
+  onApplyAllRecommendedPrdPendingQuestionAnswers: () => void;
+  onSubmitPrdPendingQuestionAnswers: () => void;
+}
+
+function TaskPrdDocumentPanel({
+  taskTitle,
+  isPrdGenerating,
+  selectedTaskRenderablePrdMarkdown,
+  selectedTaskPrdPendingQuestionParseErrorText,
+  shouldRenderSelectedTaskPrdPendingQuestionsPanel,
+  selectedTaskPrdPendingQuestionList,
+  selectedTaskPrdPendingQuestionAnswerSelectionMap,
+  selectedTaskUnansweredRequiredPrdPendingQuestionCount,
+  selectedTaskPrdPendingQuestionsFeedbackPreviewText,
+  isPrdFullscreenOpen,
+  selectedTaskPrdPendingQuestionSubmitDisabledReasonText,
+  activeMutationName,
+  onOpenPrdFullscreen,
+  onClosePrdFullscreen,
+  onSelectPrdPendingQuestionAnswer,
+  onApplyAllRecommendedPrdPendingQuestionAnswers,
+  onSubmitPrdPendingQuestionAnswers,
+}: TaskPrdDocumentPanelProps) {
+  return (
+    <>
+      <div className="devflow-detail-section__header">
+        <h3 className="devflow-detail-section__title">
+          <FileTextIcon className="devflow-icon devflow-icon--small" />
+          <span>PRD Document</span>
+        </h3>
+        <button
+          type="button"
+          className="devflow-detail-section__action"
+          onClick={onOpenPrdFullscreen}
+        >
+          <ExpandIcon className="devflow-icon devflow-icon--tiny" />
+          <span>全屏查看</span>
+        </button>
+      </div>
+
+      {selectedTaskPrdPendingQuestionParseErrorText !== null ? (
+        <CardSurface className="devflow-prd-pending-panel devflow-prd-pending-panel--error">
+          <div className="devflow-prd-pending-panel__header">
+            <div className="devflow-prd-pending-panel__copy">
+              <span className="devflow-prd-pending-panel__eyebrow devflow-prd-pending-panel__eyebrow--error">
+                Structured Block Invalid
+              </span>
+              <h4 className="devflow-prd-pending-panel__title">
+                待确认问题区块需要修复
+              </h4>
+              <p className="devflow-prd-pending-panel__hint devflow-prd-pending-panel__hint--error">
+                检测到 PRD 中存在固定的结构化待确认问题章节，但其 JSON / Schema 未通过校验。为避免未确认问题被静默绕过，当前已阻断 “确认 PRD”和“开始执行”。
+              </p>
+              <p className="devflow-prd-pending-panel__action-hint">
+                解析错误：{selectedTaskPrdPendingQuestionParseErrorText}
+              </p>
+            </div>
+          </div>
+        </CardSurface>
+      ) : null}
+
+      {shouldRenderSelectedTaskPrdPendingQuestionsPanel ? (
+        <PrdPendingQuestionsPanel
+          pendingQuestionList={selectedTaskPrdPendingQuestionList}
+          selectedAnswerMap={selectedTaskPrdPendingQuestionAnswerSelectionMap}
+          unansweredRequiredQuestionCount={
+            selectedTaskUnansweredRequiredPrdPendingQuestionCount
+          }
+          feedbackPreviewText={selectedTaskPrdPendingQuestionsFeedbackPreviewText}
+          isSubmitting={activeMutationName === "pending_questions"}
+          isSubmitDisabled={
+            selectedTaskPrdPendingQuestionSubmitDisabledReasonText !== null ||
+            activeMutationName === "pending_questions"
+          }
+          submitDisabledReasonText={
+            selectedTaskPrdPendingQuestionSubmitDisabledReasonText
+          }
+          onSelectAnswer={onSelectPrdPendingQuestionAnswer}
+          onApplyAllRecommended={onApplyAllRecommendedPrdPendingQuestionAnswers}
+          onSubmit={onSubmitPrdPendingQuestionAnswers}
+        />
+      ) : null}
+
+      <CardSurface className="devflow-document-card">
+        {isPrdGenerating ? (
+          <div className="devflow-execution-banner">
+            <span className="devflow-footer__pulse" />
+            <span>AI 正在生成 PRD 文件，完成后将显示在这里...</span>
+          </div>
+        ) : (
+          <MarkdownBlock
+            className="devflow-markdown devflow-markdown--document"
+            markdownText={selectedTaskRenderablePrdMarkdown}
+            enableMermaid
+          />
+        )}
+      </CardSurface>
+
+      {isPrdFullscreenOpen ? (
+        <PrdFullscreenModal
+          taskTitle={taskTitle}
+          markdownText={selectedTaskRenderablePrdMarkdown}
+          isGenerating={isPrdGenerating}
+          onClose={onClosePrdFullscreen}
+        />
+      ) : null}
+    </>
+  );
+}
+
+interface TaskQaConversationPanelProps {
+  canSendTaskQa: boolean;
+  isTaskRunning: boolean;
+  currentUserLabel: string;
+  taskQaMessageList: TaskQaMessage[];
+  selectedTaskQaContextScope: TaskQaContextScope;
+  activeMutationName: MutationName;
+  hasPendingTaskQaReply: boolean;
+  hasTaskQaPayload: boolean;
+  taskQaInputText: string;
+  latestCompletedAssistantTaskQaMessage: TaskQaMessage | null;
+  onSwitchComposerMode: (mode: ComposerMode) => void;
+  onSelectTaskQaContextScope: (contextScope: TaskQaContextScope) => void;
+  onConvertLatestTaskQaToFeedbackDraft: () => void;
+  onTaskQaInputChange: (nextText: string) => void;
+  onTaskQaSubmit: () => void;
+  onTaskQaCompositionStart: (
+    compositionEvent: CompositionEvent<HTMLTextAreaElement>
+  ) => void;
+  onTaskQaCompositionEnd: (
+    compositionEvent: CompositionEvent<HTMLTextAreaElement>
+  ) => void;
+  onTaskQaKeyDown: (keyboardEvent: KeyboardEvent<HTMLTextAreaElement>) => void;
+}
+
+function TaskQaConversationPanel({
+  canSendTaskQa,
+  isTaskRunning,
+  currentUserLabel,
+  taskQaMessageList,
+  selectedTaskQaContextScope,
+  activeMutationName,
+  hasPendingTaskQaReply,
+  hasTaskQaPayload,
+  taskQaInputText,
+  latestCompletedAssistantTaskQaMessage,
+  onSwitchComposerMode,
+  onSelectTaskQaContextScope,
+  onConvertLatestTaskQaToFeedbackDraft,
+  onTaskQaInputChange,
+  onTaskQaSubmit,
+  onTaskQaCompositionStart,
+  onTaskQaCompositionEnd,
+  onTaskQaKeyDown,
+}: TaskQaConversationPanelProps) {
+  return (
+    <div className="devflow-feedback devflow-feedback--sidecar">
+      <div className="devflow-feedback__channel-tabs">
+        <button
+          type="button"
+          className="devflow-feedback__channel-tab"
+          onClick={() => onSwitchComposerMode("feedback")}
+        >
+          <PaperclipIcon className="devflow-icon devflow-icon--small" />
+          <span>反馈给执行链路</span>
+        </button>
+        <button
+          type="button"
+          className={joinClassNames(
+            "devflow-feedback__channel-tab",
+            "devflow-feedback__channel-tab--active"
+          )}
+          aria-pressed="true"
+        >
+          <RobotIcon className="devflow-icon devflow-icon--small" />
+          <span>问 AI</span>
+        </button>
+      </div>
+
+      <div className="devflow-feedback__qa-toolbar">
+        <div className="devflow-feedback__scope-tabs">
+          <button
+            type="button"
+            className={joinClassNames(
+              "devflow-feedback__scope-tab",
+              selectedTaskQaContextScope === TaskQaContextScope.PRD_CONFIRMATION &&
+                "devflow-feedback__scope-tab--active"
+            )}
+            onClick={() =>
+              onSelectTaskQaContextScope(TaskQaContextScope.PRD_CONFIRMATION)
+            }
+            disabled={!canSendTaskQa}
+          >
+            PRD 确认
+          </button>
+          <button
+            type="button"
+            className={joinClassNames(
+              "devflow-feedback__scope-tab",
+              selectedTaskQaContextScope === TaskQaContextScope.IMPLEMENTATION &&
+                "devflow-feedback__scope-tab--active"
+            )}
+            onClick={() =>
+              onSelectTaskQaContextScope(TaskQaContextScope.IMPLEMENTATION)
+            }
+            disabled={!canSendTaskQa}
+          >
+            实现陪跑
+          </button>
+        </div>
+
+        <button
+          type="button"
+          className="devflow-feedback__draft-action"
+          disabled={
+            activeMutationName === "qa_to_feedback" ||
+            latestCompletedAssistantTaskQaMessage === null
+          }
+          onClick={onConvertLatestTaskQaToFeedbackDraft}
+        >
+          整理最近一次结论为反馈草稿
+        </button>
+      </div>
+
+      <div className="devflow-feedback__qa-note">
+        <span className="devflow-feedback__qa-note-pill">
+          独立问答不会写入 DevLog，也不会触发主执行链路动作
+        </span>
+        {isTaskRunning ? (
+          <span className="devflow-feedback__qa-note-pill devflow-feedback__qa-note-pill--active">
+            当前 coding 正在继续，此问答不会打断执行
+          </span>
+        ) : null}
+        {!canSendTaskQa ? (
+          <span className="devflow-feedback__qa-note-pill">
+            任务已归档，历史问答仍可查看，但不会再发送新问题
+          </span>
+        ) : null}
+      </div>
+
+      <div className="devflow-feedback__qa-thread">
+        {taskQaMessageList.length === 0 ? (
+          <div className="devflow-feedback__qa-empty">
+            <RobotIcon className="devflow-icon devflow-icon--small" />
+            <span>这里的问答默认只是澄清问题，不会隐式改 PRD、恢复执行或中断 coding。</span>
+          </div>
+        ) : (
+          taskQaMessageList.map((taskQaMessage) => (
+            <article
+              key={taskQaMessage.id}
+              className={joinClassNames(
+                "devflow-feedback__qa-message",
+                taskQaMessage.role === TaskQaMessageRole.USER
+                  ? "devflow-feedback__qa-message--user"
+                  : "devflow-feedback__qa-message--assistant",
+                taskQaMessage.generation_status === TaskQaGenerationStatus.FAILED &&
+                  "devflow-feedback__qa-message--failed"
+              )}
+            >
+              <header className="devflow-feedback__qa-message-header">
+                <div className="devflow-feedback__qa-message-author">
+                  {taskQaMessage.role === TaskQaMessageRole.USER ? (
+                    <UserIcon className="devflow-icon devflow-icon--small" />
+                  ) : (
+                    <RobotIcon className="devflow-icon devflow-icon--small" />
+                  )}
+                  <span>
+                    {taskQaMessage.role === TaskQaMessageRole.USER
+                      ? currentUserLabel
+                      : "Koda Sidecar AI"}
+                  </span>
+                </div>
+                <div className="devflow-feedback__qa-message-meta">
+                  <span>{buildTaskQaContextScopeLabel(taskQaMessage.context_scope)}</span>
+                  <span>{buildTaskQaStatusLabel(taskQaMessage)}</span>
+                  <span>{formatHourMinute(taskQaMessage.created_at)}</span>
+                </div>
+              </header>
+
+              {taskQaMessage.generation_status === TaskQaGenerationStatus.PENDING &&
+              !taskQaMessage.content_markdown ? (
+                <div className="devflow-feedback__qa-pending">
+                  <span className="devflow-footer__pulse" />
+                  <span>正在整理当前任务上下文并生成回答...</span>
+                </div>
+              ) : (
+                <MarkdownBlock
+                  className="devflow-markdown devflow-markdown--task-qa"
+                  markdownText={
+                    taskQaMessage.content_markdown || "_No answer content available yet._"
+                  }
+                />
+              )}
+
+              {taskQaMessage.error_text ? (
+                <p className="devflow-feedback__qa-error">{taskQaMessage.error_text}</p>
+              ) : null}
+            </article>
+          ))
+        )}
+      </div>
+
+      <div className="devflow-feedback__composer devflow-feedback__composer--qa">
+        <textarea
+          className="devflow-feedback__textarea devflow-feedback__textarea--qa"
+          placeholder={
+            canSendTaskQa
+              ? "Ask a sidecar question about the current PRD, implementation approach, risks, or tradeoffs..."
+              : "This task is archived. Sidecar Q&A history remains available, but new questions are disabled."
+          }
+          value={taskQaInputText}
+          readOnly={!canSendTaskQa}
+          onChange={(changeEvent) => onTaskQaInputChange(changeEvent.target.value)}
+          onCompositionStart={onTaskQaCompositionStart}
+          onCompositionEnd={onTaskQaCompositionEnd}
+          onKeyDown={onTaskQaKeyDown}
+        />
+
+        <button
+          type="button"
+          className="devflow-feedback__send"
+          onClick={onTaskQaSubmit}
+          disabled={
+            activeMutationName === "qa" ||
+            !hasTaskQaPayload ||
+            hasPendingTaskQaReply ||
+            !canSendTaskQa
+          }
+        >
+          <SendIcon className="devflow-icon devflow-icon--small" />
+        </button>
+      </div>
+      <p className="devflow-feedback__hint">
+        {canSendTaskQa
+          ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Enter sends, Shift+Enter inserts a new line, and Chinese input composition is respected."
+          : "Archived sidecar history stays readable here. You can still review past answers and convert the latest completed conclusion into a feedback draft."}
+      </p>
+    </div>
+  );
 }
 
 function PrdFullscreenModal({
@@ -7894,7 +8279,8 @@ function formatTaskCardActivityTitle(lastAiActivityAt: string | null): string {
 function canCompleteTask(
   taskItem: Task,
   taskStage: RequirementStage | null,
-  taskBranchHealth: Task["branch_health"]
+  taskBranchHealth: Task["branch_health"],
+  taskHasRetryableCompletionFailure: boolean
 ): boolean {
   if (
     taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
@@ -7910,6 +8296,10 @@ function canCompleteTask(
 
   if (!taskItem.worktree_path) {
     return true;
+  }
+
+  if (taskStage === WorkflowStage.CHANGES_REQUESTED) {
+    return taskHasRetryableCompletionFailure;
   }
 
   if (taskStage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {

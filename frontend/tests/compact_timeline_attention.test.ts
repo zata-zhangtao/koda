@@ -28,7 +28,18 @@ function buildDevLog(overrides: Partial<DevLog>): DevLog {
 assert.equal(
   logRequiresAttention(
     buildDevLog({
+      created_at: "2026-04-22T16:00:00+08:00",
       text_content: "Still missing the rollback guard in the last error path.",
+    })
+  ),
+  false
+);
+
+assert.equal(
+  logRequiresAttention(
+    buildDevLog({
+      created_at: "2026-04-22T16:00:00+08:00",
+      text_content: "This is a quiet historical log entry.",
     })
   ),
   false
@@ -132,6 +143,32 @@ assert.equal(
     }),
   ]),
   true
+);
+
+assert.equal(
+  groupRequiresAttention(
+    [
+      buildDevLog({
+        created_at: "2026-04-22T16:00:00+08:00",
+        text_content: "AI started a task and then went quiet.",
+      }),
+    ],
+    new Date("2026-04-22T16:06:00+08:00").getTime()
+  ),
+  true
+);
+
+assert.equal(
+  groupRequiresAttention(
+    [
+      buildDevLog({
+        created_at: "2026-04-22T16:02:00+08:00",
+        text_content: "AI started a task and is still within the freshness window.",
+      }),
+    ],
+    new Date("2026-04-22T16:06:00+08:00").getTime()
+  ),
+  false
 );
 
 console.log("compact_timeline_attention.test.ts: PASS");

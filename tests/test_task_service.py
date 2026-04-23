@@ -641,6 +641,42 @@ def test_prepare_task_completion_rejects_changes_requested_tasks(
         TaskService.prepare_task_completion(db_session, created_task.id)
 
 
+def test_prepare_task_completion_allows_changes_requested_retry_when_enabled(
+    db_session: Session,
+) -> None:
+    """Completion can be retried from changes_requested when the caller opts in."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_create_schema = TaskCreateSchema(task_title="Retry finalize branch")
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=task_create_schema,
+        run_account_id=run_account_obj.id,
+    )
+    created_task.worktree_path = "/tmp/project-wt-87654321"
+    created_task.workflow_stage = WorkflowStage.CHANGES_REQUESTED
+    created_task.lifecycle_status = TaskLifecycleStatus.OPEN
+    db_session.commit()
+
+    updated_task = TaskService.prepare_task_completion(
+        db_session,
+        created_task.id,
+        allow_retry_from_changes_requested_bool=True,
+    )
+
+    assert updated_task is not None
+    assert updated_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert updated_task.lifecycle_status == TaskLifecycleStatus.OPEN
+
+
 def test_start_task_persists_created_worktree_path_under_task_root(
     db_session: Session,
     tmp_path: Path,

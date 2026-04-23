@@ -1106,6 +1106,7 @@ class TaskService:
     def prepare_task_completion(
         db_session: Session,
         task_id: str,
+        allow_retry_from_changes_requested_bool: bool = False,
     ) -> Task | None:
         """将任务推进到完成收尾阶段（pr_preparing）.
 
@@ -1115,6 +1116,8 @@ class TaskService:
         Args:
             db_session: 数据库会话
             task_id: 任务 ID
+            allow_retry_from_changes_requested_bool: 是否允许从
+                `changes_requested` 重试 Git 收尾
 
         Returns:
             Task | None: 更新后的任务对象；若任务不存在则返回 None
@@ -1147,6 +1150,8 @@ class TaskService:
             WorkflowStage.PR_PREPARING,
             WorkflowStage.ACCEPTANCE_IN_PROGRESS,
         }
+        if allow_retry_from_changes_requested_bool:
+            allowed_source_stages.add(WorkflowStage.CHANGES_REQUESTED)
         if task_obj.workflow_stage not in allowed_source_stages:
             raise ValueError(
                 f"Task {task_id[:8]}... cannot complete from stage "

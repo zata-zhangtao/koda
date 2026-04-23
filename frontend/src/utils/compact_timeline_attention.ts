@@ -1,4 +1,5 @@
 import type { DevLog } from "../types/index.ts";
+import { parseApiDate } from "./datetime.ts";
 
 const ATTENTION_REQUIRED_PATTERN_LIST: RegExp[] = [
   /任务已进入：待修改（changes_requested）/i,
@@ -10,6 +11,7 @@ const ATTENTION_REQUIRED_PATTERN_LIST: RegExp[] = [
   /manual intervention/i,
   /needs attention/i,
 ];
+const STALE_TIMELINE_UPDATE_THRESHOLD_MS = 5 * 60 * 1000;
 const SUCCESS_REQUIRED_PATTERN_LIST: RegExp[] = [
   /AI 自检闭环完成/u,
   /AI 自检完成，未发现阻塞性问题/u,
@@ -21,7 +23,22 @@ const SUCCESS_REQUIRED_PATTERN_LIST: RegExp[] = [
   /已记录人工确认完成/u,
 ];
 
-type CompactTimelineAttentionLog = Pick<DevLog, "text_content" | "state_tag">;
+type CompactTimelineAttentionLog = Pick<
+  DevLog,
+  "created_at" | "text_content" | "state_tag"
+>;
+
+function isTimelineLogStale(
+  timelineLog: CompactTimelineAttentionLog,
+  currentTimestampMs: number
+): boolean {
+  const parsedTimelineLogDate = parseApiDate(timelineLog.created_at);
+  if (!parsedTimelineLogDate) {
+    return false;
+  }
+
+  return currentTimestampMs - parsedTimelineLogDate.getTime() >= STALE_TIMELINE_UPDATE_THRESHOLD_MS;
+}
 
 export function logRequiresAttention(
   timelineLog: CompactTimelineAttentionLog
@@ -33,9 +50,30 @@ export function logRequiresAttention(
 }
 
 export function groupRequiresAttention(
-  timelineLogList: CompactTimelineAttentionLog[]
+  timelineLogList: CompactTimelineAttentionLog[],
+  currentTimestampMs: number = Date.now()
 ): boolean {
-  return timelineLogList.some((timelineLog) => logRequiresAttention(timelineLog));
+  if (timelineLogList.length === 0) {
+    return false;
+  }
+
+  if (timelineLogList.some((timelineLog) => logRequiresAttention(timelineLog))) {
+    return true;
+  }
+
+  let latestTimelineLog = timelineLogList[0];
+  let latestTimelineLogTimestamp =
+    parseApiDate(latestTimelineLog.created_at)?.getTime() ?? -Infinity;
+  for (const candidateLog of timelineLogList.slice(1)) {
+    const candidateLogTimestamp =
+      parseApiDate(candidateLog.created_at)?.getTime() ?? -Infinity;
+    if (candidateLogTimestamp > latestTimelineLogTimestamp) {
+      latestTimelineLog = candidateLog;
+      latestTimelineLogTimestamp = candidateLogTimestamp;
+    }
+  }
+
+  return isTimelineLogStale(latestTimelineLog, currentTimestampMs);
 }
 
 export function logIndicatesSuccess(
