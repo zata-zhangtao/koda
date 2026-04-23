@@ -4,4 +4,5 @@
  */
 
 export { useLogs, useRunAccount, useTasks } from "./useApi";
+export { useImeAwareEnterSubmit } from "./useImeAwareEnterSubmit";
 export { useSelectedTaskPrdFile } from "./useSelectedTaskPrdFile";

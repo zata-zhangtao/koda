@@ -6,6 +6,7 @@
 import { useRef, useState } from "react";
 import { DevLogStateTag, type Task } from "../types";
 import { mediaApi } from "../api/client";
+import { useImeAwareEnterSubmit } from "../hooks/useImeAwareEnterSubmit";
 
 interface InputBoxProps {
   onSubmit: (text: string) => void;
@@ -49,6 +50,14 @@ export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
       setInputText("");
     }
   };
+
+  const { handleCompositionEnd, handleCompositionStart, handleKeyDown } =
+    useImeAwareEnterSubmit({
+      onSubmit: () => {
+        void handleSubmit();
+      },
+      isEnabled: Boolean(activeTask) && !isUploading,
+    });
 
   const handlePaste = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
@@ -105,9 +114,12 @@ export function InputBox({ onSubmit, activeTask }: InputBoxProps) {
         value={inputText}
         onChange={(e) => setInputText(e.target.value)}
         onPaste={handlePaste}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
+        onKeyDown={handleKeyDown}
         placeholder={
           activeTask
-            ? `Type your log... (Enter for new line, click Send to submit, Ctrl+V to paste image)\nCommands: /bug, /fix, /opt, /transfer, /task <title>`
+            ? `Type your log... (Enter to submit, Shift+Enter for a new line, Ctrl+V to paste image)\nCommands: /bug, /fix, /opt, /transfer, /task <title>`
             : "Create a task first to start logging..."
         }
         style={styles.textarea}

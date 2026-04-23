@@ -37,6 +37,7 @@ import {
 } from "./api/client";
 import { PrdPendingQuestionsPanel } from "./components/PrdPendingQuestionsPanel";
 import { useInertSubtree } from "./hooks/useInertSubtree";
+import { useImeAwareEnterSubmit } from "./hooks/useImeAwareEnterSubmit";
 import { useSelectedTaskPrdFile } from "./hooks/useSelectedTaskPrdFile";
 import { SettingsModal } from "./components/SettingsModal";
 import {
@@ -3351,6 +3352,31 @@ function App() {
     }
   }
 
+  const {
+    handleCompositionEnd: handleFeedbackCompositionEnd,
+    handleCompositionStart: handleFeedbackCompositionStart,
+    handleKeyDown: handleFeedbackKeyDown,
+  } = useImeAwareEnterSubmit({
+    onSubmit: () => {
+      void handleFeedbackSubmit();
+    },
+    isEnabled: canSendFeedback && activeMutationName !== "feedback",
+  });
+
+  const {
+    handleCompositionEnd: handleTaskQaCompositionEnd,
+    handleCompositionStart: handleTaskQaCompositionStart,
+    handleKeyDown: handleTaskQaKeyDown,
+  } = useImeAwareEnterSubmit({
+    onSubmit: () => {
+      void handleTaskQaSubmit();
+    },
+    isEnabled:
+      canSendTaskQa &&
+      activeMutationName !== "qa" &&
+      !hasPendingTaskQaReply,
+  });
+
   function handleFeedbackPaste(
     clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
   ): void {
@@ -5669,6 +5695,9 @@ function App() {
                               setFeedbackInputText(changeEvent.target.value)
                             }
                             onPaste={handleFeedbackPaste}
+                            onCompositionStart={handleFeedbackCompositionStart}
+                            onCompositionEnd={handleFeedbackCompositionEnd}
+                            onKeyDown={handleFeedbackKeyDown}
                           />
 
                           <button
@@ -5695,7 +5724,7 @@ function App() {
                         </div>
                         <p className="devflow-feedback__hint">
                           {canSendFeedback
-                            ? "Formal feedback can regenerate the PRD, resume execution, or influence the main automation history. Enter inserts a new line, and sending now requires the button. You can still paste an image/video/file directly into the composer."
+                            ? "Formal feedback can regenerate the PRD, resume execution, or influence the main automation history. Enter sends, Shift+Enter inserts a new line, and Chinese input composition is respected. You can still paste an image/video/file directly into the composer."
                             : "This task has already been completed. Draft text stays visible for reference, but the formal feedback channel is now read-only."}
                         </p>
                       </>
@@ -5857,6 +5886,9 @@ function App() {
                             onChange={(changeEvent) =>
                               setTaskQaInputText(changeEvent.target.value)
                             }
+                            onCompositionStart={handleTaskQaCompositionStart}
+                            onCompositionEnd={handleTaskQaCompositionEnd}
+                            onKeyDown={handleTaskQaKeyDown}
                           />
 
                           <button
@@ -5877,7 +5909,7 @@ function App() {
                         </div>
                         <p className="devflow-feedback__hint">
                           {canSendTaskQa
-                            ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Enter inserts a new line, and sending now requires the button."
+                            ? "Sidecar Q&A stays outside PRD generation and coding prompts by default. Enter sends, Shift+Enter inserts a new line, and Chinese input composition is respected."
                             : "Archived sidecar history stays readable here. You can still review past answers and convert the latest completed conclusion into a feedback draft."}
                         </p>
                       </>
