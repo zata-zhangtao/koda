@@ -23,7 +23,7 @@ from backend.dsl.models.enums import (
 from backend.dsl.models.project import Project
 from backend.dsl.models.task import Task
 from backend.dsl.models.task_artifact import TaskArtifact
-from backend.dsl.services.prd_file_service import find_task_prd_file_path
+from backend.dsl.services.prd_file_service import find_task_readable_prd_file_path
 from backend.dsl.services.task_service import TaskService
 from utils.helpers import (
     format_date_in_app_timezone,
@@ -955,7 +955,10 @@ class ChronicleService:
         if not worktree_dir_path.exists():
             return None
 
-        prd_file_path = find_task_prd_file_path(worktree_dir_path, task_id)
+        prd_file_path = find_task_readable_prd_file_path(
+            worktree_dir_path,
+            task_id,
+        )
         if prd_file_path is None:
             return None
 

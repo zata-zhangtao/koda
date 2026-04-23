@@ -8,6 +8,7 @@ from backend.dsl.services.prd_file_service import (
     build_task_prd_file_prefix,
     ensure_task_prd_file_contract,
     find_task_prd_file_path,
+    find_task_readable_prd_file_path,
     is_valid_task_prd_semantic_file_name,
     normalize_task_prd_requirement_slug,
     repair_invalid_task_prd_file_for_read,
@@ -125,3 +126,24 @@ def test_repair_invalid_task_prd_file_for_read_repairs_random_suffix_with_task_t
     assert correction_result.resolved_file_path == expected_prd_file_path
     assert correction_result.renamed_from_path == invalid_random_prd_file_path
     assert expected_prd_file_path.exists()
+
+
+def test_find_task_readable_prd_file_path_falls_back_to_archive(
+    tmp_path: Path,
+) -> None:
+    """Readable PRD lookup should fall back to archived task PRDs."""
+    archive_directory_path = tmp_path / "tasks" / "archive"
+    archive_directory_path.mkdir(parents=True)
+
+    archived_prd_file_path = archive_directory_path / "prd-cf2b9461-修改-prd-命令.md"
+    archived_prd_file_path.write_text(
+        "# Archived PRD\n\n- 需求名称（AI 归纳）: 修改 prd 命令\n",
+        encoding="utf-8",
+    )
+
+    resolved_prd_file_path = find_task_readable_prd_file_path(
+        tmp_path,
+        "cf2b9461-1234-5678-9012-abcdefabcdef",
+    )
+
+    assert resolved_prd_file_path == archived_prd_file_path

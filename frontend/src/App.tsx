@@ -80,6 +80,7 @@ import {
   type ManualImportEntryMode,
   type PrdSourceMode,
 } from "./utils/prd_source_selection";
+import { buildArchivedTaskPrdNoticeText } from "./utils/task_prd_source";
 import { reconcileTaskListWithReturnedTaskSnapshot } from "./utils/task_list";
 import {
   MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS,
@@ -1082,6 +1083,9 @@ function App() {
       hasLoadedSelectedTaskWaitingConfirmationPrdFile
     ) &&
     !isSelectedTaskPrdGenerating;
+  const selectedTaskPrdArchivedNoticeText = shouldRenderPersistedPrdFile
+    ? buildArchivedTaskPrdNoticeText(selectedTaskPrdFilePath)
+    : null;
   const selectedTaskPrdMarkdown = shouldRenderPersistedPrdFile
     ? prdFileContent ?? ""
     : selectedTaskDocumentMarkdown;
@@ -5532,6 +5536,9 @@ function App() {
                           selectedTaskRenderablePrdMarkdown={
                             selectedTaskRenderablePrdMarkdown
                           }
+                          selectedTaskPrdArchivedNoticeText={
+                            selectedTaskPrdArchivedNoticeText
+                          }
                           selectedTaskPrdPendingQuestionParseErrorText={
                             selectedTaskPrdPendingQuestionParseErrorText
                           }
@@ -5581,6 +5588,9 @@ function App() {
                           isPrdGenerating={isSelectedTaskPrdGenerating}
                           selectedTaskRenderablePrdMarkdown={
                             selectedTaskRenderablePrdMarkdown
+                          }
+                          selectedTaskPrdArchivedNoticeText={
+                            selectedTaskPrdArchivedNoticeText
                           }
                           selectedTaskPrdPendingQuestionParseErrorText={
                             selectedTaskPrdPendingQuestionParseErrorText
@@ -6149,6 +6159,7 @@ interface PrdFullscreenModalProps {
   taskTitle: string;
   markdownText: string;
   isGenerating: boolean;
+  archivedPrdNoticeText: string | null;
   onClose: () => void;
 }
 
@@ -6156,6 +6167,7 @@ interface TaskPrdDocumentPanelProps {
   taskTitle: string;
   isPrdGenerating: boolean;
   selectedTaskRenderablePrdMarkdown: string;
+  selectedTaskPrdArchivedNoticeText: string | null;
   selectedTaskPrdPendingQuestionParseErrorText: string | null;
   shouldRenderSelectedTaskPrdPendingQuestionsPanel: boolean;
   selectedTaskPrdPendingQuestionList: PrdPendingQuestion[];
@@ -6176,6 +6188,7 @@ function TaskPrdDocumentPanel({
   taskTitle,
   isPrdGenerating,
   selectedTaskRenderablePrdMarkdown,
+  selectedTaskPrdArchivedNoticeText,
   selectedTaskPrdPendingQuestionParseErrorText,
   shouldRenderSelectedTaskPrdPendingQuestionsPanel,
   selectedTaskPrdPendingQuestionList,
@@ -6229,6 +6242,19 @@ function TaskPrdDocumentPanel({
         </CardSurface>
       ) : null}
 
+      {selectedTaskPrdArchivedNoticeText !== null ? (
+        <CardSurface className="devflow-prd-source-banner">
+          <div className="devflow-prd-source-banner__copy">
+            <span className="devflow-prd-source-banner__eyebrow">
+              Archived PRD
+            </span>
+            <p className="devflow-prd-source-banner__text">
+              {selectedTaskPrdArchivedNoticeText}
+            </p>
+          </div>
+        </CardSurface>
+      ) : null}
+
       {shouldRenderSelectedTaskPrdPendingQuestionsPanel ? (
         <PrdPendingQuestionsPanel
           pendingQuestionList={selectedTaskPrdPendingQuestionList}
@@ -6271,6 +6297,7 @@ function TaskPrdDocumentPanel({
           taskTitle={taskTitle}
           markdownText={selectedTaskRenderablePrdMarkdown}
           isGenerating={isPrdGenerating}
+          archivedPrdNoticeText={selectedTaskPrdArchivedNoticeText}
           onClose={onClosePrdFullscreen}
         />
       ) : null}
@@ -6513,6 +6540,7 @@ function PrdFullscreenModal({
   taskTitle,
   markdownText,
   isGenerating,
+  archivedPrdNoticeText,
   onClose,
 }: PrdFullscreenModalProps) {
   return (
@@ -6549,6 +6577,19 @@ function PrdFullscreenModal({
         </div>
 
         <div className="devflow-prd-modal__body">
+          {archivedPrdNoticeText !== null ? (
+            <CardSurface className="devflow-prd-source-banner">
+              <div className="devflow-prd-source-banner__copy">
+                <span className="devflow-prd-source-banner__eyebrow">
+                  Archived PRD
+                </span>
+                <p className="devflow-prd-source-banner__text">
+                  {archivedPrdNoticeText}
+                </p>
+              </div>
+            </CardSurface>
+          ) : null}
+
           {isGenerating ? (
             <div className="devflow-execution-banner">
               <span className="devflow-footer__pulse" />

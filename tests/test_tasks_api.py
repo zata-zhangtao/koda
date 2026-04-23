@@ -344,6 +344,49 @@ def test_get_task_prd_file_falls_back_to_legacy_slugged_file(
     assert prd_file_response["path"] == str(legacy_slugged_prd_file_path)
 
 
+def test_get_task_prd_file_falls_back_to_archived_task_prd(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """PRD lookup should keep rendering archived task-scoped PRDs."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Archived PRD fallback verification",
+        worktree_path=str(tmp_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    archive_directory_path = tmp_path / "tasks" / "archive"
+    archive_directory_path.mkdir(parents=True)
+
+    archived_prd_file_path = (
+        archive_directory_path / f"prd-{task_obj.id[:8]}-archived-scope.md"
+    )
+    archived_prd_file_path.write_text(
+        "# Archived PRD\n\n- 仍然需要作为已归档任务 PRD 读取。\n",
+        encoding="utf-8",
+    )
+
+    prd_file_response = get_task_prd_file(task_obj.id, db_session)
+
+    assert (
+        prd_file_response["content"]
+        == "# Archived PRD\n\n- 仍然需要作为已归档任务 PRD 读取。\n"
+    )
+    assert prd_file_response["path"] == str(archived_prd_file_path)
+
+
 def test_create_task_exposes_auto_confirm_prd_and_execute_flag(
     db_session: Session,
 ) -> None:

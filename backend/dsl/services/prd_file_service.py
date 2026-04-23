@@ -4,7 +4,10 @@ Koda keeps a stable task-id prefix in PRD filenames so the backend can always
 locate the current task's document, while still allowing an AI-generated
 semantic slug to describe the requirement. The semantic slug may preserve
 Chinese or other Unicode letters as long as the filename remains
-cross-platform-safe.
+cross-platform-safe. Committed task markdown may later be moved into
+``tasks/archive/`` by repository hooks, so read paths sometimes need an
+archive fallback while write/repair paths must continue to target the live
+``tasks/`` directory first.
 """
 
 from __future__ import annotations
@@ -287,7 +290,7 @@ def repair_invalid_task_prd_file_for_read(
 
 
 def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[Path]:
-    """List readable PRD files for one task, newest semantic filenames first.
+    """List readable live PRD files from ``tasks/`` root.
 
     Args:
         worktree_dir_path: Task worktree root directory.
@@ -298,18 +301,10 @@ def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[
             preferred over the legacy fixed filename, while excluding invalid
             random-suffix candidates from the read path.
     """
-    ranked_prd_file_path_list = _list_ranked_task_prd_file_paths(
-        worktree_dir_path=worktree_dir_path,
+    return _list_readable_task_prd_file_paths_in_directory(
+        task_prd_directory_path=worktree_dir_path / "tasks",
         task_id_str=task_id_str,
     )
-    return [
-        task_prd_file_path
-        for task_prd_file_path in ranked_prd_file_path_list
-        if _is_readable_task_prd_file_path(
-            task_prd_file_path=task_prd_file_path,
-            task_id_str=task_id_str,
-        )
-    ]
 
 
 def list_all_task_prd_file_paths(
@@ -327,8 +322,19 @@ def _list_ranked_task_prd_file_paths(
     task_id_str: str,
 ) -> list[Path]:
     """List all task PRD candidates for repair, ranked by semantic quality."""
-    matching_prd_file_path_list = _list_unsorted_task_prd_file_paths(
-        worktree_dir_path=worktree_dir_path,
+    return _list_ranked_task_prd_file_paths_in_directory(
+        task_prd_directory_path=worktree_dir_path / "tasks",
+        task_id_str=task_id_str,
+    )
+
+
+def _list_ranked_task_prd_file_paths_in_directory(
+    task_prd_directory_path: Path,
+    task_id_str: str,
+) -> list[Path]:
+    """List task PRD candidates from one directory, ranked by semantic quality."""
+    matching_prd_file_path_list = _list_unsorted_task_prd_file_paths_in_directory(
+        task_prd_directory_path=task_prd_directory_path,
         task_id_str=task_id_str,
     )
 
@@ -377,7 +383,7 @@ def _is_readable_task_prd_file_path(
 
 
 def find_task_prd_file_path(worktree_dir_path: Path, task_id_str: str) -> Path | None:
-    """Resolve the best PRD file path for a task.
+    """Resolve the best live PRD file path from ``tasks/`` root.
 
     Args:
         worktree_dir_path: Task worktree root directory.
@@ -396,17 +402,78 @@ def find_task_prd_file_path(worktree_dir_path: Path, task_id_str: str) -> Path |
     return matching_prd_file_path_list[0]
 
 
+def find_task_readable_prd_file_path(
+    worktree_dir_path: Path,
+    task_id_str: str,
+) -> Path | None:
+    """Resolve the best readable PRD path, including archive fallback.
+
+    This helper prefers the live ``tasks/`` PRD so newly generated content wins
+    over history, then falls back to ``tasks/archive/`` because committed task
+    markdown is archived by repository hooks while the task may still remain
+    open in later workflow stages.
+
+    Args:
+        worktree_dir_path: Task worktree root directory.
+        task_id_str: Task UUID string.
+
+    Returns:
+        Path | None: Best matching live-or-archived PRD file path.
+    """
+    live_prd_file_path = find_task_prd_file_path(worktree_dir_path, task_id_str)
+    if live_prd_file_path is not None:
+        return live_prd_file_path
+
+    archived_prd_file_path_list = _list_readable_task_prd_file_paths_in_directory(
+        task_prd_directory_path=worktree_dir_path / "tasks" / "archive",
+        task_id_str=task_id_str,
+    )
+    if not archived_prd_file_path_list:
+        return None
+
+    return archived_prd_file_path_list[0]
+
+
 def _list_unsorted_task_prd_file_paths(
     worktree_dir_path: Path,
     task_id_str: str,
 ) -> list[Path]:
     """Collect all task-scoped PRD files without ranking them."""
-    tasks_directory_path = worktree_dir_path / "tasks"
-    if not tasks_directory_path.exists():
+    return _list_unsorted_task_prd_file_paths_in_directory(
+        task_prd_directory_path=worktree_dir_path / "tasks",
+        task_id_str=task_id_str,
+    )
+
+
+def _list_unsorted_task_prd_file_paths_in_directory(
+    task_prd_directory_path: Path,
+    task_id_str: str,
+) -> list[Path]:
+    """Collect task-scoped PRD files from one concrete directory."""
+    if not task_prd_directory_path.exists():
         return []
 
     task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return list(tasks_directory_path.glob(f"{task_prd_file_prefix}*.md"))
+    return list(task_prd_directory_path.glob(f"{task_prd_file_prefix}*.md"))
+
+
+def _list_readable_task_prd_file_paths_in_directory(
+    task_prd_directory_path: Path,
+    task_id_str: str,
+) -> list[Path]:
+    """List readable task PRDs from one concrete directory."""
+    ranked_prd_file_path_list = _list_ranked_task_prd_file_paths_in_directory(
+        task_prd_directory_path=task_prd_directory_path,
+        task_id_str=task_id_str,
+    )
+    return [
+        task_prd_file_path
+        for task_prd_file_path in ranked_prd_file_path_list
+        if _is_readable_task_prd_file_path(
+            task_prd_file_path=task_prd_file_path,
+            task_id_str=task_id_str,
+        )
+    ]
 
 
 def _pick_latest_prd_file_path(candidate_prd_file_path_list: list[Path]) -> Path:

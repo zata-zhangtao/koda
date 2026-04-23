@@ -50,6 +50,7 @@ from backend.dsl.services.path_opener import (
 )
 from backend.dsl.services.prd_file_service import (
     find_task_prd_file_path,
+    find_task_readable_prd_file_path,
     repair_invalid_task_prd_file_for_read,
 )
 from backend.dsl.services.terminal_launcher import (
@@ -3070,6 +3071,8 @@ def get_task_prd_file(
             task_title_str=task_obj.task_title,
         )
         prd_file_path = repair_result.resolved_file_path
+    if prd_file_path is None:
+        prd_file_path = find_task_readable_prd_file_path(worktree_dir, task_id)
     if prd_file_path is None:
         return {"content": None, "path": None}
 

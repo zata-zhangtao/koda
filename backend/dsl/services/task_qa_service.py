@@ -28,7 +28,7 @@ from backend.dsl.models.project import Project
 from backend.dsl.models.task import Task
 from backend.dsl.models.task_qa_message import TaskQaMessage
 from backend.dsl.schemas.task_qa_schema import TaskQaMessageCreateSchema
-from backend.dsl.services.prd_file_service import find_task_prd_file_path
+from backend.dsl.services.prd_file_service import find_task_readable_prd_file_path
 from utils.database import SessionLocal
 from utils.helpers import utc_now_naive
 from utils.logger import logger
@@ -639,7 +639,10 @@ class TaskQaService:
             db_session,
             task_obj,
         )
-        prd_file_path = find_task_prd_file_path(effective_work_dir_path, task_obj.id)
+        prd_file_path = find_task_readable_prd_file_path(
+            effective_work_dir_path,
+            task_obj.id,
+        )
         if prd_file_path is None:
             return (
                 "## Current PRD File\n"
