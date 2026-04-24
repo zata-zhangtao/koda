@@ -62,7 +62,7 @@ import {
   deriveCompactTimelineCategoryFromPhaseLabel,
   logMatchesExplicitPrdCategory,
 } from "./utils/compact_timeline_category";
-import { hasRetryableCompletionFailure } from "./utils/completion_retry";
+import { canCompleteTask } from "./utils/task_completion";
 import {
   buildPrdPendingQuestionsFeedbackText,
   derivePrdPendingQuestionActionBlockReason,
@@ -1230,13 +1230,6 @@ function App() {
         : false,
     [selectedTask, selectedTaskDevLogs]
   );
-  const selectedTaskHasRetryableCompletionFailure = useMemo(
-    () =>
-      selectedTask
-        ? hasRetryableCompletionFailure(selectedTaskDevLogs)
-        : false,
-    [selectedTask, selectedTaskDevLogs]
-  );
   const selectedTaskStageLabel = useMemo(
     () => selectedTaskCardMetadata?.display_stage_label ?? null,
     [selectedTaskCardMetadata]
@@ -1337,12 +1330,11 @@ function App() {
     [taskList]
   );
   const canCompleteSelectedTask = selectedTask
-    ? canCompleteTask(
-        selectedTask,
-        selectedTaskStage,
-        selectedTaskBranchHealth,
-        selectedTaskHasRetryableCompletionFailure
-      ) &&
+    ? canCompleteTask({
+        taskItem: selectedTask,
+        taskStage: selectedTaskStage,
+        taskBranchHealth: selectedTaskBranchHealth,
+      }) &&
       !selectedTask.is_codex_task_running
     : false;
   const selectedTaskScheduleNameMap = useMemo(() => {
@@ -8319,43 +8311,6 @@ function formatTaskCardActivityTitle(lastAiActivityAt: string | null): string {
   }
 
   return `最近 AI：${formatDateTime(lastAiActivityAt)}`;
-}
-
-function canCompleteTask(
-  taskItem: Task,
-  taskStage: RequirementStage | null,
-  taskBranchHealth: Task["branch_health"],
-  taskHasRetryableCompletionFailure: boolean
-): boolean {
-  if (
-    taskItem.lifecycle_status === TaskLifecycleStatus.CLOSED ||
-    taskItem.lifecycle_status === TaskLifecycleStatus.DELETED ||
-    taskItem.lifecycle_status === TaskLifecycleStatus.ABANDONED
-  ) {
-    return false;
-  }
-
-  if (taskBranchHealth?.manual_completion_candidate) {
-    return true;
-  }
-
-  if (!taskItem.worktree_path) {
-    return true;
-  }
-
-  if (taskStage === WorkflowStage.CHANGES_REQUESTED) {
-    return taskHasRetryableCompletionFailure;
-  }
-
-  if (taskStage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
-    return true;
-  }
-
-  return (
-    taskStage === WorkflowStage.TEST_IN_PROGRESS ||
-    taskStage === WorkflowStage.PR_PREPARING ||
-    taskStage === WorkflowStage.ACCEPTANCE_IN_PROGRESS
-  );
 }
 
 function canRebindTaskProject(taskItem: Task): boolean {

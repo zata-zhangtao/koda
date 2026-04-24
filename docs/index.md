@@ -80,7 +80,7 @@ just dsl-dev
 - self-review 闭环通过后，系统会自动进入 `test_in_progress`，执行 `uv run pre-commit run --all-files`；若 lint 在自动重跑后仍失败，会继续进入有上限的 AI lint-fix 闭环，只有最终失败才会进入 `changes_requested`。
 - 任务级 schedule 现在除了 `start_task` / `resume_task` 之外，也支持独立 `review_task`：它会在任务 worktree 或绑定项目仓库上执行一次 review-only 评审，把 transcript 与结论写回 `DevLog`，但不会自动回改、不会推进到 lint，也不会修改 `workflow_stage`。
 - 默认不会在实现阶段自动执行 `git commit`；只有用户点击 `Complete` 后，系统才会在任务 worktree 中执行 `git add .`，如果 staging 后仍有变更，就由当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并提交；如果用户已经提交过导致 worktree 干净，则跳过 commit，随后执行 `git rebase main`。同步 `main` 时会优先解析该分支配置的 remote，而不是写死 `origin`；merge 成功后的 cleanup 也会继续核验 worktree / branch 是否真的移除，并在需要时做 fallback 清理，最后再标记完成。
-- `WorkflowStage` 中的 `pr_preparing` 现在已接入真实自动化：`Complete` 会先进入该阶段，成功后自动推进到 `done`；如果最近一次 `Complete` 是因为 Git 收尾环境问题失败而掉回 `changes_requested`，用户修复仓库状态后也可以直接再次点击 `Complete` 重试收尾，而不必重跑实现链。`test_in_progress` 现在承载 post-review lint / lint-fix，`acceptance_in_progress` 仍主要是预留阶段。
+- `WorkflowStage` 中的 `pr_preparing` 现在已接入真实自动化：`Complete` 会先进入该阶段，成功后自动推进到 `done`；如果任务掉回 `changes_requested`，用户在 worktree 中修复实现、自检、lint 或 Git 环境问题后也可以直接再次点击 `Complete` 重试收尾，而不必重跑实现链。`test_in_progress` 现在承载 post-review lint / lint-fix，`acceptance_in_progress` 仍主要是预留阶段。
 - 对于“任务分支已被人工 merge 并删除”的边缘场景，后端会通过 `branch_health` 派生状态把已进入 worktree-backed Git 流程的任务标记为“缺失分支待确认”；前端要求用户先查看完成检查单，再走独立的 `/manual-complete` 收口接口，避免 backlog/未启动任务被误关单，也避免错误重跑普通 Git 收尾。
 - `ai_agent/` 当前是工具库，不是 DSL 请求链路中的主处理器。
 

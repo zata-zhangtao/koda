@@ -301,8 +301,8 @@ tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md
 
 当前前端把 `go on`、`continue`、`resume`、`retry` 等输入视为“继续执行”指令：
 
-- 若任务已经落到 `changes_requested`，仍走正常的 `execute` 重试入口
-- 但如果 `changes_requested` 是最近一次 `Complete` 收尾失败留下的状态，详情页会恢复 `Complete`，允许用户在修复 Git 环境后直接重试收尾
+- 若任务已经落到 `changes_requested`，可以走正常的 `execute` 重试入口
+- 若用户已在 worktree 中人工修复当前问题，详情页也会恢复 `Complete`，允许用户直接进入 Git 收尾
 - 若任务卡在可恢复的运行阶段且当前没有活跃后台进程，则会调用 `POST /api/tasks/{task_id}/resume`
 - 若任务卡在运行阶段但用户明确要求立即终止当前链路，则可以改走 `POST /api/tasks/{task_id}/force-interrupt`
 - 若任务其实已经停在 self-review 或 lint 的“等待用户点击 Complete”状态，则不会重跑自动化，而是提示用户直接完成收尾

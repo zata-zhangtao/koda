@@ -113,14 +113,14 @@ backend/dsl/<domain>/
 13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
 14. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
 15. 若任务仍停留在 `prd_generating` / `implementation_in_progress` / `self_review_in_progress` / `test_in_progress` / `pr_preparing`，但实时 runner 标记已经丢失，详情页会额外暴露 `Force Interrupt`；后端会清理运行态、回退到 `changes_requested`，并写入一条“人工强制接管”的 `DevLog` 审计日志
-16. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+16. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
 17. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
 18. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
 19. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
 20. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
 21. `pr_preparing` 会先执行 `git add .`；如果 staging 后没有变更，Koda 会把它视为“用户已经提交过”，跳过 `git commit` 并继续 rebase/merge；如果 staging 后仍有变更，则先由当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message，再执行 `git commit`
 22. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
-23. 若最近一次 `changes_requested` 来自 `Complete` 收尾失败（例如承载 `main` 的工作区不干净），前端会恢复普通 `Complete` CTA；用户修复 Git 环境后可以直接重试收尾，而不必回到 `execute` 重跑实现链
+23. 对 worktree-backed 的 `changes_requested` 任务，前端会恢复普通 `Complete` CTA；用户修复实现、自检、lint 或 Git 环境问题后可以直接重试收尾，而不必回到 `execute` 重跑实现链
 24. `pr_preparing` 在同步 `main` 时会优先解析该分支配置的 remote；如果没有显式配置，则回退到仓库唯一 remote，再回退到 `origin` / `zata`，避免因 remote 名称与仓库实际配置不一致而误报
 25. merge 成功后的 cleanup 不会只看 repo-local cleanup script 的退出码；系统还会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理
 

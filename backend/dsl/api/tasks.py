@@ -97,7 +97,6 @@ _SELF_REVIEW_SUMMARY_LINE_PREFIX = "摘要："
 _COMMIT_INFORMATION_SOURCE_AI_SUMMARY = "ai_summary"
 _COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF = "requirement_brief"
 _COMMIT_INFORMATION_SOURCE_TASK_TITLE = "task_title"
-_COMPLETION_FAILURE_LOG_MARKER = "❌ Koda 未能完成分支收尾与合并："
 _ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
 _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
@@ -1169,23 +1168,6 @@ def _has_latest_post_review_lint_cycle_passed(task_dev_log_list: list[DevLog]) -
     return False
 
 
-def _has_retryable_completion_failure(task_dev_log_list: list[DevLog]) -> bool:
-    """Return whether the newest BUG log represents a failed Complete attempt.
-
-    Args:
-        task_dev_log_list: 已按时间正序排列的任务日志列表
-
-    Returns:
-        bool: 若最近一次 BUG 级别失败来自 Complete 收尾阶段则返回 True
-    """
-    for dev_log_item in reversed(task_dev_log_list):
-        if dev_log_item.state_tag != DevLogStateTag.BUG:
-            continue
-        return _COMPLETION_FAILURE_LOG_MARKER in dev_log_item.text_content
-
-    return False
-
-
 def _create_manual_completion_override_log_if_needed(
     db_session: Session,
     task_obj: Task,
@@ -1194,8 +1176,9 @@ def _create_manual_completion_override_log_if_needed(
 ) -> str | None:
     """在人工提前触发完成时写入留痕日志.
 
-    只有当任务仍停留在 `self_review_in_progress`，且最近一轮 self-review
-    尚未出现通过标记时，才视为一次需要显式记录的人工接管。
+    当任务仍停留在 `self_review_in_progress`，且最近一轮 self-review
+    尚未出现通过标记时，视为人工提前收口；当任务停留在
+    `changes_requested` 时，视为用户已人工修复 worktree 后接管收尾。
 
     Args:
         db_session: 数据库会话
@@ -1206,6 +1189,23 @@ def _create_manual_completion_override_log_if_needed(
     Returns:
         str | None: 若写入了人工接管日志则返回日志文本，否则返回 None
     """
+    if source_workflow_stage == WorkflowStage.CHANGES_REQUESTED:
+        manual_changes_requested_override_log_text = (
+            "📝 已记录人工接管：用户在任务进入 `changes_requested` 后手动触发了 `Complete`。\n"
+            "系统将以当前 worktree 内容进入 Git 收尾阶段（pr_preparing），"
+            "不重新执行实现或自检自动化链路。"
+        )
+        LogService.create_log(
+            db_session,
+            DevLogCreateSchema(
+                task_id=task_obj.id,
+                text_content=manual_changes_requested_override_log_text,
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+            task_obj.run_account_id,
+        )
+        return manual_changes_requested_override_log_text
+
     if source_workflow_stage != WorkflowStage.SELF_REVIEW_IN_PROGRESS:
         return None
 
@@ -2564,8 +2564,8 @@ def complete_task(
 
     若任务仍处于 `self_review_in_progress` 且尚未出现最近一轮通过标记，
     接口仍允许人工显式触发 `Complete`，并会先写入一条 DevLog 留痕。
-    若任务上一次 `Complete` 因收尾阶段失败而被回退到 `changes_requested`，
-    在用户修复外部 Git 环境后，也允许再次点击 `Complete` 重试收尾。
+    若任务处于 `changes_requested`，表示自动化已等待人工介入；用户在
+    worktree 中完成修复后也可以点击 `Complete` 直接进入 Git 收尾。
     若在合并到 `main` 前失败，任务回退到 `changes_requested`。
     若已成功合并到 `main` 但清理失败，任务仍会进入 `done`，同时记录人工清理提示。
 
@@ -2590,21 +2590,17 @@ def complete_task(
 
     source_task = TaskService.get_task_by_id(db_session, task_id)
     source_workflow_stage = source_task.workflow_stage if source_task else None
-    ordered_source_task_dev_log_list = (
-        _get_ordered_task_dev_logs(source_task) if source_task is not None else []
-    )
-    allow_retry_from_changes_requested_bool = (
+    allow_complete_from_changes_requested_bool = (
         source_task is not None
         and source_task.workflow_stage == WorkflowStage.CHANGES_REQUESTED
-        and _has_retryable_completion_failure(ordered_source_task_dev_log_list)
     )
 
     try:
         completion_task = TaskService.prepare_task_completion(
             db_session,
             task_id,
-            allow_retry_from_changes_requested_bool=(
-                allow_retry_from_changes_requested_bool
+            allow_complete_from_changes_requested_bool=(
+                allow_complete_from_changes_requested_bool
             ),
         )
     except ValueError as completion_error:

@@ -806,7 +806,7 @@ def test_prepare_task_completion_allows_changes_requested_retry_when_enabled(
     updated_task = TaskService.prepare_task_completion(
         db_session,
         created_task.id,
-        allow_retry_from_changes_requested_bool=True,
+        allow_complete_from_changes_requested_bool=True,
     )
 
     assert updated_task is not None

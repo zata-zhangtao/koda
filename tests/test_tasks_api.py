@@ -1618,6 +1618,75 @@ def test_complete_task_allows_retry_from_changes_requested_after_completion_fail
     )
 
 
+def test_complete_task_allows_manual_takeover_from_changes_requested_after_worktree_fix(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete should be available after a human fixes a changes_requested worktree."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    worktree_path = tmp_path / "repo-wt-human-fixed"
+    worktree_path.mkdir()
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Manual fix then complete",
+        requirement_brief="Human fixed the worktree",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.CHANGES_REQUESTED,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content=(
+                "❌ runner kind=codex AI 自检复审阶段失败（exit 1），已重试 2 次。\n"
+                "任务已进入：待修改（changes_requested），需要人工介入。"
+            ),
+            state_tag=DevLogStateTag.BUG,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    background_tasks = BackgroundTasks()
+    returned_task = complete_task(task_obj.id, background_tasks, db_session)
+
+    assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert returned_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
+    scheduled_completion_task = background_tasks.tasks[0]
+    assert scheduled_completion_task.func is tasks_api.run_codex_completion
+    assert any(
+        "用户在任务进入 `changes_requested` 后手动触发了 `Complete`" in dev_log_text
+        for dev_log_text in scheduled_completion_task.kwargs["dev_log_text_list"]
+    )
+
+    persisted_log_text_list = [
+        dev_log_item.text_content
+        for dev_log_item in db_session.query(DevLog)
+        .filter(DevLog.task_id == task_obj.id)
+        .all()
+    ]
+    assert any(
+        "用户在任务进入 `changes_requested` 后手动触发了 `Complete`" in dev_log_text
+        for dev_log_text in persisted_log_text_list
+    )
+
+
 def test_complete_task_accepts_semantic_task_branch_names(
     db_session: Session,
     tmp_path: Path,
