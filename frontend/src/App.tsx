@@ -81,7 +81,11 @@ import {
   type PrdSourceMode,
 } from "./utils/prd_source_selection";
 import { buildArchivedTaskPrdNoticeText } from "./utils/task_prd_source";
-import { reconcileTaskListWithReturnedTaskSnapshot } from "./utils/task_list";
+import {
+  removeTaskSnapshotFromTaskList,
+  reconcileTaskListWithReturnedTaskSnapshot,
+  shouldPollDashboardForTaskRefresh,
+} from "./utils/task_list";
 import {
   MANUAL_WORKSPACE_AUTO_SWITCH_GUARD_MS,
   buildWorkspaceTaskBuckets,
@@ -1325,8 +1329,8 @@ function App() {
     isForceInterruptibleStage(selectedTaskStage) &&
     selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
     selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED;
-  const hasAnyTaskInActiveExecution = useMemo(
-    () => taskList.some((taskItem) => taskItem.is_codex_task_running),
+  const hasAnyTaskNeedingDashboardRefresh = useMemo(
+    () => taskList.some((taskItem) => shouldPollDashboardForTaskRefresh(taskItem)),
     [taskList]
   );
   const canCompleteSelectedTask = selectedTask
@@ -1362,6 +1366,17 @@ function App() {
     });
   }
 
+  function removeLocalTaskSnapshot(removedTaskId: string): void {
+    setTaskList((previousTaskList) => {
+      const nextTaskList = removeTaskSnapshotFromTaskList(
+        previousTaskList,
+        removedTaskId
+      );
+      latestTaskListRef.current = nextTaskList;
+      return nextTaskList;
+    });
+  }
+
   useEffect(() => {
     if (lastManualWorkspaceSwitchAt === null) {
       return;
@@ -1386,7 +1401,7 @@ function App() {
   }, [lastManualWorkspaceSwitchAt]);
 
   useEffect(() => {
-    if (!hasAnyTaskInActiveExecution) {
+    if (!hasAnyTaskNeedingDashboardRefresh) {
       return;
     }
     const pollingIntervalId = window.setInterval(() => {
@@ -1398,7 +1413,7 @@ function App() {
     return () => {
       window.clearInterval(pollingIntervalId);
     };
-  }, [hasAnyTaskInActiveExecution, selectedTaskProjectFilterValue]);
+  }, [hasAnyTaskNeedingDashboardRefresh, selectedTaskProjectFilterValue]);
 
   async function refreshTaskCardMetadata(options?: {
     fallbackTaskList?: Task[];
@@ -2294,6 +2309,7 @@ function App() {
         });
       }
 
+      reconcileLocalTaskSnapshot(createdTask);
       setWorkspaceView("active");
       setSelectedTaskId(createdTask.id);
       resetCreateRequirementDraft();
@@ -2318,6 +2334,8 @@ function App() {
 
     try {
       const startedTask = await taskApi.start(taskItem.id);
+      reconcileLocalTaskSnapshot(startedTask);
+      setSelectedTaskId(startedTask.id);
       const worktreeMsg = startedTask.worktree_path
         ? `Worktree 已创建：\`${startedTask.worktree_path}\`\n\nAI 正在生成 PRD，请稍候...`
         : "AI 正在生成 PRD，请稍候...";
@@ -2451,6 +2469,7 @@ function App() {
         taskItem.id,
         selectedPendingPrdRelativePath
       );
+      reconcileLocalTaskSnapshot(updatedTask);
       setSelectedTaskId(updatedTask.id);
       resetSelectedTaskPrdSourceDraft();
       setSuccessMessage("Pending PRD 已移动到 tasks 根目录。");
@@ -2490,6 +2509,7 @@ function App() {
         manualImportEntryMode === "paste"
           ? await taskApi.importPrdFromText(taskItem.id, manualImportPrdMarkdownText)
           : await taskApi.importPrd(taskItem.id, manualImportPrdFile as File);
+      reconcileLocalTaskSnapshot(updatedTask);
       setSelectedTaskId(updatedTask.id);
       resetSelectedTaskPrdSourceDraft();
       setSuccessMessage("PRD 已导入到 tasks 根目录。");
@@ -2584,12 +2604,10 @@ function App() {
         state_tag: DevLogStateTag.NONE,
       });
       const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
-      setTaskList((previousTaskList) =>
-        previousTaskList.map((taskItem) =>
-          taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
-        )
-      );
+      reconcileLocalTaskSnapshot(regeneratedTask);
+      setSelectedTaskId(regeneratedTask.id);
       setSuccessMessage("结构化确认结果已提交，Koda 正在重新生成 PRD。");
+      void loadDashboardData(true);
     } catch (submitPendingQuestionsError) {
       console.error(submitPendingQuestionsError);
       setErrorMessage("Failed to submit structured PRD confirmation.");
@@ -2610,7 +2628,12 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStage(taskItem.id, WorkflowStage.PRD_WAITING_CONFIRMATION);
+      const confirmedTask = await taskApi.updateStage(
+        taskItem.id,
+        WorkflowStage.PRD_WAITING_CONFIRMATION
+      );
+      reconcileLocalTaskSnapshot(confirmedTask);
+      setSelectedTaskId(confirmedTask.id);
       await logApi.create({
         task_id: taskItem.id,
         text_content:
@@ -2638,7 +2661,9 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.execute(taskItem.id);
+      const executedTask = await taskApi.execute(taskItem.id);
+      reconcileLocalTaskSnapshot(executedTask);
+      setSelectedTaskId(executedTask.id);
       await logApi.create({
         task_id: taskItem.id,
         text_content:
@@ -2660,7 +2685,12 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStage(taskItem.id, WorkflowStage.DONE);
+      const acceptedTask = await taskApi.updateStage(
+        taskItem.id,
+        WorkflowStage.DONE
+      );
+      reconcileLocalTaskSnapshot(acceptedTask);
+      setSelectedTaskId(acceptedTask.id);
       setWorkspaceView("completed");
       await loadDashboardData(true);
     } catch (acceptError) {
@@ -2677,7 +2707,12 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStage(taskItem.id, WorkflowStage.CHANGES_REQUESTED);
+      const changesRequestedTask = await taskApi.updateStage(
+        taskItem.id,
+        WorkflowStage.CHANGES_REQUESTED
+      );
+      reconcileLocalTaskSnapshot(changesRequestedTask);
+      setSelectedTaskId(changesRequestedTask.id);
       await logApi.create({
         task_id: taskItem.id,
         text_content:
@@ -2751,9 +2786,9 @@ function App() {
     setErrorMessage(null);
     try {
       const updatedTask = await taskApi.cancel(taskItem.id);
-      setTaskList((prev) =>
-        prev.map((t) => (t.id === updatedTask.id ? updatedTask : t))
-      );
+      reconcileLocalTaskSnapshot(updatedTask);
+      setSelectedTaskId(updatedTask.id);
+      void loadDashboardData(true);
     } catch (err) {
       console.error(err);
       setErrorMessage(
@@ -2777,12 +2812,10 @@ function App() {
     setSuccessMessage(null);
     try {
       const updatedTask = await taskApi.forceInterrupt(taskItem.id);
-      setTaskList((prev) =>
-        prev.map((existingTask) =>
-          existingTask.id === updatedTask.id ? updatedTask : existingTask
-        )
-      );
+      reconcileLocalTaskSnapshot(updatedTask);
+      setSelectedTaskId(updatedTask.id);
       setSuccessMessage("已强制中断当前任务，任务已回退到待修改阶段。");
+      void loadDashboardData(true);
     } catch (err) {
       console.error(err);
       setErrorMessage(
@@ -2858,11 +2891,13 @@ function App() {
     let didPersistRequirementChange = false;
 
     try {
-      await taskApi.update(selectedTask.id, {
+      const updatedTask = await taskApi.update(selectedTask.id, {
         task_title: nextRequirementTitle,
         requirement_brief: nextRequirementBrief,
         project_id: projectChanged ? editRequirementProjectId : undefined,
       });
+      reconcileLocalTaskSnapshot(updatedTask);
+      setSelectedTaskId(updatedTask.id);
 
       const requirementUpdateLogText = buildRequirementUpdateLog(
         selectedTask.task_title,
@@ -2895,11 +2930,8 @@ function App() {
       let nextSuccessMessage = "Requirement changes were appended to history.";
       if (shouldAttemptPrdRegeneration) {
         const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
-        setTaskList((prev) =>
-          prev.map((taskItem) =>
-            taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
-          )
-        );
+        reconcileLocalTaskSnapshot(regeneratedTask);
+        setSelectedTaskId(regeneratedTask.id);
         nextSuccessMessage =
           "Requirement changes were saved. Koda is regenerating the PRD.";
       } else if (selectedTask.workflow_stage !== WorkflowStage.BACKLOG) {
@@ -2944,9 +2976,11 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.destroy(selectedTask.id, {
+      const destroyedTask = await taskApi.destroy(selectedTask.id, {
         destroy_reason: normalizedDestroyReason,
       });
+      reconcileLocalTaskSnapshot(destroyedTask);
+      setSelectedTaskId(destroyedTask.id);
       closeDestroyTaskModal();
       setWorkspaceView("completed");
       setSuccessMessage(
@@ -3040,7 +3074,9 @@ function App() {
         const isManualSelfReviewOverride =
           taskItem.workflow_stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
           !hasLatestSelfReviewCyclePassed(devLogsByTaskId[taskItem.id] ?? []);
-        await taskApi.complete(taskItem.id);
+        const completionTask = await taskApi.complete(taskItem.id);
+        reconcileLocalTaskSnapshot(completionTask);
+        setSelectedTaskId(completionTask.id);
         setSuccessMessage(
           isManualSelfReviewOverride
             ? "已记录人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase main、必要时自动修复冲突、合并到 main，并清理 worktree。"
@@ -3050,7 +3086,12 @@ function App() {
         return;
       }
 
-      await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.CLOSED);
+      const completedTask = await taskApi.updateStatus(
+        taskItem.id,
+        TaskLifecycleStatus.CLOSED
+      );
+      reconcileLocalTaskSnapshot(completedTask);
+      setSelectedTaskId(completedTask.id);
       setWorkspaceView("completed");
       setSuccessMessage("Requirement moved to completed.");
       await loadDashboardData(true);
@@ -3076,6 +3117,10 @@ function App() {
 
     try {
       await taskApi.deleteUnstarted(taskItem.id);
+      removeLocalTaskSnapshot(taskItem.id);
+      setSelectedTaskId((previousSelectedTaskId) =>
+        previousSelectedTaskId === taskItem.id ? null : previousSelectedTaskId
+      );
       setWorkspaceView("active");
       setSuccessMessage("Requirement draft deleted.");
       await loadDashboardData(true);
@@ -3109,7 +3154,12 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.ABANDONED);
+      const abandonedTask = await taskApi.updateStatus(
+        taskItem.id,
+        TaskLifecycleStatus.ABANDONED
+      );
+      reconcileLocalTaskSnapshot(abandonedTask);
+      setSelectedTaskId(abandonedTask.id);
       await logApi.create({
         task_id: taskItem.id,
         text_content: buildRequirementAbandonLog(
@@ -3142,7 +3192,9 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.restore(taskItem.id);
+      const restoredTask = await taskApi.restore(taskItem.id);
+      reconcileLocalTaskSnapshot(restoredTask);
+      setSelectedTaskId(restoredTask.id);
       setWorkspaceView("active");
       setSuccessMessage(
         "Requirement restored from abandoned history. If you need to continue automation, use the current stage's normal action or send continue/resume in feedback."
@@ -3211,11 +3263,8 @@ function App() {
 
       if (shouldRegeneratePrdAfterFeedback) {
         const regeneratedTask = await taskApi.regeneratePrd(selectedTask.id);
-        setTaskList((prev) =>
-          prev.map((taskItem) =>
-            taskItem.id === regeneratedTask.id ? regeneratedTask : taskItem
-          )
-        );
+        reconcileLocalTaskSnapshot(regeneratedTask);
+        setSelectedTaskId(regeneratedTask.id);
         setSuccessMessage("Feedback saved. Koda is regenerating the PRD.");
       }
 
@@ -3230,9 +3279,8 @@ function App() {
         if (stage === WorkflowStage.CHANGES_REQUESTED) {
           // 正常重试：直接触发执行
           const resumedTask = await taskApi.execute(selectedTask.id);
-          setTaskList((prev) =>
-            prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
-          );
+          reconcileLocalTaskSnapshot(resumedTask);
+          setSelectedTaskId(resumedTask.id);
         } else if (
           RESUMABLE_AUTOMATION_STAGE_SET.has(stage) &&
           !selectedTask.is_codex_task_running
@@ -3249,9 +3297,8 @@ function App() {
             setSuccessMessage("自动化验证已通过，点击 Complete 进入 Git 收尾。");
           } else {
             const resumedTask = await taskApi.resume(selectedTask.id);
-            setTaskList((prev) =>
-              prev.map((t) => (t.id === resumedTask.id ? resumedTask : t))
-            );
+            reconcileLocalTaskSnapshot(resumedTask);
+            setSelectedTaskId(resumedTask.id);
           }
         } else if (stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS) {
           if (selectedTask.is_codex_task_running) {

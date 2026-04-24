@@ -162,6 +162,8 @@ backend/dsl/<domain>/
 - 当前任务是否处于前端会自动轮询的阶段
 - 当前任务日志轮询是否拿到了正确的 `created_after` 时间戳
 - API 是否同时返回了预期的 `workflow_stage` 与 `is_codex_task_running`
+- 普通 `Complete` 成功后，前端是否已经把 `/complete` 返回的 `pr_preparing` 任务快照写回本地任务列表；即使运行标记短暂丢失，open 的 `pr_preparing` 仍应继续 dashboard 轮询，直到拉到 `done / CLOSED`
+- `destroy`、`restore`、`updateStatus`、`updateStage`、`execute`、`cancel`、`forceInterrupt` 等任务突变接口是否把返回的 `TaskResponse` 立即写回本地任务列表；硬删除未启动草稿因为返回 204，需要前端先本地移除该任务
 - `DevLog` 是否真正写入了当前任务
 
 ## 开发建议
@@ -170,7 +172,8 @@ backend/dsl/<domain>/
 
 - 把 `workflow_stage` 视为业务阶段事实来源，但不要再把它等同为“后台自动化仍在运行”
 - 后端和前端要同时更新 `WorkflowStage` 相关逻辑
-- 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`
+- 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`；dashboard 任务列表轮询有一个明确例外：open 的 `pr_preparing` 会继续刷新，以便 Git 收尾完成后自动切到 `done / CLOSED`
+- 会改变任务列表归属的前端动作（例如 Destroy、Delete、Abandon、Restore、Request Changes、Accept、Complete）必须先消费突变接口返回的任务快照或本地移除 hard-delete 项，再把全量 dashboard refresh 当作后台一致性补偿
 - 若前端需要处理“分支已被人工 merge/删除”的异常收口，优先使用 `TaskResponse.branch_health` / `TaskCardMetadata.branch_health`，不要再把 worktree 是否存在当成唯一依据
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
 - `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名

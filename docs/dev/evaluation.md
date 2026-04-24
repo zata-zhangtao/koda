@@ -51,7 +51,7 @@
 13. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
 14. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
 15. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
-16. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 而不是单纯的 `workflow_stage` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`
+16. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
 17. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 
 ### Sidecar Q&A
