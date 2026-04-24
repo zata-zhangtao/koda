@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 import uuid
@@ -19,11 +20,14 @@ from backend.dsl.prd_sources.domain.models import (
 )
 from backend.dsl.prd_sources.domain.policies import (
     MAX_PRD_MARKDOWN_BYTES,
-    build_task_prd_file_prefix,
     extract_prd_metadata_value,
     validate_pending_prd_relative_path,
     validate_prd_markdown_text,
 )
+
+_TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN = re.compile(r"^\d{8}-\d{6}-prd-.+\.md$")
+_TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN = re.compile(r"^prd-[0-9a-f]{8}\.md$")
+_TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN = re.compile(r"^prd-[0-9a-f]{8}-.+\.md$")
 
 
 class FilesystemPrdRepository:
@@ -130,9 +134,9 @@ class FilesystemPrdRepository:
             PrdAlreadyExistsError: If a matching PRD already exists.
         """
         tasks_directory_path = workspace_dir_path / "tasks"
-        task_prd_file_prefix_str = build_task_prd_file_prefix(task_id_str)
         if tasks_directory_path.exists() and any(
-            tasks_directory_path.glob(f"{task_prd_file_prefix_str}*.md")
+            _is_task_prd_file_name(task_prd_file_path.name)
+            for task_prd_file_path in tasks_directory_path.glob("*.md")
         ):
             raise PrdAlreadyExistsError(
                 "This task already has a PRD file. Replace is not supported yet."
@@ -302,3 +306,12 @@ def _is_relative_to(candidate_path: Path, parent_path: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _is_task_prd_file_name(file_name_str: str) -> bool:
+    """Return whether a filename looks like a task PRD file."""
+    return bool(
+        _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(file_name_str)
+        or _TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN.fullmatch(file_name_str)
+        or _TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN.fullmatch(file_name_str)
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from backend.dsl.prd_sources.domain.errors import (
@@ -13,8 +14,9 @@ from backend.dsl.prd_sources.domain.errors import (
 
 TASK_PRD_REQUIREMENT_SLUG_MAX_LENGTH = 80
 TASK_PRD_FILE_NAME_MAX_BYTES = 255
+TASK_PRD_FILE_NAME_PREFIX_TEXT = "20260423-130500-prd-"
 TASK_PRD_REQUIREMENT_SLUG_MAX_BYTES = TASK_PRD_FILE_NAME_MAX_BYTES - len(
-    "prd-12345678-.md".encode("utf-8")
+    f"{TASK_PRD_FILE_NAME_PREFIX_TEXT}.md".encode("utf-8")
 )
 MAX_PRD_MARKDOWN_BYTES = 2 * 1024 * 1024
 WINDOWS_FORBIDDEN_FILENAME_CHAR_SET = set('<>:"/\\|?*')
@@ -35,10 +37,28 @@ def build_task_prd_file_prefix(task_id_str: str) -> str:
     return f"prd-{task_id_str[:8]}"
 
 
+def build_task_prd_timestamp_prefix(
+    reference_datetime: datetime | None = None,
+) -> str:
+    """Build the timestamp prefix used for PRD filenames.
+
+    Args:
+        reference_datetime: Optional timestamp reference. When omitted the
+            current local time is used.
+
+    Returns:
+        str: Prefix in ``YYYYMMDD-HHMMSS`` format.
+    """
+    timestamp_reference_datetime = reference_datetime or datetime.now()
+    return timestamp_reference_datetime.strftime("%Y%m%d-%H%M%S")
+
+
 def build_task_prd_file_name(
     task_id_str: str,
     task_title_str: str,
     prd_markdown_text: str,
+    *,
+    reference_datetime: datetime | None = None,
 ) -> str:
     """Build a semantic task PRD filename from markdown and task context.
 
@@ -48,14 +68,15 @@ def build_task_prd_file_name(
         prd_markdown_text: PRD markdown content.
 
     Returns:
-        str: Filename satisfying ``prd-{task8}-<slug>.md``.
+        str: Filename satisfying ``YYYYMMDD-HHMMSS-prd-<slug>.md``.
     """
     semantic_slug_str = build_semantic_slug_from_available_text(
         task_id_str=task_id_str,
         task_title_str=task_title_str,
         prd_markdown_text=prd_markdown_text,
     )
-    return f"{build_task_prd_file_prefix(task_id_str)}-{semantic_slug_str}.md"
+    timestamp_prefix_text = build_task_prd_timestamp_prefix(reference_datetime)
+    return f"{timestamp_prefix_text}-prd-{semantic_slug_str}.md"
 
 
 def build_semantic_slug_from_available_text(

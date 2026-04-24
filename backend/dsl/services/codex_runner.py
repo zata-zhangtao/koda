@@ -16,6 +16,7 @@ import signal
 import subprocess
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from backend.dsl.services.runners.base import AutomationRunner
@@ -2206,6 +2207,7 @@ def build_codex_prd_prompt(
     dev_log_text_list: list[str],
     task_id_str: str,
     worktree_path_str: str | None = None,
+    reference_datetime: datetime | None = None,
 ) -> str:
     """根据任务标题和历史日志构建 PRD 生成 Prompt.
 
@@ -2224,7 +2226,10 @@ def build_codex_prd_prompt(
         separator_str="\n---\n",
         empty_context_text_str="（无额外上下文，请根据需求标题判断范围）",
     )
-    prd_output_relative_path_str = build_task_prd_output_path_contract(task_id_str)
+    prd_output_relative_path_str = build_task_prd_output_path_contract(
+        task_id_str,
+        reference_datetime=reference_datetime,
+    )
 
     if worktree_path_str:
         prd_worktree_instruction_block_str = f"""
@@ -2258,13 +2263,13 @@ def build_codex_prd_prompt(
 10. 输出文件名必须使用语义化的 `<requirement-slug>`，不得使用随机字符串、UUID、纯短 ID 或无语义占位。
 11. `<requirement-slug>` 需要兼容中文输入：可以保留中文或其他自然语言词语，但必须做文件系统安全清洗，并保持可读、可复现。
 12. 如果你选择将中文需求翻译成英文 slug，也必须保持语义稳定，不能退化成随机值。
-13. 如果你最初写成了 `tasks/prd-{task_id_str[:8]}.md`、`tasks/prd-{task_id_str[:8]}-c3e023d8.md` 之类不满足合同的文件名，结束前必须自行修正。
+13. 如果你最初写成了 `tasks/prd-{task_id_str[:8]}.md`、`tasks/20260423-130500-prd-c3e023d8.md` 之类不满足合同的文件名，结束前必须自行修正。
 14. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
 
 ## 文件输出要求
 1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
 2. 必须真正写入文件，不只是输出到终端。
-3. 示例：中文需求可以写成 `tasks/prd-{task_id_str[:8]}-修改-prd-命令.md`；英文需求可以写成 `tasks/prd-{task_id_str[:8]}-restore-semantic-prd-name.md`。
+3. 示例：中文需求可以写成 `tasks/20260423-130500-prd-修改-prd-命令.md`；英文需求可以写成 `tasks/20260423-130500-prd-restore-semantic-prd-name.md`。
 4. 写完后输出文件路径。
 """
 
@@ -3112,11 +3117,13 @@ async def run_codex_prd(
     register_task_background_activity(task_id_str)
     try:
         active_runner_kind_str = get_active_runner_kind()
+        prd_reference_datetime = datetime.now()
         prd_prompt_text_str = build_codex_prd_prompt(
             task_title=task_title_str,
             dev_log_text_list=dev_log_text_list,
             task_id_str=task_id_str,
             worktree_path_str=worktree_path_str,
+            reference_datetime=prd_reference_datetime,
         )
 
         existing_prd_file_path_list = list_all_task_prd_file_paths(
@@ -3214,6 +3221,7 @@ async def run_codex_prd(
             worktree_dir_path=work_dir_path,
             task_id_str=task_id_str,
             task_title_str=task_title_str,
+            reference_datetime=prd_reference_datetime,
         )
         if prd_file_correction_result.resolved_file_path is None:
             await _move_task_to_changes_requested(

@@ -40,8 +40,8 @@
 2. 为任务补充几条日志
 3. 点击“开始任务”，确认是否生成 PRD
 4. 检查 PRD 顶部是否同时包含 `原始需求标题` 与 `需求名称（AI 归纳）`
-5. 在任务详情选择“从 tasks/pending 选择”，确认 pending Markdown PRD 会被移动到 `tasks/prd-{task_id[:8]}-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
-6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/prd-{task_id[:8]}-<slug>.md`，并能通过现有 PRD 面板读取
+5. 在任务详情选择“从 tasks/pending 选择”，确认 pending Markdown PRD 会被移动到 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
+6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，并能通过现有 PRD 面板读取
 7. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
 8. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
 9. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
@@ -64,7 +64,7 @@
 6. 在“问 AI”通道点击“整理最近一次结论为反馈草稿”，确认只是把文本带入反馈 composer，而不是自动写入 `DevLog`
 7. 手动发送该反馈草稿后，再确认只有这一步才会影响主执行链路
 8. 把任务推进到 `CLOSED` 后重新打开详情，确认历史 sidecar Q&A 仍可查看，且“整理最近一次结论为反馈草稿”仍可用；新提问与正式反馈发送在前端被禁用，若直接调后端日志/附件入口也会被拒绝
-9. 分别走“验收通过”“无 worktree 的完成”“删除需求”三条归档动作，确认操作本身不会因额外写反馈而报错，且时间线里仍能看到对应的内部留痕日志
+9. 分别走“验收通过”“无 worktree 的完成”“删除需求”三条归档动作，确认操作本身不会因额外写反馈而报错，且时间线里仍能看到对应的内部留痕日志；归档后的任务 Markdown 文件应以 `YYYYMMDD-HHMMSS-` 开头并保留原文件名后缀
 10. 对已归档任务尝试上传图片或附件，确认接口被拒绝后 `data/media/` 不会留下孤立文件
 11. 模拟 sidecar 回复超时或后台中断后刷新详情，确认旧 `pending` 回复会转为 `failed`，随后允许再次提问；并发提交提问时仍只能保留 1 条 `pending` 回复
 

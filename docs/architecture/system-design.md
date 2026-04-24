@@ -161,7 +161,7 @@ flowchart TD
 7. 前端在执行阶段做轻量任务状态轮询，并对当前任务通过 `/api/logs?created_after=...` 增量拉取新增日志，而不是重复重拉大批量时间线
 8. 左侧需求卡片与详情头部每 60 秒单独轮询 `/api/tasks/card-metadata`，统一消费 badge 展示态、`last_ai_activity_at` 以及最近一次需求变更快照，这样卡片分组/摘要不再受全局日志分页窗口影响
 9. 项目列表只在初始加载和打开项目面板时刷新，避免在每次任务状态轮询时都重新执行项目一致性检查
-10. PRD 就绪来源支持三种：默认 AI 生成、从 `tasks/pending/*.md` 选择并移动、手动上传 / 粘贴 Markdown 并导入。非 AI 来源由 `backend/dsl/prd_sources/` 领域切片处理，最终都落到任务专属文件 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`
+10. PRD 就绪来源支持三种：默认 AI 生成、从 `tasks/pending/*.md` 选择并移动、手动上传 / 粘贴 Markdown 并导入。非 AI 来源由 `backend/dsl/prd_sources/` 领域切片处理，最终都落到任务专属文件 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md`
 11. PRD 就绪后，前端通过 `/api/tasks/{id}/prd-file` 读取任务专属文件内容；后端会按该任务前缀做兼容查找，并在需要时自动修正旧固定文件名或随机后缀文件名
 12. 当 PRD Markdown 中存在 `## 0. 待确认问题（结构化）` JSON 块时，前端会先解析该块渲染下拉确认卡片，再渲染清洗后的 PRD 正文；如果结构化块 malformed，则前端显示修复提示并阻断“确认 PRD / 开始执行”
 

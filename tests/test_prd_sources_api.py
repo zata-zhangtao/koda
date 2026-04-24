@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime
+import re
 from pathlib import Path
 
 import pytest
@@ -25,10 +27,22 @@ from backend.dsl.prd_sources.schemas import (
     ImportPastedPrdRequestSchema,
     SelectPendingPrdRequestSchema,
 )
+import backend.dsl.prd_sources.domain.policies as prd_policies
 from backend.dsl.services import codex_runner
 from backend.dsl.services.automation_runner import run_task_implementation
 from backend.dsl.services.prd_file_service import find_task_prd_file_path
 from utils.database import Base
+
+_FIXED_PRD_FILENAME_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
+
+
+class _FixedDatetimeModule:
+    """Stand-in datetime module used to freeze PRD filename timestamps."""
+
+    @staticmethod
+    def now() -> datetime:
+        """Return the fixed PRD filename timestamp."""
+        return _FIXED_PRD_FILENAME_DATETIME
 
 
 @pytest.fixture
@@ -58,6 +72,11 @@ def clear_codex_runtime_state() -> None:
     codex_runner._running_background_task_ids.clear()
     codex_runner._running_codex_processes.clear()
     codex_runner._user_cancelled_tasks.clear()
+
+
+def _freeze_prd_filename_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force PRD filename generation to use a deterministic timestamp."""
+    monkeypatch.setattr(prd_policies, "datetime", _FixedDatetimeModule)
     yield
     codex_runner._running_background_task_ids.clear()
     codex_runner._running_codex_processes.clear()
@@ -107,9 +126,11 @@ def test_list_pending_prd_files_returns_empty_when_directory_missing(
 def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
     db_session: Session,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Selecting a pending PRD should move it and enter PRD confirmation."""
     task_obj = _create_task(db_session, tmp_path)
+    _freeze_prd_filename_timestamp(monkeypatch)
     pending_directory_path = tmp_path / "tasks" / "pending"
     pending_directory_path.mkdir(parents=True)
     pending_file_path = pending_directory_path / "manual.md"
@@ -128,7 +149,10 @@ def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
 
     staged_prd_file_path = find_task_prd_file_path(tmp_path, task_obj.id)
     assert staged_prd_file_path is not None
-    assert staged_prd_file_path.name == f"prd-{task_obj.id[:8]}-选择已有-prd.md"
+    assert re.fullmatch(
+        r"\d{8}-\d{6}-prd-选择已有-prd\.md",
+        staged_prd_file_path.name,
+    )
     assert staged_prd_file_path.read_text(encoding="utf-8").startswith("# PRD")
     assert not pending_file_path.exists()
     assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
@@ -139,9 +163,11 @@ def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
 def test_import_prd_file_writes_tasks_root_and_marks_ready(
     db_session: Session,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Manual PRD import should write Markdown into the task PRD root."""
     task_obj = _create_task(db_session, tmp_path)
+    _freeze_prd_filename_timestamp(monkeypatch)
     uploaded_prd_file = UploadFile(
         filename="manual.md",
         file=BytesIO("**需求名称（AI 归纳）**：手动导入 PRD\n".encode("utf-8")),
@@ -156,7 +182,10 @@ def test_import_prd_file_writes_tasks_root_and_marks_ready(
 
     staged_prd_file_path = find_task_prd_file_path(tmp_path, task_obj.id)
     assert staged_prd_file_path is not None
-    assert staged_prd_file_path.name == f"prd-{task_obj.id[:8]}-手动导入-prd.md"
+    assert re.fullmatch(
+        r"\d{8}-\d{6}-prd-手动导入-prd\.md",
+        staged_prd_file_path.name,
+    )
     assert (
         staged_prd_file_path.read_text(encoding="utf-8")
         == "**需求名称（AI 归纳）**：手动导入 PRD\n"
@@ -167,9 +196,11 @@ def test_import_prd_file_writes_tasks_root_and_marks_ready(
 def test_import_pasted_prd_markdown_writes_tasks_root_and_marks_ready(
     db_session: Session,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pasted PRD Markdown should stage into the task root and mark ready."""
     task_obj = _create_task(db_session, tmp_path)
+    _freeze_prd_filename_timestamp(monkeypatch)
 
     updated_task = import_pasted_prd_markdown(
         task_id=task_obj.id,
@@ -182,7 +213,10 @@ def test_import_pasted_prd_markdown_writes_tasks_root_and_marks_ready(
 
     staged_prd_file_path = find_task_prd_file_path(tmp_path, task_obj.id)
     assert staged_prd_file_path is not None
-    assert staged_prd_file_path.name == f"prd-{task_obj.id[:8]}-粘贴导入-prd.md"
+    assert re.fullmatch(
+        r"\d{8}-\d{6}-prd-粘贴导入-prd\.md",
+        staged_prd_file_path.name,
+    )
     assert (
         staged_prd_file_path.read_text(encoding="utf-8")
         == "**需求名称（AI 归纳）**：粘贴导入 PRD\n"

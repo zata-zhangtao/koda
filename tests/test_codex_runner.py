@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import backend.dsl.models  # noqa: F401
@@ -21,6 +21,17 @@ from backend.dsl.services.git_worktree_service import WorktreeDestroyResult
 from backend.dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
 from utils.database import Base
 from utils.helpers import utc_now_naive
+
+_FIXED_PRD_REFERENCE_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
+
+
+class _FixedDatetimeModule:
+    """Stand-in datetime module used to freeze PRD filename timestamps."""
+
+    @staticmethod
+    def now() -> datetime:
+        """Return the fixed PRD filename timestamp."""
+        return _FIXED_PRD_REFERENCE_DATETIME
 
 
 class FakeCodexStdout:
@@ -415,6 +426,7 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
         dev_log_text_list=["Need the output contract captured in tests and docs."],
         task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
         worktree_path_str="/tmp/project-wt-cf2b9461",
+        reference_datetime=_FIXED_PRD_REFERENCE_DATETIME,
     )
 
     assert "原始需求标题" in prd_prompt_text
@@ -422,11 +434,11 @@ def test_build_codex_prd_prompt_requires_ai_requirement_name_contract() -> None:
     assert "位于主要章节之前" in prd_prompt_text
     assert "回退到原始需求标题的规范化版本" in prd_prompt_text
     assert "不得为空" in prd_prompt_text
-    assert "`tasks/prd-cf2b9461-<requirement-slug>.md`" in prd_prompt_text
+    assert "`tasks/20260423-130500-prd-<requirement-slug>.md`" in prd_prompt_text
     assert "兼容中文输入" in prd_prompt_text
     assert "不得使用随机字符串" in prd_prompt_text
     assert "结束前必须自行修正" in prd_prompt_text
-    assert "tasks/prd-cf2b9461-修改-prd-命令.md" in prd_prompt_text
+    assert "tasks/20260423-130500-prd-修改-prd-命令.md" in prd_prompt_text
     assert "必须真正写入文件" in prd_prompt_text
     assert "Attached local files:" in prd_prompt_text
     assert "`## 0. 待确认问题（结构化）`" in prd_prompt_text
@@ -463,8 +475,10 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_prd_ready_notification = email_service.send_prd_ready_notification
+    original_codex_datetime = codex_runner.datetime
 
     try:
+        codex_runner.datetime = _FixedDatetimeModule
         codex_runner._run_codex_phase = fake_run_codex_phase
         codex_runner._write_log_to_db = lambda *args, **kwargs: None
         codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
@@ -482,6 +496,7 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
             )
         )
     finally:
+        codex_runner.datetime = original_codex_datetime
         codex_runner._run_codex_phase = original_run_codex_phase
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
@@ -492,7 +507,7 @@ def test_run_codex_prd_removes_all_existing_task_prd_files(tmp_path: Path) -> No
 
     assert not legacy_prd_file_path.exists()
     assert not semantic_prd_file_path.exists()
-    assert (tasks_directory_path / "prd-cf2b9461-refreshed-prd.md").exists()
+    assert (tasks_directory_path / "20260423-130500-prd-refreshed-prd.md").exists()
 
 
 def test_run_codex_prd_auto_corrects_legacy_file_name_after_success(
@@ -532,8 +547,10 @@ def test_run_codex_prd_auto_corrects_legacy_file_name_after_success(
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_prd_ready_notification = email_service.send_prd_ready_notification
+    original_codex_datetime = codex_runner.datetime
 
     try:
+        codex_runner.datetime = _FixedDatetimeModule
         codex_runner._run_codex_phase = fake_run_codex_phase
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
@@ -551,6 +568,7 @@ def test_run_codex_prd_auto_corrects_legacy_file_name_after_success(
             )
         )
     finally:
+        codex_runner.datetime = original_codex_datetime
         codex_runner._run_codex_phase = original_run_codex_phase
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
@@ -560,7 +578,7 @@ def test_run_codex_prd_auto_corrects_legacy_file_name_after_success(
         codex_runner._user_cancelled_tasks.clear()
 
     assert not (tasks_directory_path / "prd-cf2b9461.md").exists()
-    assert (tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md").exists()
+    assert (tasks_directory_path / "20260423-130500-prd-修改-prd-命令.md").exists()
     assert any("自动修正" in log_text for log_text, _ in recorded_log_entry_list)
 
 
@@ -601,8 +619,10 @@ def test_run_codex_prd_auto_corrects_short_random_suffix_after_success(
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_prd_ready_notification = email_service.send_prd_ready_notification
+    original_codex_datetime = codex_runner.datetime
 
     try:
+        codex_runner.datetime = _FixedDatetimeModule
         codex_runner._run_codex_phase = fake_run_codex_phase
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = lambda *args, **kwargs: None
@@ -620,6 +640,7 @@ def test_run_codex_prd_auto_corrects_short_random_suffix_after_success(
             )
         )
     finally:
+        codex_runner.datetime = original_codex_datetime
         codex_runner._run_codex_phase = original_run_codex_phase
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
@@ -629,7 +650,7 @@ def test_run_codex_prd_auto_corrects_short_random_suffix_after_success(
         codex_runner._user_cancelled_tasks.clear()
 
     assert not (tasks_directory_path / "prd-cf2b9461-k9m2qz.md").exists()
-    assert (tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md").exists()
+    assert (tasks_directory_path / "20260423-130500-prd-修改-prd-命令.md").exists()
     assert any("自动修正" in log_text for log_text, _ in recorded_log_entry_list)
 
 
@@ -679,8 +700,10 @@ def test_run_codex_prd_does_not_reuse_stale_invalid_prd_file(
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_task_failed_notification = email_service.send_task_failed_notification
     original_send_prd_ready_notification = email_service.send_prd_ready_notification
+    original_codex_datetime = codex_runner.datetime
 
     try:
+        codex_runner.datetime = _FixedDatetimeModule
         codex_runner._run_codex_phase = fake_run_codex_phase
         codex_runner._write_log_to_db = fake_write_log_to_db
         codex_runner._advance_stage_in_db = fake_advance_stage
@@ -699,6 +722,7 @@ def test_run_codex_prd_does_not_reuse_stale_invalid_prd_file(
             )
         )
     finally:
+        codex_runner.datetime = original_codex_datetime
         codex_runner._run_codex_phase = original_run_codex_phase
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db
@@ -730,7 +754,9 @@ def test_run_codex_prd_sends_prd_ready_notification_in_manual_mode(
     async def fake_run_codex_phase(
         **_: object,
     ) -> codex_runner.CodexPhaseExecutionResult:
-        generated_prd_file_path = tasks_directory_path / "prd-manual-p-manual-prd.md"
+        generated_prd_file_path = (
+            tasks_directory_path / "20260423-130500-prd-manual-prd.md"
+        )
         generated_prd_file_path.write_text(
             "# PRD\n\n**需求名称（AI 归纳）**：Manual PRD\n",
             encoding="utf-8",
@@ -751,8 +777,10 @@ def test_run_codex_prd_sends_prd_ready_notification_in_manual_mode(
     original_write_log_to_db = codex_runner._write_log_to_db
     original_advance_stage_in_db = codex_runner._advance_stage_in_db
     original_send_prd_ready_notification = email_service.send_prd_ready_notification
+    original_codex_datetime = codex_runner.datetime
 
     try:
+        codex_runner.datetime = _FixedDatetimeModule
         codex_runner._run_codex_phase = fake_run_codex_phase
         codex_runner._write_log_to_db = lambda *args, **kwargs: None
         codex_runner._advance_stage_in_db = fake_advance_stage
@@ -770,6 +798,7 @@ def test_run_codex_prd_sends_prd_ready_notification_in_manual_mode(
             )
         )
     finally:
+        codex_runner.datetime = original_codex_datetime
         codex_runner._run_codex_phase = original_run_codex_phase
         codex_runner._write_log_to_db = original_write_log_to_db
         codex_runner._advance_stage_in_db = original_advance_stage_in_db

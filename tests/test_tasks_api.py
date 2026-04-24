@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import subprocess
 
@@ -48,8 +49,20 @@ from backend.dsl.services.git_worktree_service import (
     GitWorktreeService,
     WorktreeDestroyResult,
 )
+import backend.dsl.services.prd_file_service as prd_file_service
 from utils.database import Base
 from utils.helpers import serialize_datetime_for_api
+
+_FIXED_PRD_REFERENCE_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
+
+
+class _FixedDatetimeModule:
+    """Stand-in datetime module used to freeze PRD filename timestamps."""
+
+    @staticmethod
+    def now() -> datetime:
+        """Return the fixed PRD filename timestamp."""
+        return _FIXED_PRD_REFERENCE_DATETIME
 
 
 @pytest.fixture
@@ -241,6 +254,7 @@ def test_get_task_prd_file_falls_back_to_legacy_fixed_filename_when_needed(
 def test_get_task_prd_file_repairs_random_suffix_when_it_is_the_only_candidate(
     db_session: Session,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PRD lookup should repair invalid random-suffix files for compatibility."""
     run_account_obj = RunAccount(
@@ -263,6 +277,7 @@ def test_get_task_prd_file_repairs_random_suffix_when_it_is_the_only_candidate(
 
     tasks_directory_path = tmp_path / "tasks"
     tasks_directory_path.mkdir()
+    monkeypatch.setattr(prd_file_service, "datetime", _FixedDatetimeModule)
 
     random_hex_prd_file_path = (
         tasks_directory_path / f"prd-{task_obj.id[:8]}-c3e023d8.md"
@@ -282,7 +297,7 @@ def test_get_task_prd_file_repairs_random_suffix_when_it_is_the_only_candidate(
 
     prd_file_response = get_task_prd_file(task_obj.id, db_session)
     expected_prd_file_path = tasks_directory_path / (
-        f"prd-{task_obj.id[:8]}-非十六进制随机后缀文件名.md"
+        "20260423-130500-prd-非十六进制随机后缀文件名.md"
     )
 
     assert prd_file_response["content"] == (
@@ -296,10 +311,11 @@ def test_get_task_prd_file_repairs_random_suffix_when_it_is_the_only_candidate(
 def test_build_task_prd_output_path_contract_uses_semantic_placeholder() -> None:
     """The prompt contract helper should advertise the semantic filename contract."""
     output_path_contract = build_task_prd_output_path_contract(
-        "cf2b9461-1234-5678-9012-abcdefabcdef"
+        "cf2b9461-1234-5678-9012-abcdefabcdef",
+        reference_datetime=datetime(2026, 4, 23, 13, 5, 0),
     )
 
-    assert output_path_contract == "tasks/prd-cf2b9461-<requirement-slug>.md"
+    assert output_path_contract == "tasks/20260423-130500-prd-<requirement-slug>.md"
 
 
 def test_get_task_prd_file_falls_back_to_legacy_slugged_file(

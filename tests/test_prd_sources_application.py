@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -149,6 +150,7 @@ def test_import_prd_use_case_stages_markdown_and_marks_ready(tmp_path: Path) -> 
         task_id_str="cf2b9461-0000-4000-8000-000000000000",
         original_file_name_str="manual.md",
         raw_prd_file_bytes="**需求名称（AI 归纳）**：手动导入 PRD\n".encode("utf-8"),
+        reference_datetime=datetime(2026, 4, 23, 13, 5, 0),
     )
 
     assert repository.ensure_absent_called_bool is True
@@ -156,7 +158,9 @@ def test_import_prd_use_case_stages_markdown_and_marks_ready(tmp_path: Path) -> 
         repository.imported_markdown_text == "**需求名称（AI 归纳）**：手动导入 PRD\n"
     )
     assert workflow_port.marked_ready_bool is True
-    assert outcome.staged_relative_path_str == "tasks/prd-cf2b9461-手动导入-prd.md"
+    assert (
+        outcome.staged_relative_path_str == "tasks/20260423-130500-prd-手动导入-prd.md"
+    )
     assert outcome.auto_started_implementation_bool is False
 
 
@@ -173,6 +177,7 @@ def test_import_prd_use_case_accepts_pasted_markdown(tmp_path: Path) -> None:
         task_id_str="cf2b9461-0000-4000-8000-000000000000",
         original_file_name_str="pasted-prd.md",
         prd_markdown_text="**需求名称（AI 归纳）**：粘贴导入 PRD\n",
+        reference_datetime=datetime(2026, 4, 23, 13, 5, 0),
     )
 
     assert repository.ensure_absent_called_bool is True
@@ -180,5 +185,7 @@ def test_import_prd_use_case_accepts_pasted_markdown(tmp_path: Path) -> None:
         repository.imported_markdown_text == "**需求名称（AI 归纳）**：粘贴导入 PRD\n"
     )
     assert workflow_port.marked_ready_bool is True
-    assert outcome.staged_relative_path_str == "tasks/prd-cf2b9461-粘贴导入-prd.md"
+    assert (
+        outcome.staged_relative_path_str == "tasks/20260423-130500-prd-粘贴导入-prd.md"
+    )
     assert outcome.auto_started_implementation_bool is False

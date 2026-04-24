@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from backend.dsl.services.prd_file_service import (
@@ -9,10 +10,13 @@ from backend.dsl.services.prd_file_service import (
     ensure_task_prd_file_contract,
     find_task_prd_file_path,
     find_task_readable_prd_file_path,
+    is_valid_task_prd_legacy_semantic_file_name,
     is_valid_task_prd_semantic_file_name,
     normalize_task_prd_requirement_slug,
     repair_invalid_task_prd_file_for_read,
 )
+
+_FIXED_PRD_REFERENCE_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
 
 
 def test_normalize_task_prd_requirement_slug_preserves_chinese_semantics() -> None:
@@ -41,18 +45,22 @@ def test_normalize_task_prd_requirement_slug_truncates_to_safe_utf8_byte_limit()
 def test_is_valid_task_prd_semantic_file_name_rejects_short_random_alnum_suffixes() -> (
     None
 ):
-    """Short interleaved alnum suffixes should not pass as semantic PRD names."""
+    """Timestamped semantic PRD filenames should reject random-looking slugs."""
     task_id_str = "cf2b9461-1234-5678-9012-abcdefabcdef"
 
     assert not is_valid_task_prd_semantic_file_name(
-        "prd-cf2b9461-k9m2qz.md",
+        "20260423-130500-prd-k9m2qz.md",
         task_id_str,
     )
     assert not is_valid_task_prd_semantic_file_name(
-        "prd-cf2b9461-a1b2c.md",
+        "20260423-130500-prd-a1b2c.md",
         task_id_str,
     )
     assert is_valid_task_prd_semantic_file_name(
+        "20260423-130500-prd-ios17.md",
+        task_id_str,
+    )
+    assert is_valid_task_prd_legacy_semantic_file_name(
         "prd-cf2b9461-ios17.md",
         task_id_str,
     )
@@ -75,9 +83,12 @@ def test_ensure_task_prd_file_contract_repairs_legacy_file_name_with_title_fallb
         worktree_dir_path=tmp_path,
         task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
         task_title_str="修改 prd 命令",
+        reference_datetime=_FIXED_PRD_REFERENCE_DATETIME,
     )
 
-    expected_prd_file_path = tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md"
+    expected_prd_file_path = (
+        tasks_directory_path / "20260423-130500-prd-修改-prd-命令.md"
+    )
     assert correction_result.resolved_file_path == expected_prd_file_path
     assert correction_result.renamed_from_path == legacy_prd_file_path
     assert correction_result.semantic_slug_str == "修改-prd-命令"
@@ -120,9 +131,12 @@ def test_repair_invalid_task_prd_file_for_read_repairs_random_suffix_with_task_t
         worktree_dir_path=tmp_path,
         task_id_str="cf2b9461-1234-5678-9012-abcdefabcdef",
         task_title_str="修改 prd 命令",
+        reference_datetime=_FIXED_PRD_REFERENCE_DATETIME,
     )
 
-    expected_prd_file_path = tasks_directory_path / "prd-cf2b9461-修改-prd-命令.md"
+    expected_prd_file_path = (
+        tasks_directory_path / "20260423-130500-prd-修改-prd-命令.md"
+    )
     assert correction_result.resolved_file_path == expected_prd_file_path
     assert correction_result.renamed_from_path == invalid_random_prd_file_path
     assert expected_prd_file_path.exists()

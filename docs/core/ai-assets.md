@@ -25,7 +25,7 @@
 
 ### PRD 生成
 
-`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求当前 runner（默认 `codex`）在 worktree 中生成包含 `原始需求标题`、`需求名称（AI 归纳）` 与结构化待确认问题块（如适用）的 PRD，并写入任务专属文件 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`。该 slug 必须语义化、非随机，并兼容中文输入；若模型先写错文件名，runner 会自动修正。
+`run_codex_prd` 会调用 `build_codex_prd_prompt`，要求当前 runner（默认 `codex`）在 worktree 中生成包含 `原始需求标题`、`需求名称（AI 归纳）` 与结构化待确认问题块（如适用）的 PRD，并写入任务专属文件 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md`。该 slug 必须语义化、非随机，并兼容中文输入；若模型先写错文件名，runner 会自动修正。
 
 PRD 也可以不经过 AI 生成：任务详情中的 PRD 来源选择支持从 `tasks/pending/*.md` 移动既有 Markdown PRD，或手动上传 / 粘贴 Markdown PRD。非 AI 来源由 `backend/dsl/prd_sources/` 领域切片处理，最终仍写入同一任务专属 PRD 文件合同，因此后续 PRD 确认、结构化待确认问题解析和编码执行链路保持一致。
 

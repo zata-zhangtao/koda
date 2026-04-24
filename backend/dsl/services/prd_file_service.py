@@ -1,26 +1,33 @@
 """Helpers for task-scoped PRD file naming and lookup.
 
-Koda keeps a stable task-id prefix in PRD filenames so the backend can always
-locate the current task's document, while still allowing an AI-generated
-semantic slug to describe the requirement. The semantic slug may preserve
-Chinese or other Unicode letters as long as the filename remains
-cross-platform-safe. Committed task markdown may later be moved into
-``tasks/archive/`` by repository hooks, so read paths sometimes need an
-archive fallback while write/repair paths must continue to target the live
-``tasks/`` directory first.
+New PRD files use a timestamped semantic filename contract of
+``YYYYMMDD-HHMMSS-prd-<requirement-slug>.md`` so the creation time remains
+visible in the filename. Older task-id-prefixed filenames stay readable for
+backward compatibility, and committed task markdown may still be moved into
+``tasks/archive/`` by repository hooks.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
 _TASK_PRD_REQUIREMENT_SLUG_MAX_LENGTH = 80
 _TASK_PRD_FILE_NAME_MAX_BYTES = 255
+_TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{8}-\d{6})-prd-(?P<slug>.+)\.md$"
+)
+_TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN = re.compile(
+    r"^prd-(?P<task_short_id>[0-9a-f]{8})\.md$"
+)
+_TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN = re.compile(
+    r"^prd-(?P<task_short_id>[0-9a-f]{8})-(?P<slug>.+)\.md$"
+)
 _TASK_PRD_REQUIREMENT_SLUG_MAX_BYTES = _TASK_PRD_FILE_NAME_MAX_BYTES - len(
-    "prd-12345678-.md".encode("utf-8")
+    "20260423-130500-prd-.md".encode("utf-8")
 )
 _WINDOWS_FORBIDDEN_FILENAME_CHAR_SET = set('<>:"/\\|?*')
 _MARKDOWN_INLINE_WRAPPER_PATTERN = re.compile(r"^[`*_]+|[`*_]+$")
@@ -52,18 +59,21 @@ class TaskPrdFileCorrectionResult:
 
 
 def build_task_prd_file_prefix(task_id_str: str) -> str:
-    """Build the task-specific PRD filename prefix.
+    """Build the legacy task-specific PRD filename prefix.
 
     Args:
         task_id_str: Task UUID string.
 
     Returns:
-        str: Prefix such as ``prd-cf2b9461``.
+        str: Legacy prefix such as ``prd-cf2b9461``.
     """
     return f"prd-{task_id_str[:8]}"
 
 
-def build_task_prd_output_path_contract(task_id_str: str) -> str:
+def build_task_prd_output_path_contract(
+    task_id_str: str,
+    reference_datetime: datetime | None = None,
+) -> str:
     """Build the PRD path contract shown to Codex in prompts.
 
     Args:
@@ -71,10 +81,27 @@ def build_task_prd_output_path_contract(task_id_str: str) -> str:
 
     Returns:
         str: Output contract such as
-            ``tasks/prd-cf2b9461-<requirement-slug>.md``.
+            ``tasks/20260423-130500-prd-<requirement-slug>.md``.
     """
-    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return f"tasks/{task_prd_file_prefix}-<requirement-slug>.md"
+    _ = task_id_str
+    timestamp_prefix_text = build_task_prd_timestamp_prefix(reference_datetime)
+    return f"tasks/{timestamp_prefix_text}-prd-<requirement-slug>.md"
+
+
+def build_task_prd_timestamp_prefix(
+    reference_datetime: datetime | None = None,
+) -> str:
+    """Build the timestamp prefix used for task PRD filenames.
+
+    Args:
+        reference_datetime: Optional timestamp reference. When omitted the
+            current local time is used.
+
+    Returns:
+        str: Timestamp in ``YYYYMMDD-HHMMSS`` format.
+    """
+    timestamp_reference_datetime = reference_datetime or datetime.now()
+    return timestamp_reference_datetime.strftime("%Y%m%d-%H%M%S")
 
 
 def normalize_task_prd_requirement_slug(
@@ -173,15 +200,45 @@ def is_valid_task_prd_semantic_file_name(
         task_id_str: Task UUID string
 
     Returns:
-        bool: ``True`` when the file uses the semantic PRD contract
+        bool: ``True`` when the file uses the timestamped semantic PRD contract
     """
-    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
     if not file_name_str.endswith(".md"):
         return False
-    if not file_name_str.startswith(f"{task_prd_file_prefix}-"):
+    timestamped_file_name_match = _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(
+        file_name_str
+    )
+    if timestamped_file_name_match is None:
         return False
 
-    semantic_slug_str = file_name_str[len(task_prd_file_prefix) + 1 : -len(".md")]
+    semantic_slug_str = timestamped_file_name_match.group("slug")
+    if not is_valid_task_prd_semantic_slug(semantic_slug_str, task_id_str):
+        return False
+
+    normalized_slug_str = normalize_task_prd_requirement_slug(semantic_slug_str)
+    return semantic_slug_str == normalized_slug_str
+
+
+def is_valid_task_prd_legacy_semantic_file_name(
+    file_name_str: str,
+    task_id_str: str,
+) -> bool:
+    """Validate whether a legacy task-id-prefixed PRD filename is semantic.
+
+    Args:
+        file_name_str: Candidate PRD filename.
+        task_id_str: Task UUID string.
+
+    Returns:
+        bool: ``True`` when the file uses the historical task-id prefix with a
+        non-random semantic slug.
+    """
+    legacy_match = _TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN.fullmatch(file_name_str)
+    if legacy_match is None:
+        return False
+    if legacy_match.group("task_short_id").lower() != task_id_str[:8].lower():
+        return False
+
+    semantic_slug_str = legacy_match.group("slug")
     if not is_valid_task_prd_semantic_slug(semantic_slug_str, task_id_str):
         return False
 
@@ -193,6 +250,7 @@ def ensure_task_prd_file_contract(
     worktree_dir_path: Path,
     task_id_str: str,
     task_title_str: str,
+    reference_datetime: datetime | None = None,
 ) -> TaskPrdFileCorrectionResult:
     """Ensure the task PRD file satisfies the semantic filename contract.
 
@@ -200,6 +258,7 @@ def ensure_task_prd_file_contract(
         worktree_dir_path: Task worktree root directory
         task_id_str: Task UUID string
         task_title_str: Task title used as the final fallback naming source
+        reference_datetime: Optional timestamp reference for the target file
 
     Returns:
         TaskPrdFileCorrectionResult: Final resolved PRD path and correction info
@@ -234,6 +293,7 @@ def ensure_task_prd_file_contract(
         candidate_prd_file_path_list=candidate_prd_file_path_list,
         task_id_str=task_id_str,
         task_title_str=task_title_str,
+        reference_datetime=reference_datetime,
     )
 
 
@@ -241,6 +301,7 @@ def repair_invalid_task_prd_file_for_read(
     worktree_dir_path: Path,
     task_id_str: str,
     task_title_str: str,
+    reference_datetime: datetime | None = None,
 ) -> TaskPrdFileCorrectionResult:
     """Repair invalid random-suffix PRD filenames for read compatibility.
 
@@ -252,6 +313,7 @@ def repair_invalid_task_prd_file_for_read(
         worktree_dir_path: Task worktree root directory
         task_id_str: Task UUID string
         task_title_str: Task title used as the final fallback naming source
+        reference_datetime: Optional timestamp reference for the repaired file
 
     Returns:
         TaskPrdFileCorrectionResult: Resolved readable path or ``None`` when no
@@ -286,6 +348,7 @@ def repair_invalid_task_prd_file_for_read(
         candidate_prd_file_path_list=invalid_candidate_prd_file_path_list,
         task_id_str=task_id_str,
         task_title_str=task_title_str,
+        reference_datetime=reference_datetime,
     )
 
 
@@ -297,9 +360,8 @@ def list_task_prd_file_paths(worktree_dir_path: Path, task_id_str: str) -> list[
         task_id_str: Task UUID string.
 
     Returns:
-        list[Path]: Matching PRD file paths sorted so semantic slug filenames are
-            preferred over the legacy fixed filename, while excluding invalid
-            random-suffix candidates from the read path.
+        list[Path]: Matching PRD file paths sorted so timestamped semantic files
+            are preferred over legacy filename variants.
     """
     return _list_readable_task_prd_file_paths_in_directory(
         task_prd_directory_path=worktree_dir_path / "tasks",
@@ -365,11 +427,15 @@ def _build_task_prd_file_priority_int(
 ) -> int:
     """Rank PRD filenames for lookup and repair preference."""
     if is_valid_task_prd_semantic_file_name(task_prd_file_path.name, task_id_str):
+        return 3
+
+    if is_valid_task_prd_legacy_semantic_file_name(
+        task_prd_file_path.name,
+        task_id_str,
+    ):
         return 2
 
-    task_prd_stem = task_prd_file_path.stem
-    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    if task_prd_stem == task_prd_file_prefix:
+    if _TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN.fullmatch(task_prd_file_path.name):
         return 1
     return 0
 
@@ -453,8 +519,11 @@ def _list_unsorted_task_prd_file_paths_in_directory(
     if not task_prd_directory_path.exists():
         return []
 
-    task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return list(task_prd_directory_path.glob(f"{task_prd_file_prefix}*.md"))
+    task_prd_candidate_list: list[Path] = []
+    for task_prd_file_path in task_prd_directory_path.glob("*.md"):
+        if _is_task_prd_candidate_file_name(task_prd_file_path.name, task_id_str):
+            task_prd_candidate_list.append(task_prd_file_path)
+    return task_prd_candidate_list
 
 
 def _list_readable_task_prd_file_paths_in_directory(
@@ -479,12 +548,19 @@ def _list_readable_task_prd_file_paths_in_directory(
 def _pick_latest_prd_file_path(candidate_prd_file_path_list: list[Path]) -> Path:
     """Pick the most recently modified PRD file from a candidate list."""
 
-    def _sort_key(task_prd_file_path: Path) -> tuple[float, str]:
+    def _sort_key(task_prd_file_path: Path) -> tuple[int, float, str]:
         try:
             last_modified_timestamp = task_prd_file_path.stat().st_mtime
         except OSError:
             last_modified_timestamp = -1.0
-        return (last_modified_timestamp, task_prd_file_path.name)
+        timestamp_sort_key_int = _extract_prd_timestamp_sort_key_int(
+            task_prd_file_path.name
+        )
+        return (
+            timestamp_sort_key_int,
+            last_modified_timestamp,
+            task_prd_file_path.name,
+        )
 
     return max(candidate_prd_file_path_list, key=_sort_key)
 
@@ -494,6 +570,7 @@ def _repair_task_prd_file_candidates(
     *,
     task_id_str: str,
     task_title_str: str,
+    reference_datetime: datetime | None = None,
 ) -> TaskPrdFileCorrectionResult:
     """Repair one PRD candidate set into a valid semantic filename."""
     if not candidate_prd_file_path_list:
@@ -514,9 +591,9 @@ def _repair_task_prd_file_candidates(
     if semantic_slug_str == "":
         return TaskPrdFileCorrectionResult(resolved_file_path=None)
 
-    target_prd_file_path = (
-        source_prd_file_path.parent
-        / f"{build_task_prd_file_prefix(task_id_str)}-{semantic_slug_str}.md"
+    target_prd_file_path = source_prd_file_path.parent / (
+        f"{build_task_prd_timestamp_prefix(reference_datetime)}"
+        f"-prd-{semantic_slug_str}.md"
     )
     if target_prd_file_path == source_prd_file_path:
         return TaskPrdFileCorrectionResult(
@@ -648,7 +725,53 @@ def _extract_semantic_slug_from_file_name(
     task_id_str: str,
 ) -> str | None:
     """Extract the semantic slug portion from a valid PRD filename."""
-    if not is_valid_task_prd_semantic_file_name(file_name_str, task_id_str):
+    timestamped_file_name_match = _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(
+        file_name_str
+    )
+    if timestamped_file_name_match is not None:
+        return timestamped_file_name_match.group("slug")
+
+    if not _TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN.fullmatch(file_name_str):
         return None
     task_prd_file_prefix = build_task_prd_file_prefix(task_id_str)
-    return file_name_str[len(task_prd_file_prefix) + 1 : -len(".md")]
+    legacy_prefix_text = f"{task_prd_file_prefix}-"
+    if not file_name_str.startswith(legacy_prefix_text):
+        return None
+    return file_name_str[len(legacy_prefix_text) : -len(".md")]
+
+
+def _extract_prd_timestamp_sort_key_int(file_name_str: str) -> int:
+    """Extract a sortable timestamp key from a PRD filename."""
+    timestamped_file_name_match = _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(
+        file_name_str
+    )
+    if timestamped_file_name_match is None:
+        return 0
+    timestamp_text = timestamped_file_name_match.group("timestamp")
+    try:
+        return int(timestamp_text)
+    except ValueError:
+        return 0
+
+
+def _is_task_prd_file_name(file_name_str: str, task_id_str: str) -> bool:
+    """Return whether a filename looks like a task PRD file."""
+    if is_valid_task_prd_semantic_file_name(file_name_str, task_id_str):
+        return True
+    if is_valid_task_prd_legacy_semantic_file_name(file_name_str, task_id_str):
+        return True
+    if _TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN.fullmatch(file_name_str):
+        return True
+    return False
+
+
+def _is_task_prd_candidate_file_name(file_name_str: str, task_id_str: str) -> bool:
+    """Return whether a filename could be a PRD candidate for repair."""
+    if _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(file_name_str):
+        return True
+    if _TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN.fullmatch(file_name_str):
+        return True
+    legacy_prefix_text = f"prd-{task_id_str[:8]}-"
+    if file_name_str.startswith(legacy_prefix_text) and file_name_str.endswith(".md"):
+        return True
+    return False

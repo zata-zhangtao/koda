@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from backend.dsl.prd_sources.domain.errors import (
@@ -26,9 +28,10 @@ def test_build_task_prd_file_name_prefers_ai_summary_metadata() -> None:
         task_id_str="cf2b9461-0000-4000-8000-000000000000",
         task_title_str="fallback title",
         prd_markdown_text=prd_markdown_text,
+        reference_datetime=datetime(2026, 4, 23, 13, 5, 0),
     )
 
-    assert prd_file_name == "prd-cf2b9461-导入已有-prd.md"
+    assert prd_file_name == "20260423-130500-prd-导入已有-prd.md"
 
 
 def test_validate_pending_prd_relative_path_rejects_traversal() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from backend.dsl.prd_sources.application.ports import (
     PrdSourceRepositoryPort,
@@ -55,12 +56,14 @@ class SelectPendingPrdUseCase:
         self,
         task_id_str: str,
         pending_relative_path_str: str,
+        reference_datetime: datetime | None = None,
     ) -> PrdStagingOutcome:
         """Select and stage a pending PRD for a task.
 
         Args:
             task_id_str: Task UUID string.
             pending_relative_path_str: Workspace-relative pending PRD path.
+            reference_datetime: Optional timestamp reference for the staged file.
 
         Returns:
             PrdStagingOutcome: Staging and workflow transition result.
@@ -80,6 +83,7 @@ class SelectPendingPrdUseCase:
             task_id_str=task_context.task_id_str,
             task_title_str=task_context.task_title_str,
             prd_markdown_text=pending_prd_markdown_text,
+            reference_datetime=reference_datetime,
         )
 
         self.prd_source_repository.ensure_task_prd_absent(
@@ -115,6 +119,7 @@ class ImportPrdUseCase:
         task_id_str: str,
         original_file_name_str: str,
         raw_prd_file_bytes: bytes,
+        reference_datetime: datetime | None = None,
     ) -> PrdStagingOutcome:
         """Import and stage an uploaded PRD for a task.
 
@@ -122,6 +127,7 @@ class ImportPrdUseCase:
             task_id_str: Task UUID string.
             original_file_name_str: Browser-provided filename.
             raw_prd_file_bytes: Uploaded file bytes.
+            reference_datetime: Optional timestamp reference for the staged file.
 
         Returns:
             PrdStagingOutcome: Staging and workflow transition result.
@@ -143,6 +149,7 @@ class ImportPrdUseCase:
         return self._stage_imported_prd_markdown(
             task_id_str=task_id_str,
             prd_markdown_text=prd_markdown_text,
+            reference_datetime=reference_datetime,
         )
 
     def execute_pasted_markdown(
@@ -150,6 +157,7 @@ class ImportPrdUseCase:
         task_id_str: str,
         original_file_name_str: str,
         prd_markdown_text: str,
+        reference_datetime: datetime | None = None,
     ) -> PrdStagingOutcome:
         """Import pasted PRD Markdown into the task PRD root.
 
@@ -157,6 +165,7 @@ class ImportPrdUseCase:
             task_id_str: Task UUID string.
             original_file_name_str: Logical source filename for validation.
             prd_markdown_text: Markdown content pasted by the user.
+            reference_datetime: Optional timestamp reference for the staged file.
 
         Returns:
             PrdStagingOutcome: Staging and workflow transition result.
@@ -169,6 +178,7 @@ class ImportPrdUseCase:
         return self._stage_imported_prd_markdown(
             task_id_str=task_id_str,
             prd_markdown_text=prd_markdown_text,
+            reference_datetime=reference_datetime,
         )
 
     def _stage_imported_prd_markdown(
@@ -176,6 +186,7 @@ class ImportPrdUseCase:
         *,
         task_id_str: str,
         prd_markdown_text: str,
+        reference_datetime: datetime | None = None,
     ) -> PrdStagingOutcome:
         """Stage validated manual PRD Markdown and advance the workflow."""
         validate_prd_markdown_text(prd_markdown_text)
@@ -184,6 +195,7 @@ class ImportPrdUseCase:
             task_id_str=task_context.task_id_str,
             task_title_str=task_context.task_title_str,
             prd_markdown_text=prd_markdown_text,
+            reference_datetime=reference_datetime,
         )
 
         self.prd_source_repository.ensure_task_prd_absent(

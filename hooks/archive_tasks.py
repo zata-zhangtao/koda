@@ -88,7 +88,10 @@ def _ensure_archive_dir(archive_dir: Path) -> None:
     archive_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _move_files(files: Sequence[Path], archive_dir: Path) -> list[Path]:
+def _move_files(
+    files: Sequence[Path],
+    archive_dir: Path,
+) -> list[Path]:
     """Move files into the archive directory.
 
     Args:

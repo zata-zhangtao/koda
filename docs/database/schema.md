@@ -393,7 +393,7 @@ erDiagram
 
 当前快照来源策略：
 
-- `PRD`：优先从任务 worktree 的 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` 读取，兼容旧固定文件名，并在 PRD 生成、pending 选择、手动导入后及任务完成前刷新快照
+- `PRD`：优先从任务 worktree 的 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md` 读取，兼容旧固定文件名和旧 task-id 语义文件，并在 PRD 生成、pending 选择、手动导入后及任务完成前刷新快照
 - `PLANNING_WITH_FILES`：优先从任务 worktree 的 `.claude/planning/current/{task_plan,findings,progress}.md` 读取，兼容旧根目录 planning 文件；若文件不存在，再回退到历史 DevLog 中的 planning 摘要文本
 
 它们也是 WebDAV 业务快照同步的核心组成部分，因此跨设备恢复后依然可以看到最近一次 PRD / planning 状态，即使本机 worktree 还未重建。
