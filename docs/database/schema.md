@@ -252,7 +252,7 @@ erDiagram
 | `business_sync_original_workflow_stage` | 业务快照恢复前记录的原始远端阶段 |
 | `business_sync_original_lifecycle_status` | 业务快照恢复前记录的原始远端生命周期 |
 | `business_sync_restored_at` | 最近一次业务快照恢复到当前机器的时间 |
-| `destroy_reason` | 已启动任务销毁原因；普通 backlog 删除通常为空 |
+| `destroy_reason` | 已启动任务销毁原因 |
 | `destroyed_at` | 任务进入 deleted history 的时间 |
 | `closed_at` | 完成或关闭时间 |
 
@@ -264,11 +264,11 @@ erDiagram
 - `worktree_path`：决定 Codex 实际工作目录
 - `project_id`：默认仅允许在 `backlog` 且尚未生成 `worktree_path` 时改绑；若任务是从 WebDAV 业务快照恢复且本机还没有 worktree，也允许先重绑项目再继续本地执行。前端需求卡片列表也会基于它提供按项目/未关联项目的筛选入口
 - `business_sync_original_*` / `business_sync_restored_at`：只在 WebDAV 业务快照恢复后出现，用来告诉前端“远端同步时的阶段是什么”以及“当前机器上的安全降级结果是什么”
-- `destroy_reason` / `destroyed_at`：用于 started-task destroy 审计。普通 backlog 轻量删除也可能写入 `destroyed_at`，但通常不会有 `destroy_reason`
+- `destroy_reason` / `destroyed_at`：用于 started-task destroy 审计。未启动 backlog 草稿走硬删除，会移除 `Task`、本地子记录及日志引用的本地媒体文件，不会留下 `DELETED` 行
 
 需要额外说明的是：前端可能把 `self_review_in_progress` 或 `test_in_progress` 这类真实阶段覆盖显示为“等待用户”，但这只是 `GET /api/tasks/card-metadata` 返回的展示态，不会写回 `Task.workflow_stage`，也不会新增持久化 `waiting_user` 阶段。
 
-`lifecycle_status` 目前支持 `OPEN`、`PENDING`、`CLOSED`、`DELETED`、`ABANDONED`；其中 `ABANDONED` 用于表达“明确废弃但保留审计历史”，语义上与 `DELETED` 分离。
+`lifecycle_status` 目前支持 `OPEN`、`PENDING`、`CLOSED`、`DELETED`、`ABANDONED`；其中 `ABANDONED` 用于表达“明确废弃但保留审计历史”，语义上与 `DELETED` 分离。前端普通 `Delete` 只用于未启动 backlog 草稿的硬删除；需要保留历史的废弃动作应使用 `ABANDONED`，已启动任务则使用 destroy 流程写入销毁审计。
 
 新的任务型 worktree 默认会写成仓库同级 `task/` 目录下的绝对路径。例如项目仓库是 `/Users/zata/code/my-app` 时，新任务通常会保存为 `/Users/zata/code/task/my-app-wt-12345678`。已经落库的历史 `worktree_path` 不会被系统自动改写。
 

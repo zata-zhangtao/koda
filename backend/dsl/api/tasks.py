@@ -43,6 +43,7 @@ from backend.dsl.services.automation_runner import (
     run_task_self_review_resume,
 )
 from backend.dsl.services.log_service import LogService
+from backend.dsl.services.media_service import MediaService
 from backend.dsl.services.path_opener import (
     PathOpenCommandError,
     PathOpenTargetNotFoundError,
@@ -1959,7 +1960,7 @@ def create_task(
         )
     except ValueError as validation_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(validation_error),
         ) from validation_error
     return _hydrate_task_response(new_task, db_session=db_session)
@@ -1998,7 +1999,7 @@ def update_task_status(
         )
     except ValueError as validation_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(validation_error),
         ) from validation_error
     if not updated_task:
@@ -2027,6 +2028,51 @@ def update_task_status(
             log_state_tag=DevLogStateTag.NONE,
         )
     return _hydrate_task_response(updated_task, db_session=db_session)
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_unstarted_task(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Hard-delete a never-started backlog task.
+
+    This endpoint is intentionally separate from setting `lifecycle_status` to
+    `DELETED`: direct Delete removes unstarted draft records, while archived
+    deleted history remains a lifecycle state for imported or legacy records.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Raises:
+        HTTPException: 当任务不存在、已经启动或已经归档时返回错误
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    try:
+        deleted_media_path_list = TaskService.delete_unstarted_task(
+            db_session,
+            task_id,
+        )
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(validation_error),
+        ) from validation_error
+
+    if deleted_media_path_list is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    MediaService.delete_stored_media_files(deleted_media_path_list)
+    return None
 
 
 @router.put("/{task_id}/stage", response_model=TaskResponseSchema)
@@ -2110,7 +2156,7 @@ def start_task(
         started_task = TaskService.start_task(db_session, task_id)
     except ValueError as start_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(start_error),
         ) from start_error
 
@@ -2159,7 +2205,7 @@ def regenerate_task_prd(
         regenerated_task = TaskService.request_prd_regeneration(db_session, task_id)
     except ValueError as regeneration_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(regeneration_error),
         ) from regeneration_error
 
@@ -2229,7 +2275,7 @@ def execute_task(
         executed_task = TaskService.execute_task(db_session, task_id)
     except ValueError as stage_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(stage_error),
         ) from stage_error
 
@@ -2563,7 +2609,7 @@ def complete_task(
         )
     except ValueError as completion_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(completion_error),
         ) from completion_error
 
@@ -2575,7 +2621,7 @@ def complete_task(
 
     if not completion_task.worktree_path:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Task has no worktree_path. Complete is only available for worktree-backed tasks.",
         )
 
@@ -2584,7 +2630,7 @@ def complete_task(
     worktree_dir_path = _Path(completion_task.worktree_path)
     if not worktree_dir_path.exists():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
         )
 
@@ -2859,18 +2905,18 @@ def destroy_task(
 
     if task_obj.lifecycle_status == TaskLifecycleStatus.CLOSED:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Closed tasks cannot be destroyed.",
         )
     if task_obj.lifecycle_status == TaskLifecycleStatus.DELETED:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Task is already deleted.",
         )
 
     if not TaskService.has_task_started(task_obj):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "Task destroy is only available after the task has started. "
                 "Use Delete for backlog tasks."
@@ -2913,7 +2959,7 @@ def destroy_task(
             )
         except ValueError as cleanup_error:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(cleanup_error),
             ) from cleanup_error
 
@@ -2924,7 +2970,7 @@ def destroy_task(
         )
         if not cleanup_completed_fully:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=_build_destroy_cleanup_error_detail(
                     worktree_removed=cleanup_result.worktree_removed,
                     branch_deleted=cleanup_result.branch_deleted,
@@ -2944,7 +2990,7 @@ def destroy_task(
         )
     except ValueError as destroy_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(destroy_error),
         ) from destroy_error
 
@@ -3015,7 +3061,7 @@ def restore_task(
         restored_task = TaskService.restore_task(db_session, task_id)
     except ValueError as restore_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(restore_error),
         ) from restore_error
 
@@ -3113,7 +3159,7 @@ def _open_task_worktree_in_editor(
 
     if not task_obj.worktree_path:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Task has no worktree_path. Execute the task first.",
         )
 
@@ -3121,7 +3167,7 @@ def _open_task_worktree_in_editor(
 
     if not worktree_dir_path.exists():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Worktree directory does not exist yet: {worktree_dir_path}",
         )
 
@@ -3132,7 +3178,7 @@ def _open_task_worktree_in_editor(
         )
     except PathOpenTargetNotFoundError as path_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(path_error),
         ) from path_error
     except PathOpenCommandError as path_error:
@@ -3256,7 +3302,7 @@ def update_task(
         updated_task = TaskService.update_task(db_session, task_id, task_update_schema)
     except ValueError as validation_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(validation_error),
         ) from validation_error
 
@@ -3346,7 +3392,7 @@ def create_task_reference(
         )
     if source_task_obj.id == target_task_obj.id:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="source_task_id cannot be the same as target_task_id.",
         )
     if target_task_obj.lifecycle_status in {
@@ -3355,7 +3401,7 @@ def create_task_reference(
         TaskLifecycleStatus.ABANDONED,
     }:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "Target task is not editable in lifecycle "
                 f"'{target_task_obj.lifecycle_status.value}'."

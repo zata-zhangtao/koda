@@ -4,6 +4,7 @@
 """
 
 import io
+import re
 import uuid
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from fastapi import UploadFile
 
 from utils.logger import logger
 from utils.settings import config
+
+_ATTACHMENT_MARKDOWN_LINK_PATTERN = re.compile(r"\(/api/media/(?P<filename>[^)\s?#]+)")
 
 
 class MediaService:
@@ -230,6 +233,45 @@ class MediaService:
                     absolute_media_path,
                     error,
                 )
+
+    @staticmethod
+    def extract_attachment_media_path_list(raw_markdown_text: str) -> list[str]:
+        """Extract stored attachment paths from DevLog Markdown links.
+
+        Args:
+            raw_markdown_text: Markdown text that may contain `/api/media/...` links
+
+        Returns:
+            list[str]: Stored media paths, deduplicated in first-seen order
+        """
+        attachment_media_path_list: list[str] = []
+        seen_attachment_path_set: set[str] = set()
+
+        for markdown_match in _ATTACHMENT_MARKDOWN_LINK_PATTERN.finditer(
+            raw_markdown_text
+        ):
+            attachment_filename_str = markdown_match.group("filename").strip()
+            if not attachment_filename_str:
+                continue
+            if "/" in attachment_filename_str or "\\" in attachment_filename_str:
+                continue
+
+            attachment_absolute_path = (
+                Path(config.MEDIA_STORAGE_PATH) / "original" / attachment_filename_str
+            ).resolve()
+            try:
+                attachment_media_path_str = str(
+                    attachment_absolute_path.relative_to(config.BASE_DIR)
+                )
+            except ValueError:
+                attachment_media_path_str = str(attachment_absolute_path)
+
+            if attachment_media_path_str in seen_attachment_path_set:
+                continue
+            seen_attachment_path_set.add(attachment_media_path_str)
+            attachment_media_path_list.append(attachment_media_path_str)
+
+        return attachment_media_path_list
 
     @staticmethod
     def get_image_path(filename: str, is_thumbnail: bool = False) -> Path | None:

@@ -15,6 +15,7 @@ from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.models.project import Project
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
+from backend.dsl.models.task_reference_link import TaskReferenceLink
 from backend.dsl.schemas.task_schema import (
     TaskCreateSchema,
     TaskStageUpdateSchema,
@@ -24,6 +25,7 @@ from backend.dsl.schemas.task_schema import (
 from backend.dsl.services.task_service import TaskService
 from utils.database import Base
 from utils.helpers import utc_now_naive
+from utils.settings import config
 
 
 @pytest.fixture
@@ -455,6 +457,141 @@ def test_update_task_status_rejects_started_task_deletion_via_legacy_status_rout
     db_session.refresh(started_task)
     assert started_task.lifecycle_status == TaskLifecycleStatus.OPEN
     assert started_task.destroyed_at is None
+
+
+def test_delete_unstarted_task_hard_deletes_task_children_and_reference_links(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never-started draft deletion should remove local records instead of archiving."""
+    monkeypatch.setattr(config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(config, "MEDIA_STORAGE_PATH", tmp_path / "data" / "media")
+
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    draft_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Draft task",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    source_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Source task",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([draft_task, source_task])
+    db_session.commit()
+
+    draft_log = DevLog(
+        task_id=draft_task.id,
+        run_account_id=run_account_obj.id,
+        text_content=(
+            "draft evidence\n\n"
+            "[Attachment: draft-spec.txt](/api/media/draft-spec.txt)\n"
+            "[Attachment: unsafe.txt](/api/media/../../unsafe.txt)"
+        ),
+        media_original_image_path="data/media/original/draft.png",
+        media_thumbnail_path="data/media/thumbnail/draft.png",
+    )
+    reference_link = TaskReferenceLink(
+        run_account_id=run_account_obj.id,
+        source_task_id=source_task.id,
+        target_task_id=draft_task.id,
+        reference_log_id=None,
+    )
+    db_session.add_all([draft_log, reference_link])
+    db_session.commit()
+
+    deleted_media_path_list = TaskService.delete_unstarted_task(
+        db_session,
+        draft_task.id,
+    )
+
+    assert deleted_media_path_list == [
+        "data/media/original/draft.png",
+        "data/media/thumbnail/draft.png",
+        "data/media/original/draft-spec.txt",
+    ]
+    assert db_session.query(Task).filter(Task.id == draft_task.id).first() is None
+    assert db_session.query(DevLog).filter(DevLog.task_id == draft_task.id).all() == []
+    assert (
+        db_session.query(TaskReferenceLink)
+        .filter(TaskReferenceLink.target_task_id == draft_task.id)
+        .all()
+        == []
+    )
+    assert db_session.query(Task).filter(Task.id == source_task.id).first() is not None
+
+
+def test_delete_unstarted_task_rejects_started_task(
+    db_session: Session,
+) -> None:
+    """Started tasks should keep the destroy-only cleanup contract."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    started_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started task",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+    )
+    db_session.add(started_task)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Started tasks must use the destroy flow"):
+        TaskService.delete_unstarted_task(db_session, started_task.id)
+
+    db_session.refresh(started_task)
+    assert started_task.lifecycle_status == TaskLifecycleStatus.OPEN
+
+
+def test_delete_unstarted_task_rejects_abandoned_history_task(
+    db_session: Session,
+) -> None:
+    """Abandoned tasks are retained history and should not be hard-deleted."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    abandoned_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Abandoned task",
+        lifecycle_status=TaskLifecycleStatus.ABANDONED,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add(abandoned_task)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Archived or abandoned tasks"):
+        TaskService.delete_unstarted_task(db_session, abandoned_task.id)
+
+    db_session.refresh(abandoned_task)
+    assert abandoned_task.lifecycle_status == TaskLifecycleStatus.ABANDONED
 
 
 def test_update_workflow_stage_refreshes_stage_updated_at_only_on_stage_change(

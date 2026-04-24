@@ -176,7 +176,7 @@ flowchart TD
 - 它默认不会写入 `DevLog`，也不会进入 PRD 生成或编码执行的 Prompt 上下文
 - 它的消息状态只影响对应的 Q&A 消息，不影响 `workflow_stage` 和 `is_codex_task_running`
 - 主执行链路完成后，已归档任务仍保留 sidecar Q&A 历史与“整理成反馈草稿”入口，但后端会拒绝新的 sidecar 提问与正式反馈写入
-- 任务自身进入 `DONE/CLOSED/DELETED` 时，后端仍会补写内部留痕 `DevLog`，避免归档动作丢失时间线审计记录
+- 任务自身进入 `DONE/CLOSED/DELETED` 时，后端仍会补写内部留痕 `DevLog`，避免归档动作丢失时间线审计记录；未启动 backlog 草稿的普通 `Delete` 是例外，它会直接硬删除任务、本地子记录及日志引用的本地媒体文件，不进入归档视图
 - 若某条 assistant 回复在恢复窗口内未完成，它会自动从 `pending` 释放为 `failed`；同时数据库/事务层会兜底保证同一任务最多只有 1 条 pending 回复
 - 当用户希望把问答结论正式纳入执行链路时，需要显式调用“整理成反馈草稿”，再由用户确认发送正式反馈
 

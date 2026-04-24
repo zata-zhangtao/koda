@@ -5,17 +5,21 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import subprocess
+from typing import Generator
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import backend.dsl.models  # noqa: F401
 import backend.dsl.api.tasks as tasks_api
+from backend.dsl.app import app
 from backend.dsl.api.tasks import (
     complete_task,
     create_task,
+    delete_unstarted_task,
     destroy_task,
     get_task,
     get_task_prd_file,
@@ -50,7 +54,7 @@ from backend.dsl.services.git_worktree_service import (
     WorktreeDestroyResult,
 )
 import backend.dsl.services.prd_file_service as prd_file_service
-from utils.database import Base
+from utils.database import Base, get_db
 from utils.helpers import serialize_datetime_for_api
 
 _FIXED_PRD_REFERENCE_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
@@ -84,6 +88,22 @@ def db_session() -> Session:
         yield session
     finally:
         session.close()
+
+
+def _override_get_db(session_factory: sessionmaker) -> Generator[Session, None, None]:
+    """Yield request-scoped SQLAlchemy sessions for API tests.
+
+    Args:
+        session_factory: Test session factory
+
+    Yields:
+        Session: SQLAlchemy session for one request
+    """
+    test_db_session = session_factory()
+    try:
+        yield test_db_session
+    finally:
+        test_db_session.close()
 
 
 @pytest.fixture(autouse=True)
@@ -557,6 +577,191 @@ def test_update_task_status_records_deleted_archive_audit_log(
     assert "Title: Delete requirement" in latest_log_obj.text_content
     assert "Final requirement summary" in latest_log_obj.text_content
     assert latest_log_obj.state_tag == DevLogStateTag.NONE
+
+
+def test_delete_unstarted_task_hard_deletes_draft_and_cleans_media(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Draft Delete should remove records instead of creating deleted history."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Delete draft",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+        requirement_brief="Draft summary",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    dev_log_obj = DevLog(
+        task_id=task_obj.id,
+        run_account_id=run_account_obj.id,
+        text_content="draft log",
+        media_original_image_path="data/media/original/draft.png",
+        media_thumbnail_path="data/media/thumbnail/draft.png",
+    )
+    db_session.add(dev_log_obj)
+    db_session.commit()
+
+    deleted_media_path_list: list[str | None] = []
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+    monkeypatch.setattr(
+        tasks_api.MediaService,
+        "delete_stored_media_files",
+        lambda media_path_list: deleted_media_path_list.extend(media_path_list),
+    )
+
+    delete_unstarted_task(task_obj.id, db_session)
+
+    assert db_session.query(Task).filter(Task.id == task_obj.id).first() is None
+    assert db_session.query(DevLog).filter(DevLog.task_id == task_obj.id).all() == []
+    assert deleted_media_path_list == [
+        "data/media/original/draft.png",
+        "data/media/thumbnail/draft.png",
+    ]
+
+
+def test_delete_unstarted_task_http_endpoint_returns_204_and_hard_deletes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTP Delete should expose the draft hard-delete behavior."""
+    database_path = tmp_path / "task-delete-api.db"
+    test_engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    test_session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine,
+    )
+    Base.metadata.create_all(bind=test_engine)
+
+    seed_session = test_session_factory()
+    try:
+        run_account_obj = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="Linux",
+            git_branch_name=None,
+            is_active=True,
+        )
+        seed_session.add(run_account_obj)
+        seed_session.commit()
+
+        task_obj = Task(
+            run_account_id=run_account_obj.id,
+            task_title="HTTP delete draft",
+            lifecycle_status=TaskLifecycleStatus.PENDING,
+            workflow_stage=WorkflowStage.BACKLOG,
+            requirement_brief="Draft summary",
+        )
+        seed_session.add(task_obj)
+        seed_session.commit()
+
+        dev_log_obj = DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            text_content="[Attachment: spec.txt](/api/media/spec.txt)",
+            media_original_image_path="data/media/original/draft.png",
+            media_thumbnail_path="data/media/thumbnail/draft.png",
+        )
+        seed_session.add(dev_log_obj)
+        seed_session.commit()
+        task_id_str = task_obj.id
+    finally:
+        seed_session.close()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+    monkeypatch.setattr(tasks_api.config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(
+        tasks_api.config,
+        "MEDIA_STORAGE_PATH",
+        tmp_path / "data" / "media",
+    )
+
+    deleted_media_path_list: list[str | None] = []
+    monkeypatch.setattr(
+        tasks_api.MediaService,
+        "delete_stored_media_files",
+        lambda media_path_list: deleted_media_path_list.extend(media_path_list),
+    )
+
+    def _get_test_db() -> Generator[Session, None, None]:
+        yield from _override_get_db(test_session_factory)
+
+    app.dependency_overrides[get_db] = _get_test_db
+    test_client = TestClient(app)
+    try:
+        response = test_client.delete(f"/api/tasks/{task_id_str}")
+    finally:
+        test_client.close()
+        app.dependency_overrides.clear()
+
+    verify_session = test_session_factory()
+    try:
+        assert response.status_code == 204
+        assert response.content == b""
+        assert verify_session.query(Task).filter(Task.id == task_id_str).first() is None
+        assert (
+            verify_session.query(DevLog).filter(DevLog.task_id == task_id_str).all()
+            == []
+        )
+    finally:
+        verify_session.close()
+
+    assert deleted_media_path_list == [
+        "data/media/original/draft.png",
+        "data/media/thumbnail/draft.png",
+        "data/media/original/spec.txt",
+    ]
+
+
+def test_delete_unstarted_task_rejects_started_task(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Started tasks should still require the destroy endpoint."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started task",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    with pytest.raises(HTTPException) as raised_http_error:
+        delete_unstarted_task(task_obj.id, db_session)
+
+    assert raised_http_error.value.status_code == 422
+    assert "Started tasks must use the destroy flow" in str(
+        raised_http_error.value.detail
+    )
+    assert db_session.query(Task).filter(Task.id == task_obj.id).first() is not None
 
 
 def test_open_task_in_editor_uses_shared_path_opener(

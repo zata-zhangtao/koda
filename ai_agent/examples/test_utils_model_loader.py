@@ -18,7 +18,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
-def test_resolve_model_credentials():
+def test_resolve_model_credentials() -> None:
     """测试 resolve_model_credentials 函数
 
     测试单个模型的凭据解析功能，包括提供商、基础URL和API密钥的获取。
@@ -33,7 +33,7 @@ def test_resolve_model_credentials():
 
         if not credentials:
             print(f"⚠️  警告: 模型 '{model_name}' 没有找到有效的凭据配置")
-            return False
+            return
 
         print(f"🔍 模型 '{model_name}' 的可用凭据:")
         print("-" * 60)
@@ -44,11 +44,11 @@ def test_resolve_model_credentials():
             print(f"   🔑 API密钥: {'✅ 已配置' if api_key else '❌ 未配置'}")
             print()
 
-        return True
+        return
 
     except Exception as e:
         print(f"❌ 错误: 获取模型 '{model_name}' 凭据时发生异常: {e}")
-        return False
+        return
 
 
 def test_list_models():

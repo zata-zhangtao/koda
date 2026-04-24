@@ -64,7 +64,7 @@
 6. 在“问 AI”通道点击“整理最近一次结论为反馈草稿”，确认只是把文本带入反馈 composer，而不是自动写入 `DevLog`
 7. 手动发送该反馈草稿后，再确认只有这一步才会影响主执行链路
 8. 把任务推进到 `CLOSED` 后重新打开详情，确认历史 sidecar Q&A 仍可查看，且“整理最近一次结论为反馈草稿”仍可用；新提问与正式反馈发送在前端被禁用，若直接调后端日志/附件入口也会被拒绝
-9. 分别走“验收通过”“无 worktree 的完成”“删除需求”三条归档动作，确认操作本身不会因额外写反馈而报错，且时间线里仍能看到对应的内部留痕日志；归档后的任务 Markdown 文件应以 `YYYYMMDD-HHMMSS-` 开头并保留原文件名后缀
+9. 分别走“验收通过”“无 worktree 的完成”“放弃需求”三条归档动作，确认操作本身不会因额外写反馈而报错，且时间线里仍能看到对应的内部留痕日志；归档后的任务 Markdown 文件应以 `YYYYMMDD-HHMMSS-` 开头并保留原文件名后缀
 10. 对已归档任务尝试上传图片或附件，确认接口被拒绝后 `data/media/` 不会留下孤立文件
 11. 模拟 sidecar 回复超时或后台中断后刷新详情，确认旧 `pending` 回复会转为 `failed`，随后允许再次提问；并发提交提问时仍只能保留 1 条 `pending` 回复
 
@@ -73,15 +73,16 @@
 1. 创建 `Project`
 2. 将任务绑定到该项目
 3. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
-4. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
-5. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-6. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
-7. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
-8. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
-9. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
-10. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
-11. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
-12. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
+4. 对未启动的 backlog 任务点击 `Delete`，确认任务和关联日志/附件从列表中直接消失，不进入 `Changes` 归档视图
+5. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
+6. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
+7. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
+8. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+9. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
+10. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+11. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
+12. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
+13. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
 
 ### 媒体与导出
 

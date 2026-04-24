@@ -30,8 +30,8 @@ import type {
   WebDAVSettings,
   WebDAVSettingsUpdate,
   WebDAVSyncResult,
-} from "../types";
-import { TaskLifecycleStatus, type WorkflowStage } from "../types";
+} from "../types/index.ts";
+import type { TaskLifecycleStatus, WorkflowStage } from "../types/index.ts";
 
 const API_BASE = "/api";
 
@@ -172,6 +172,15 @@ export const taskApi = {
       method: "PUT",
       body: JSON.stringify({ lifecycle_status: status }),
     }),
+
+  /** 硬删除尚未启动的 backlog 草稿任务 */
+  deleteUnstarted: async (id: string): Promise<void> => {
+    const response = await fetch(`${API_BASE}/tasks/${id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+  },
 
   /** 更新任务工作流阶段（通用阶段跳转） */
   updateStage: (id: string, workflowStage: WorkflowStage) =>

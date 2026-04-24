@@ -122,7 +122,7 @@ def create_task_qa_message(
         http_status_code = (
             status.HTTP_409_CONFLICT
             if "pending" in error_text.lower()
-            else status.HTTP_422_UNPROCESSABLE_ENTITY
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
         )
         if "not found" in error_text.lower():
             http_status_code = status.HTTP_404_NOT_FOUND
@@ -177,7 +177,7 @@ def convert_task_qa_message_to_feedback_draft(
         http_status_code = (
             status.HTTP_404_NOT_FOUND
             if "not found" in error_text.lower()
-            else status.HTTP_422_UNPROCESSABLE_ENTITY
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
         )
         raise HTTPException(
             status_code=http_status_code,

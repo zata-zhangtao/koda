@@ -99,7 +99,7 @@ def create_project(
         )
     except ValueError as validation_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(validation_error),
         ) from validation_error
     return _to_response(created_project_obj)
@@ -132,7 +132,7 @@ def update_project(
         )
     except ValueError as validation_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(validation_error),
         ) from validation_error
 
@@ -200,7 +200,7 @@ def _open_project_root_in_editor(
     )
     if not ProjectService.is_repo_path_valid(project_obj.repo_path):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "Project repo_path is not valid on this machine. "
                 "Update the project path before opening it."
@@ -208,7 +208,7 @@ def _open_project_root_in_editor(
         )
     if consistency_snapshot.is_repo_remote_consistent is False:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "Project repo_path points to a different Git remote than the stored "
                 "synced fingerprint. Update the project path to the correct repository."
@@ -222,7 +222,7 @@ def _open_project_root_in_editor(
         )
     except PathOpenTargetNotFoundError as path_error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(path_error),
         ) from path_error
     except PathOpenCommandError as path_error:

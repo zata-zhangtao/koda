@@ -8,12 +8,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.dsl.models.dev_log import DevLog
 from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.models.task import Task
+from backend.dsl.models.task_reference_link import TaskReferenceLink
 from backend.dsl.schemas.task_schema import (
     TaskBranchHealthSchema,
     TaskCreateSchema,
@@ -21,6 +22,7 @@ from backend.dsl.schemas.task_schema import (
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
 )
+from backend.dsl.services.media_service import MediaService
 from utils.helpers import utc_now_naive
 from utils.logger import logger
 
@@ -653,6 +655,69 @@ class TaskService:
             f"Updated Task {task_id[:8]}... status to {task_obj.lifecycle_status.value}"
         )
         return task_obj
+
+    @staticmethod
+    def delete_unstarted_task(
+        db_session: Session,
+        task_id: str,
+    ) -> list[str] | None:
+        """Hard-delete a never-started task and its local child records.
+
+        Args:
+            db_session: 数据库会话
+            task_id: 任务 ID
+
+        Returns:
+            list[str] | None: Deleted task media paths for filesystem cleanup; returns
+                None when the task does not exist.
+
+        Raises:
+            ValueError: 当任务已经启动或已归档时抛出
+        """
+        task_obj = TaskService.get_task_by_id(db_session, task_id)
+        if not task_obj:
+            return None
+
+        if task_obj.lifecycle_status in {
+            TaskLifecycleStatus.ABANDONED,
+            TaskLifecycleStatus.CLOSED,
+            TaskLifecycleStatus.DELETED,
+        }:
+            raise ValueError("Archived or abandoned tasks cannot be hard-deleted.")
+
+        if TaskService.has_task_started(task_obj):
+            raise ValueError(
+                "Started tasks must use the destroy flow. "
+                "Direct hard delete is only available for never-started backlog tasks."
+            )
+
+        media_path_list: list[str] = []
+        seen_media_path_set: set[str] = set()
+        for dev_log_obj in task_obj.dev_logs:
+            candidate_media_path_list = [
+                dev_log_obj.media_original_image_path,
+                dev_log_obj.media_thumbnail_path,
+                *MediaService.extract_attachment_media_path_list(
+                    dev_log_obj.text_content
+                ),
+            ]
+            for media_path in candidate_media_path_list:
+                if not media_path or media_path in seen_media_path_set:
+                    continue
+                seen_media_path_set.add(media_path)
+                media_path_list.append(media_path)
+
+        db_session.query(TaskReferenceLink).filter(
+            or_(
+                TaskReferenceLink.source_task_id == task_id,
+                TaskReferenceLink.target_task_id == task_id,
+            )
+        ).delete(synchronize_session=False)
+        db_session.delete(task_obj)
+        db_session.commit()
+
+        logger.info("Hard-deleted unstarted Task %s...", task_id[:8])
+        return media_path_list
 
     @staticmethod
     def update_workflow_stage(

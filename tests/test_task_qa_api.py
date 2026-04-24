@@ -474,6 +474,7 @@ def test_create_question_releases_expired_pending_reply_before_accepting_new_one
 
 def test_build_task_context_markdown_degrades_gracefully_without_prd_file(
     db_session: Session,
+    tmp_path: Path,
 ) -> None:
     """Missing PRD files should not prevent sidecar Q&A context construction."""
 
@@ -482,6 +483,7 @@ def test_build_task_context_markdown_degrades_gracefully_without_prd_file(
         db_session,
         run_account_obj.id,
         workflow_stage=WorkflowStage.PRD_WAITING_CONFIRMATION,
+        worktree_path=str(tmp_path),
         requirement_brief="Need to clarify how sidecar Q&A avoids mutating execution.",
     )
     db_session.add(

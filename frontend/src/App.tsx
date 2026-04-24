@@ -3072,7 +3072,7 @@ function App() {
 
   async function handleDeleteRequirement(taskItem: Task): Promise<void> {
     const isDeletionConfirmed = window.confirm(
-      "Move this requirement into deleted history?"
+      "Delete this unstarted requirement draft permanently?"
     );
     if (!isDeletionConfirmed) {
       return;
@@ -3083,13 +3083,17 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      await taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.DELETED);
-      setWorkspaceView("changes");
-      setSuccessMessage("Requirement moved to deleted history.");
+      await taskApi.deleteUnstarted(taskItem.id);
+      setWorkspaceView("active");
+      setSuccessMessage("Requirement draft deleted.");
       await loadDashboardData(true);
     } catch (deleteError) {
       console.error(deleteError);
-      setErrorMessage("Failed to delete requirement.");
+      setErrorMessage(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Failed to delete requirement."
+      );
     } finally {
       setActiveMutationName(null);
     }
