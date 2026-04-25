@@ -14,6 +14,7 @@ import type {
   ProjectTimelineSummary,
   ProjectTimelineTaskDetail,
   Project,
+  ProjectBranchList,
   RunAccount,
   Task,
   TaskCardMetadata,
@@ -158,6 +159,7 @@ export const taskApi = {
   create: (data: {
     task_title: string;
     project_id?: string | null;
+    worktree_base_branch_name?: string;
     requirement_brief?: string | null;
     auto_confirm_prd_and_execute?: boolean;
   }) =>
@@ -274,6 +276,7 @@ export const taskApi = {
       task_title: string;
       requirement_brief?: string | null;
       project_id?: string | null;
+      worktree_base_branch_name?: string;
     }
   ) =>
     fetchApi<Task>(`/tasks/${id}`, {
@@ -463,6 +466,10 @@ export const projectApi = {
 
   /** 获取项目详情 */
   get: (id: string) => fetchApi<Project>(`/projects/${id}`),
+
+  /** 列出项目本地分支 */
+  listBranches: (id: string) =>
+    fetchApi<ProjectBranchList>(`/projects/${id}/branches`),
 
   /** 删除项目 */
   delete: async (id: string) => {

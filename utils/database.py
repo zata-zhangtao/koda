@@ -58,6 +58,11 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added destroyed_at column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN worktree_base_branch_name "
+        "VARCHAR(255) NOT NULL DEFAULT 'main'",
+        "Migration: added worktree_base_branch_name column to tasks",
+    ),
+    (
         "ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)",
         "Migration: added repo_remote_url column to projects",
     ),

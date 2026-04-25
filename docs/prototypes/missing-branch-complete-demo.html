@@ -679,7 +679,7 @@
           "这是正常路径：任务分支仍存在，Koda 可以继续执行标准 Git 完成流。只有在 branch probe 发现缺失时，才会切到人工确认分支。",
         statusTitle: "任务仍可使用标准 Git Complete 流程",
         statusCopy:
-          "当前无需人工确认。点击 Complete 时，系统仍会走现有的 `git add . -> git commit -> git rebase main -> merge -> cleanup` 自动收尾链路。",
+          "当前无需人工确认。点击 Complete 时，系统仍会走现有的 `git add . -> git commit -> git rebase <base branch> -> merge -> cleanup` 自动收尾链路。",
         bannerClass: "status-banner status-banner--normal",
         bannerText:
           "分支和 worktree 都存在，所以系统保留现有自动化完成流，不应误显示“缺失分支待确认”。",

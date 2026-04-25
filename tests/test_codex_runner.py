@@ -377,6 +377,15 @@ def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
     assert "跳过 `git commit`" in completion_prompt_text
     assert "不要 push" in completion_prompt_text
 
+    develop_completion_prompt_text = codex_runner.build_codex_completion_prompt(
+        task_title="Finalize branch",
+        dev_log_text_list=["Implementation already passed review."],
+        worktree_path_str="/tmp/project-wt-12345678",
+        base_branch_name_str="develop",
+    )
+    assert "`git rebase develop`" in develop_completion_prompt_text
+    assert "承载 `develop` 的工作区" in develop_completion_prompt_text
+
 
 def test_output_contains_interruption_ignores_negated_interrupted_phrase() -> None:
     """Interruption detection should not match negated interruption phrases."""
@@ -1176,11 +1185,11 @@ def test_execute_git_completion_flow_skips_commit_when_worktree_is_already_clean
             "repo-status": "",
             "git-fetch-zata": "",
             "git-pull-ff-only-zata": "",
-            "main-worktree-branch": "main\n",
+            "base-worktree-branch": "main\n",
             "worktree-status": "",
             "git-add": "",
             "post-add-status": "",
-            "git-rebase-main": "",
+            "git-rebase-base": "",
             "merge-feature": "Already up to date.\n",
             "remove-worktree": "",
             "delete-branch": "",
@@ -1212,7 +1221,7 @@ def test_execute_git_completion_flow_skips_commit_when_worktree_is_already_clean
         GitWorktreeService,
         "cleanup_completed_task_worktree",
         staticmethod(
-            lambda repo_root_path, feature_branch_name, worktree_path: (
+            lambda repo_root_path, feature_branch_name, worktree_path, **_kwargs: (
                 WorktreeDestroyResult(
                     cleanup_succeeded=True,
                     worktree_removed=True,
@@ -1236,7 +1245,7 @@ def test_execute_git_completion_flow_skips_commit_when_worktree_is_already_clean
     assert completion_result.cleanup_succeeded is True
     assert "git-commit" not in recorded_command_label_list
     assert recorded_command_label_list.index("post-add-status") < (
-        recorded_command_label_list.index("git-rebase-main")
+        recorded_command_label_list.index("git-rebase-base")
     )
     assert any("跳过 `git commit`" in line for line in completion_result.output_lines)
 
@@ -1253,13 +1262,18 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
     worktree_path.mkdir()
     main_worktree_path.mkdir()
     recorded_command_label_list: list[str] = []
+    recorded_command_argument_by_label_dict: dict[str, list[str]] = {}
     recorded_commit_argument_list: list[str] = []
     recorded_generation_context_dict: dict[str, str] = {}
+    recorded_cleanup_base_branch_name_list: list[str] = []
 
     def fake_run_logged_command(**kwargs) -> subprocess.CompletedProcess[str]:
         command_log_label_str = kwargs["command_log_label_str"]
         recorded_command_label_list.append(command_log_label_str)
         command_argument_list = kwargs["command_argument_list"]
+        recorded_command_argument_by_label_dict[command_log_label_str] = (
+            command_argument_list
+        )
         if command_log_label_str == "git-commit":
             recorded_commit_argument_list.extend(command_argument_list)
         stdout_by_label_dict = {
@@ -1267,7 +1281,7 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
             "repo-status": "",
             "git-fetch-zata": "",
             "git-pull-ff-only-zata": "",
-            "main-worktree-branch": "main\n",
+            "base-worktree-branch": "main\n",
             "worktree-status": " M backend/dsl/services/codex_runner.py\n",
             "git-add": "",
             "post-add-status": "M  backend/dsl/services/codex_runner.py\n",
@@ -1279,7 +1293,8 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
                 "[task/12345678-dirty abc123] "
                 "fix(complete): generate commit message with ai\n"
             ),
-            "git-rebase-main": "",
+            "git-rebase-base": "",
+            "checkout-base": "",
             "merge-feature": "Merge made by the 'ort' strategy.\n",
             "remove-worktree": "",
             "delete-branch": "",
@@ -1304,6 +1319,20 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
             "fix(complete): generate commit message with ai",
             ["COMMIT_MESSAGE: fix(complete): generate commit message with ai"],
             None,
+        )
+
+    def fake_cleanup_completed_task_worktree(
+        repo_root_path,
+        feature_branch_name,
+        worktree_path,
+        base_branch_name_str="main",
+    ) -> WorktreeDestroyResult:
+        recorded_cleanup_base_branch_name_list.append(base_branch_name_str)
+        return WorktreeDestroyResult(
+            cleanup_succeeded=True,
+            worktree_removed=True,
+            branch_deleted=True,
+            output_line_list=[],
         )
 
     monkeypatch.setattr(
@@ -1331,16 +1360,7 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
     monkeypatch.setattr(
         GitWorktreeService,
         "cleanup_completed_task_worktree",
-        staticmethod(
-            lambda repo_root_path, feature_branch_name, worktree_path: (
-                WorktreeDestroyResult(
-                    cleanup_succeeded=True,
-                    worktree_removed=True,
-                    branch_deleted=True,
-                    output_line_list=[],
-                )
-            )
-        ),
+        staticmethod(fake_cleanup_completed_task_worktree),
     )
 
     completion_result = codex_runner._execute_git_completion_flow(
@@ -1350,6 +1370,7 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
         commit_information_text_str="Finalize dirty branch.",
         dev_log_text_list=["There are staged completion fixes."],
         worktree_path_str=str(worktree_path),
+        base_branch_name_str="develop",
     )
 
     assert completion_result.merged_to_main is True
@@ -1368,8 +1389,25 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
         ),
     }
     assert "git-fetch-zata" in recorded_command_label_list
+    assert recorded_command_argument_by_label_dict["git-pull-ff-only-zata"] == [
+        "git",
+        "merge",
+        "--ff-only",
+        "zata/develop",
+    ]
+    assert recorded_command_argument_by_label_dict["git-rebase-base"] == [
+        "git",
+        "rebase",
+        "develop",
+    ]
+    assert recorded_command_argument_by_label_dict["checkout-base"] == [
+        "git",
+        "checkout",
+        "develop",
+    ]
+    assert recorded_cleanup_base_branch_name_list == ["develop"]
     assert recorded_command_label_list.index("git-commit") < (
-        recorded_command_label_list.index("git-rebase-main")
+        recorded_command_label_list.index("git-rebase-base")
     )
 
 
@@ -2563,6 +2601,7 @@ def test_run_codex_completion_advances_task_to_done_on_success(
         commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
+        base_branch_name_str: str = "main",
     ) -> codex_runner.GitCompletionExecutionResult:
         assert task_id_str == "12345678-done-case"
         assert run_account_id_str == "run-account-3"
@@ -2570,6 +2609,7 @@ def test_run_codex_completion_advances_task_to_done_on_success(
         assert commit_information_text_str == "Implement the reviewed branch flow"
         assert dev_log_text_list == ["Implementation already passed review."]
         assert worktree_path_str == str(tmp_path / "repo-wt-12345678")
+        assert base_branch_name_str == "main"
         return codex_runner.GitCompletionExecutionResult(
             merged_to_main=True,
             cleanup_succeeded=True,
@@ -2649,8 +2689,10 @@ def test_run_codex_completion_marks_done_with_warning_when_cleanup_fails(
         commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
+        base_branch_name_str: str = "main",
     ) -> codex_runner.GitCompletionExecutionResult:
         assert commit_information_text_str == "Implement the reviewed branch flow"
+        assert base_branch_name_str == "main"
         return codex_runner.GitCompletionExecutionResult(
             merged_to_main=True,
             cleanup_succeeded=False,
@@ -2733,8 +2775,10 @@ def test_run_codex_completion_moves_task_to_changes_requested_on_failure(
         commit_information_text_str: str | None,
         dev_log_text_list: list[str],
         worktree_path_str: str,
+        base_branch_name_str: str = "main",
     ) -> codex_runner.GitCompletionExecutionResult:
         assert commit_information_text_str == "Implement the reviewed branch flow"
+        assert base_branch_name_str == "main"
         return codex_runner.GitCompletionExecutionResult(
             merged_to_main=False,
             cleanup_succeeded=False,

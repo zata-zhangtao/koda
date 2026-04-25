@@ -211,6 +211,7 @@ async def run_task_completion(
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str,
+    base_branch_name_str: str = "main",
 ) -> None:
     """Run completion stage with deterministic Git operations.
 
@@ -223,6 +224,7 @@ async def run_task_completion(
         dev_log_text_list: Task context log texts.
         work_dir_path: Working directory.
         worktree_path_str: Worktree path.
+        base_branch_name_str: Branch used for rebase and merge target.
     """
     await run_codex_completion(
         task_id_str=task_id_str,
@@ -233,6 +235,7 @@ async def run_task_completion(
         dev_log_text_list=dev_log_text_list,
         work_dir_path=work_dir_path,
         worktree_path_str=worktree_path_str,
+        base_branch_name_str=base_branch_name_str,
     )
 
 

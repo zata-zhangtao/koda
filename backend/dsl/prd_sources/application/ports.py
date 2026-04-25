@@ -43,6 +43,16 @@ class PrdSourceRepositoryPort(Protocol):
     ) -> StagedPrdDocument:
         """Move a pending PRD into the workspace `tasks/` root."""
 
+    def stage_pending_prd_to_tasks_root(
+        self,
+        source_workspace_dir_path: Path,
+        target_workspace_dir_path: Path,
+        pending_relative_path_str: str,
+        target_file_name_str: str,
+        pending_prd_markdown_text: str,
+    ) -> StagedPrdDocument:
+        """Stage a pending PRD from one workspace into another workspace root."""
+
     def import_prd_to_tasks_root(
         self,
         workspace_dir_path: Path,

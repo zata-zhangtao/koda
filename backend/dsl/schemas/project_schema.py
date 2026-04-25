@@ -114,3 +114,18 @@ class ProjectResponseSchema(DSLResponseSchema):
     )
     repo_consistency_note: str | None = Field(None, description="当前仓库一致性说明")
     created_at: datetime = Field(..., description="创建时间")
+
+
+class ProjectBranchListSchema(DSLResponseSchema):
+    """本地 Project 分支列表响应.
+
+    Attributes:
+        branches: 当前本机仓库中的本地分支名称列表
+        current_branch_name: 当前工作区检出的分支；detached HEAD 时为 None
+    """
+
+    branches: list[str] = Field(..., description="当前本机仓库中的本地分支名称列表")
+    current_branch_name: str | None = Field(
+        None,
+        description="当前工作区检出的分支；detached HEAD 时为 None",
+    )

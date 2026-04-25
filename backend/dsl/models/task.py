@@ -43,6 +43,7 @@ class Task(Base):
         stage_updated_at (datetime): 最近一次进入当前工作流阶段的时间
         last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
+        worktree_base_branch_name (str): 创建任务 worktree 与完成合并时使用的基底分支
         auto_confirm_prd_and_execute (bool): PRD 生成后是否自动确认并直接进入执行
         business_sync_original_workflow_stage (str | None): 业务同步恢复前的原始阶段快照
         business_sync_original_lifecycle_status (str | None): 业务同步恢复前的原始生命周期快照
@@ -90,6 +91,12 @@ class Task(Base):
     worktree_path: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
+    )
+    worktree_base_branch_name: Mapped[str] = mapped_column(
+        String(255),
+        default="main",
+        server_default="main",
+        nullable=False,
     )
     requirement_brief: Mapped[str | None] = mapped_column(
         String(TASK_REQUIREMENT_BRIEF_MAX_LENGTH),

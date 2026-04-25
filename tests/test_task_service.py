@@ -96,8 +96,13 @@ def _create_git_repo(repo_root_path: Path) -> Path:
     return repo_root_path
 
 
-def test_create_task_persists_selected_project_id(db_session: Session) -> None:
+def test_create_task_persists_selected_project_id(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
     """Task creation should store the exact selected project ID."""
+    repo_one_root_path = _create_git_repo(tmp_path / "project1")
+    repo_two_root_path = _create_git_repo(tmp_path / "project2")
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -107,12 +112,12 @@ def test_create_task_persists_selected_project_id(db_session: Session) -> None:
     )
     project_one_obj = Project(
         display_name="project1",
-        repo_path="/tmp/project1",
+        repo_path=str(repo_one_root_path),
         description=None,
     )
     project_two_obj = Project(
         display_name="project2",
-        repo_path="/tmp/project2",
+        repo_path=str(repo_two_root_path),
         description=None,
     )
     db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
@@ -134,6 +139,44 @@ def test_create_task_persists_selected_project_id(db_session: Session) -> None:
     assert reloaded_task is not None
     assert reloaded_task.project_id == project_two_obj.id
     assert reloaded_task.project_id != project_one_obj.id
+    assert reloaded_task.worktree_base_branch_name == "main"
+
+
+def test_create_task_persists_selected_worktree_base_branch(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Task creation should validate and persist the selected local base branch."""
+    repo_root_path = _create_git_repo(tmp_path / "project-with-develop")
+    _run_git_command(repo_root_path, ["checkout", "-b", "develop"])
+    _run_git_command(repo_root_path, ["checkout", "main"])
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="project-with-develop",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(
+            task_title="Link to develop",
+            project_id=project_obj.id,
+            worktree_base_branch_name="develop",
+        ),
+        run_account_id=run_account_obj.id,
+    )
+
+    assert created_task.project_id == project_obj.id
+    assert created_task.worktree_base_branch_name == "develop"
 
 
 def test_create_task_rejects_missing_project_id(db_session: Session) -> None:
@@ -220,8 +263,11 @@ def test_create_task_persists_auto_confirm_prd_and_execute_flag(
 
 def test_update_task_allows_project_rebinding_for_backlog_tasks(
     db_session: Session,
+    tmp_path: Path,
 ) -> None:
     """Backlog tasks without a worktree should allow project rebinding."""
+    repo_one_root_path = _create_git_repo(tmp_path / "project-one")
+    repo_two_root_path = _create_git_repo(tmp_path / "project-two")
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -231,12 +277,12 @@ def test_update_task_allows_project_rebinding_for_backlog_tasks(
     )
     project_one_obj = Project(
         display_name="project-one",
-        repo_path="/tmp/project-one",
+        repo_path=str(repo_one_root_path),
         description=None,
     )
     project_two_obj = Project(
         display_name="project-two",
-        repo_path="/tmp/project-two",
+        repo_path=str(repo_two_root_path),
         description=None,
     )
     db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
@@ -266,6 +312,53 @@ def test_update_task_allows_project_rebinding_for_backlog_tasks(
     assert updated_task.task_title == "Needs rebind (edited)"
     assert updated_task.requirement_brief == "new summary"
     assert updated_task.project_id == project_two_obj.id
+
+
+def test_update_task_allows_base_branch_change_before_worktree_creation(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Backlog tasks without a worktree should allow changing the base branch."""
+    repo_root_path = _create_git_repo(tmp_path / "project-with-develop")
+    _run_git_command(repo_root_path, ["checkout", "-b", "develop"])
+    _run_git_command(repo_root_path, ["checkout", "main"])
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="project-with-develop",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(
+            task_title="Needs base branch update",
+            project_id=project_obj.id,
+            requirement_brief="old summary",
+        ),
+        run_account_id=run_account_obj.id,
+    )
+
+    updated_task = TaskService.update_task(
+        db_session,
+        created_task.id,
+        TaskUpdateSchema(
+            task_title="Needs base branch update",
+            requirement_brief="old summary",
+            worktree_base_branch_name="develop",
+        ),
+    )
+
+    assert updated_task is not None
+    assert updated_task.worktree_base_branch_name == "develop"
 
 
 def test_update_task_rejects_project_rebinding_after_task_start(
@@ -313,6 +406,45 @@ def test_update_task_rejects_project_rebinding_after_task_start(
             TaskUpdateSchema(
                 task_title="Started task",
                 project_id=project_two_obj.id,
+            ),
+        )
+
+
+def test_update_task_rejects_base_branch_change_after_task_start(
+    db_session: Session,
+) -> None:
+    """Started tasks should reject worktree base branch changes."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    started_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Started task",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.PRD_GENERATING,
+        worktree_path="/tmp/project-one-wt-12345678",
+        worktree_base_branch_name="main",
+    )
+    db_session.add(started_task)
+    db_session.commit()
+
+    with pytest.raises(
+        ValueError,
+        match=r"Only backlog tasks without a worktree can change it",
+    ):
+        TaskService.update_task(
+            db_session,
+            started_task.id,
+            TaskUpdateSchema(
+                task_title="Started task",
+                worktree_base_branch_name="develop",
             ),
         )
 
@@ -882,3 +1014,60 @@ def test_start_task_persists_created_worktree_path_under_task_root(
     assert (expected_worktree_path / "frontend" / ".env.local").read_text(
         encoding="utf-8"
     ) == nested_source_env_file_path.read_text(encoding="utf-8")
+
+
+def test_start_task_creates_worktree_from_selected_base_branch(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Starting a linked task should branch from its stored base branch."""
+    from utils.settings import Config
+
+    monkeypatch.setattr(Config, "WORKTREE_BRANCH_AI_NAMING_ENABLED", False)
+
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    _run_git_command(repo_root_path, ["checkout", "-b", "develop"])
+    develop_marker_file_path = repo_root_path / "develop.txt"
+    develop_marker_file_path.write_text("develop branch only\n", encoding="utf-8")
+    _run_git_command(repo_root_path, ["add", "develop.txt"])
+    _run_git_command(repo_root_path, ["commit", "-m", "add develop marker"])
+    _run_git_command(repo_root_path, ["checkout", "main"])
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="demo-repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    created_task = TaskService.create_task(
+        db_session=db_session,
+        task_create_schema=TaskCreateSchema(
+            task_title="Create linked worktree",
+            project_id=project_obj.id,
+            worktree_base_branch_name="develop",
+        ),
+        run_account_id=run_account_obj.id,
+    )
+
+    started_task = TaskService.start_task(db_session, created_task.id)
+    expected_worktree_path = (
+        repo_root_path.parent
+        / "task"
+        / f"{repo_root_path.name}-wt-{created_task.id[:8]}"
+    )
+
+    assert started_task is not None
+    assert started_task.worktree_base_branch_name == "develop"
+    assert expected_worktree_path.exists() is True
+    assert (expected_worktree_path / "develop.txt").read_text(
+        encoding="utf-8"
+    ) == "develop branch only\n"

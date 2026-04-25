@@ -156,7 +156,7 @@ class GitCompletionExecutionResult:
     """Describe the result of the deterministic Git completion flow.
 
     Attributes:
-        merged_to_main: Whether the feature branch was merged into ``main``
+        merged_to_main: Whether the feature branch was merged into the target base branch
         cleanup_succeeded: Whether worktree/branch cleanup finished successfully
         output_lines: Collected command output lines for logging
         feature_branch_name: Resolved feature branch name
@@ -1345,7 +1345,7 @@ def _build_runner_conflict_resolution_prompt(
 
 ## 执行要求
 1. 先检查 `git status` 和当前冲突文件，识别所有未解决的冲突。
-2. 直接修改冲突文件，保留本任务已经完成的正确实现，并吸收 `main` 上需要保留的改动。
+2. 直接修改冲突文件，保留本任务已经完成的正确实现，并吸收目标基底分支上需要保留的改动。
 3. 如果冲突涉及文档、类型或配置，保持它们与最终代码一致。
 4. {operation_continue_instruction_str}
 5. 如果继续过程中再次出现新的冲突，继续重复“解决冲突 -> add -> continue”，直到当前 `{operation_kind_str}` 真正结束。
@@ -1537,6 +1537,7 @@ def _execute_git_completion_flow(
     commit_information_text_str: str | None,
     dev_log_text_list: list[str],
     worktree_path_str: str,
+    base_branch_name_str: str = "main",
 ) -> GitCompletionExecutionResult:
     """Run the deterministic Git completion sequence for a task worktree.
 
@@ -1547,6 +1548,7 @@ def _execute_git_completion_flow(
         commit_information_text_str: Resolved commit information used for the commit subject
         dev_log_text_list: Recent task history used for conflict resolution context
         worktree_path_str: Task worktree path
+        base_branch_name_str: Branch used for rebase and merge target
 
     Returns:
         GitCompletionExecutionResult: Completion outcome metadata
@@ -1606,7 +1608,8 @@ def _execute_git_completion_flow(
         )
 
     merge_target_worktree_path = _resolve_worktree_path_for_branch(
-        repo_root_path, "main"
+        repo_root_path,
+        base_branch_name_str,
     )
     if merge_target_worktree_path is None:
         merge_target_worktree_path = repo_root_path
@@ -1631,9 +1634,7 @@ def _execute_git_completion_flow(
         )
 
     if (repo_status_process.stdout or "").strip():
-        failure_reason_text = (
-            "承载 `main` 分支的工作区不是干净状态，无法自动执行 merge。"
-        )
+        failure_reason_text = f"承载 `{base_branch_name_str}` 分支的工作区不是干净状态，无法自动执行 merge。"
         _append_text_to_task_log(task_log_path, failure_reason_text)
         return GitCompletionExecutionResult(
             merged_to_main=False,
@@ -1645,12 +1646,10 @@ def _execute_git_completion_flow(
 
     preferred_remote_name_str = GitWorktreeService.resolve_preferred_remote_name(
         repo_root_path=repo_root_path,
-        branch_name_str="main",
+        branch_name_str=base_branch_name_str,
     )
     if preferred_remote_name_str is None:
-        no_remote_log_text = (
-            "无法为 `main` 解析可用 remote，跳过远程同步，继续执行本地 rebase/merge。"
-        )
+        no_remote_log_text = f"无法为 `{base_branch_name_str}` 解析可用 remote，跳过远程同步，继续执行本地 rebase/merge。"
         _append_text_to_task_log(task_log_path, no_remote_log_text)
         output_line_list.append(no_remote_log_text)
     else:
@@ -1679,7 +1678,7 @@ def _execute_git_completion_flow(
                     "git",
                     "merge",
                     "--ff-only",
-                    f"{preferred_remote_name_str}/main",
+                    f"{preferred_remote_name_str}/{base_branch_name_str}",
                 ],
                 cwd_path=merge_target_worktree_path,
                 command_log_label_str=f"git-pull-ff-only-{preferred_remote_name_str}",
@@ -1687,9 +1686,7 @@ def _execute_git_completion_flow(
             output_line_list.extend((pull_process.stdout or "").splitlines())
             output_line_list.extend((pull_process.stderr or "").splitlines())
             if pull_process.returncode != 0:
-                failure_reason_text = (
-                    "远程 `main` 分支有分叉更新，无法自动快进合并，请手动处理后重试。"
-                )
+                failure_reason_text = f"远程 `{base_branch_name_str}` 分支有分叉更新，无法自动快进合并，请手动处理后重试。"
                 _append_text_to_task_log(task_log_path, failure_reason_text)
                 return GitCompletionExecutionResult(
                     merged_to_main=False,
@@ -1705,11 +1702,13 @@ def _execute_git_completion_flow(
         task_log_path=task_log_path,
         command_argument_list=["git", "branch", "--show-current"],
         cwd_path=merge_target_worktree_path,
-        command_log_label_str="main-worktree-branch",
+        command_log_label_str="base-worktree-branch",
     )
     output_line_list.extend((merge_target_branch_process.stdout or "").splitlines())
     if merge_target_branch_process.returncode != 0:
-        failure_reason_text = "无法确认承载 `main` 分支的工作区当前分支。"
+        failure_reason_text = (
+            f"无法确认承载 `{base_branch_name_str}` 分支的工作区当前分支。"
+        )
         return GitCompletionExecutionResult(
             merged_to_main=False,
             cleanup_succeeded=False,
@@ -1771,7 +1770,7 @@ def _execute_git_completion_flow(
     if not (post_add_status_process.stdout or "").strip():
         skip_commit_text_str = (
             "ℹ️ 任务 worktree 已经没有未提交变更，Koda 将跳过 `git commit`，"
-            "直接继续 `git rebase main` 与 merge。"
+            f"直接继续 `git rebase {base_branch_name_str}` 与 merge。"
         )
         _append_text_to_task_log(task_log_path, skip_commit_text_str)
         _write_log_to_db(
@@ -1897,11 +1896,19 @@ def _execute_git_completion_flow(
                 )
 
     finish_command_plan = [
-        ("git-rebase-main", ["git", "rebase", "main"], worktree_path),
+        (
+            "git-rebase-base",
+            ["git", "rebase", base_branch_name_str],
+            worktree_path,
+        ),
     ]
-    if current_merge_target_branch_name != "main":
+    if current_merge_target_branch_name != base_branch_name_str:
         finish_command_plan.append(
-            ("checkout-main", ["git", "checkout", "main"], merge_target_worktree_path)
+            (
+                "checkout-base",
+                ["git", "checkout", base_branch_name_str],
+                merge_target_worktree_path,
+            )
         )
     finish_command_plan.append(
         (
@@ -1928,7 +1935,7 @@ def _execute_git_completion_flow(
         output_line_list.extend((completed_process.stderr or "").splitlines())
         if completed_process.returncode != 0:
             operation_kind_str = ""
-            if command_log_label_str == "git-rebase-main" and _has_unmerged_conflicts(
+            if command_log_label_str == "git-rebase-base" and _has_unmerged_conflicts(
                 command_cwd_path
             ):
                 operation_kind_str = "rebase"
@@ -1987,6 +1994,7 @@ def _execute_git_completion_flow(
         repo_root_path=repo_root_path,
         feature_branch_name=feature_branch_name,
         worktree_path=worktree_path,
+        base_branch_name_str=base_branch_name_str,
     )
     for cleanup_output_line_str in cleanup_result.output_line_list:
         stripped_cleanup_output_line_str = cleanup_output_line_str.strip()
@@ -2483,6 +2491,7 @@ def build_codex_completion_prompt(
     task_title: str,
     dev_log_text_list: list[str],
     worktree_path_str: str,
+    base_branch_name_str: str = "main",
 ) -> str:
     """根据任务标题和历史日志构建完成阶段说明文本.
 
@@ -2493,6 +2502,7 @@ def build_codex_completion_prompt(
         task_title: 需求卡片标题
         dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
         worktree_path_str: 任务对应的 git worktree 绝对路径
+        base_branch_name_str: 完成收尾时 rebase 与 merge 的目标分支
 
     Returns:
         str: 完整的完成阶段说明文本
@@ -2514,16 +2524,16 @@ def build_codex_completion_prompt(
 
 ## Git Worktree 说明
 当前工作目录就是任务对应的 git worktree：`{worktree_path_str}`
-- `git add .`、必要时 `git commit`、`git rebase main` 在当前 worktree 中执行
-- merge 会复用当前持有 `main` 分支的工作区；只有找不到该工作区时才会尝试 `git checkout main`
+- `git add .`、必要时 `git commit`、`git rebase {base_branch_name_str}` 在当前 worktree 中执行
+- merge 会复用当前持有 `{base_branch_name_str}` 分支的工作区；只有找不到该工作区时才会尝试 `git checkout {base_branch_name_str}`
 - 不要创建新 worktree、不要 push
 
 ## 执行要求
 1. 先查看当前 `git status`，确认本次任务的工作区状态。
 2. 严格按顺序执行：`git add .`；若 staging 后仍有变更，则由当前 AI runner 基于 staged diff 生成 Conventional Commit 格式的 message 后执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后工作区已经干净，说明用户已经提交过，跳过 `git commit`。
-3. 继续执行 `git rebase main`，然后在承载 `main` 的工作区执行 `git merge <task branch>`。
-4. 如果 `git rebase main` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
-5. 如果缺少 `main`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
+3. 继续执行 `git rebase {base_branch_name_str}`，然后在承载 `{base_branch_name_str}` 的工作区执行 `git merge <task branch>`。
+4. 如果 `git rebase {base_branch_name_str}` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
+5. 如果缺少 `{base_branch_name_str}`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
 6. merge 成功后，需要清理 task worktree 与本地任务分支；不要 push。
 7. 最后简要输出：提交结果、rebase 结果、merge 结果、是否还需要人工处理。
 
@@ -4272,14 +4282,15 @@ async def run_codex_completion(
     dev_log_text_list: list[str],
     work_dir_path: Path,
     worktree_path_str: str,
+    base_branch_name_str: str = "main",
 ) -> None:
     """在任务 worktree 中执行确定性的 Git 收尾与合并动作.
 
     完成阶段会在后台按顺序执行：
     `git add .` -> 如存在 staged 变更则让当前 runner 生成 Conventional Commit
-    message 并执行 `git commit`，否则跳过 commit -> `git rebase main`
-    -> 复用承载 `main` 的工作区执行 `git merge <task branch>` -> 清理 worktree/分支。
-    若 `git rebase main` 发生冲突，会自动调用 Codex 修复冲突并继续 rebase。
+    message 并执行 `git commit`，否则跳过 commit -> `git rebase <base>`
+    -> 复用承载 base 分支的工作区执行 `git merge <task branch>` -> 清理 worktree/分支。
+    若 `git rebase <base>` 发生冲突，会自动调用 Codex 修复冲突并继续 rebase。
     若合并成功，任务自动推进到 `done`；若在合并前失败，任务回退到 `changes_requested`。
 
     Args:
@@ -4291,6 +4302,7 @@ async def run_codex_completion(
         dev_log_text_list: 历史日志文本列表，用于冲突修复上下文
         work_dir_path: 保留参数；当前应为任务 worktree
         worktree_path_str: 任务对应的 git worktree 绝对路径
+        base_branch_name_str: 任务 worktree 创建与完成合并使用的基底分支
     """
     del work_dir_path
     del commit_information_source_str
@@ -4304,8 +4316,8 @@ async def run_codex_completion(
             run_account_id_str,
             "🚀 已收到完成请求，Koda 正在执行：`git add .` -> "
             "如有未提交变更则由 AI 生成规范 commit message 并执行 `git commit`，"
-            "若已提交则跳过 commit -> `git rebase main`。若 rebase 冲突，会自动调用 "
-            f"runner_kind={active_runner_kind_str} 修复；随后会在承载 `main` "
+            f"若已提交则跳过 commit -> `git rebase {base_branch_name_str}`。若 rebase 冲突，会自动调用 "
+            f"runner_kind={active_runner_kind_str} 修复；随后会在承载 `{base_branch_name_str}` "
             "的工作区完成 merge 与清理。",
             "OPTIMIZATION",
         )
@@ -4328,11 +4340,12 @@ async def run_codex_completion(
             commit_information_text_str=commit_information_text_str,
             dev_log_text_list=dev_log_text_list,
             worktree_path_str=worktree_path_str,
+            base_branch_name_str=base_branch_name_str,
         )
 
         if not completion_result.merged_to_main:
             failure_reason_text = completion_result.failure_reason_text or (
-                "Git 收尾在合并到 main 之前失败。"
+                f"Git 收尾在合并到 {base_branch_name_str} 之前失败。"
             )
             await _move_task_to_changes_requested(
                 task_id_str=task_id_str,
@@ -4352,7 +4365,7 @@ async def run_codex_completion(
                 _write_log_to_db,
                 task_id_str,
                 run_account_id_str,
-                "✅ Koda 已完成分支收尾并合并到 `main`，task worktree 与分支也已清理。任务已标记为完成。",
+                f"✅ Koda 已完成分支收尾并合并到 `{base_branch_name_str}`，task worktree 与分支也已清理。任务已标记为完成。",
                 "FIXED",
             )
             await asyncio.to_thread(_finalize_completion_in_db, task_id_str, True)
@@ -4362,13 +4375,13 @@ async def run_codex_completion(
             return
 
         cleanup_warning_text = completion_result.failure_reason_text or (
-            "分支已合并到 main，但 worktree 清理未完成。"
+            f"分支已合并到 {base_branch_name_str}，但 worktree 清理未完成。"
         )
         await asyncio.to_thread(
             _write_log_to_db,
             task_id_str,
             run_account_id_str,
-            "⚠️ Koda 已把任务分支合并到 `main`，但自动清理没有完全成功："
+            f"⚠️ Koda 已把任务分支合并到 `{base_branch_name_str}`，但自动清理没有完全成功："
             f"{cleanup_warning_text}\n"
             "任务仍会标记为完成，请按日志提示手动处理残留 worktree/branch。",
             "BUG",

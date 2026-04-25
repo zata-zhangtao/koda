@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.dsl.models.project import Project
 from backend.dsl.schemas.project_schema import (
+    ProjectBranchListSchema,
     ProjectCreateSchema,
     ProjectResponseSchema,
     ProjectUpdateSchema,
@@ -169,6 +170,46 @@ def get_project(
             detail=f"Project {project_id} not found",
         )
     return _to_response(project_obj)
+
+
+@router.get("/{project_id}/branches", response_model=ProjectBranchListSchema)
+def list_project_branches(
+    project_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> ProjectBranchListSchema:
+    """List local branches for a project repository.
+
+    Args:
+        project_id: 项目 ID
+        db_session: 数据库会话
+
+    Returns:
+        ProjectBranchListSchema: 本地分支列表与当前分支
+
+    Raises:
+        HTTPException: 项目不存在时返回 404；仓库路径无效或 Git 探测失败时返回 422
+    """
+    project_obj = ProjectService.get_project_by_id(db_session, project_id)
+    if not project_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    try:
+        repo_path_obj = Path(project_obj.repo_path)
+        local_branch_name_list = ProjectService.list_local_branch_names(repo_path_obj)
+        current_branch_name_str = ProjectService.get_current_branch_name(repo_path_obj)
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(validation_error),
+        ) from validation_error
+
+    return ProjectBranchListSchema(
+        branches=local_branch_name_list,
+        current_branch_name=current_branch_name_str,
+    )
 
 
 def _open_project_root_in_editor(

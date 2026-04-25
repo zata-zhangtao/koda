@@ -45,6 +45,7 @@
         - list_projects
         - create_project
         - get_project
+        - list_project_branches
         - open_project_in_editor
         - open_project_in_trae
         - delete_project

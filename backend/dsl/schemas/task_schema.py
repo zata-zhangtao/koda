@@ -18,6 +18,7 @@ class TaskCreateSchema(BaseModel):
     Attributes:
         task_title: 任务标题
         project_id: 关联的 Project ID（可选）
+        worktree_base_branch_name: 创建任务 worktree 与完成合并时使用的基底分支
         requirement_brief: 需求描述文本（可选）
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
     """
@@ -26,11 +27,36 @@ class TaskCreateSchema(BaseModel):
 
     task_title: str = Field(..., min_length=1, max_length=200, description="任务标题")
     project_id: str | None = Field(None, description="关联的 Project ID")
+    worktree_base_branch_name: str = Field(
+        default="main",
+        min_length=1,
+        max_length=255,
+        description="创建任务 worktree 与完成合并时使用的基底分支",
+    )
     requirement_brief: str | None = Field(None, description="需求描述文本")
     auto_confirm_prd_and_execute: bool = Field(
         default=False,
         description="PRD 生成后是否自动确认并直接进入执行",
     )
+
+    @field_validator("worktree_base_branch_name")
+    @classmethod
+    def validate_worktree_base_branch_name(cls, branch_name_str: str) -> str:
+        """Normalize the task worktree base branch name.
+
+        Args:
+            branch_name_str: Raw branch name from the API request.
+
+        Returns:
+            str: Trimmed branch name.
+
+        Raises:
+            ValueError: Raised when the branch name is empty.
+        """
+        normalized_branch_name_str = branch_name_str.strip()
+        if not normalized_branch_name_str:
+            raise ValueError("worktree_base_branch_name cannot be empty")
+        return normalized_branch_name_str
 
 
 class TaskStatusUpdateSchema(BaseModel):
@@ -64,6 +90,7 @@ class TaskUpdateSchema(BaseModel):
         task_title: 更新后的任务标题
         requirement_brief: 更新后的需求描述文本（可选）
         project_id: 更新后的关联项目 ID；仅 backlog 阶段允许改绑
+        worktree_base_branch_name: 更新后的任务 worktree 基底分支；仅 worktree 创建前允许修改
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -76,6 +103,36 @@ class TaskUpdateSchema(BaseModel):
         None,
         description="更新后的关联项目 ID；传 null 表示取消项目绑定",
     )
+    worktree_base_branch_name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="更新后的任务 worktree 基底分支；仅 worktree 创建前允许修改",
+    )
+
+    @field_validator("worktree_base_branch_name")
+    @classmethod
+    def validate_updated_worktree_base_branch_name(
+        cls,
+        branch_name_str: str | None,
+    ) -> str | None:
+        """Normalize an updated task worktree base branch name.
+
+        Args:
+            branch_name_str: Raw branch name from the API request.
+
+        Returns:
+            str | None: Trimmed branch name, or None when not provided.
+
+        Raises:
+            ValueError: Raised when the branch name is empty.
+        """
+        if branch_name_str is None:
+            return None
+        normalized_branch_name_str = branch_name_str.strip()
+        if not normalized_branch_name_str:
+            raise ValueError("worktree_base_branch_name cannot be empty")
+        return normalized_branch_name_str
 
 
 class TaskDestroySchema(BaseModel):
@@ -158,6 +215,7 @@ class TaskResponseSchema(DSLResponseSchema):
         workflow_stage: 工作流业务阶段；后台运行态由 is_codex_task_running 补充
         stage_updated_at: 最近一次进入当前工作流阶段的时间
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
+        worktree_base_branch_name: 创建任务 worktree 与完成合并时使用的基底分支
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
         business_sync_original_workflow_stage: 最近一次业务同步恢复前的原始阶段快照
         business_sync_original_lifecycle_status: 最近一次业务同步恢复前的原始生命周期快照
@@ -192,6 +250,10 @@ class TaskResponseSchema(DSLResponseSchema):
         description="最近一次 Codex 自动化输出写入时间",
     )
     worktree_path: str | None = Field(None, description="git worktree 绝对路径")
+    worktree_base_branch_name: str = Field(
+        default="main",
+        description="创建任务 worktree 与完成合并时使用的基底分支",
+    )
     requirement_brief: str | None = Field(None, description="需求描述文本")
     auto_confirm_prd_and_execute: bool = Field(
         default=False,

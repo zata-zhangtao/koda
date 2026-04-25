@@ -36,6 +36,68 @@ class TaskService:
     处理任务的创建、查询、状态更新和工作流阶段推进等业务逻辑.
     """
 
+    DEFAULT_WORKTREE_BASE_BRANCH_NAME = "main"
+
+    @staticmethod
+    def _normalize_worktree_base_branch_name(
+        raw_branch_name_str: str | None,
+    ) -> str:
+        """Normalize a task worktree base branch name.
+
+        Args:
+            raw_branch_name_str: Raw configured branch name.
+
+        Returns:
+            str: Normalized branch name, defaulting to ``main``.
+
+        Raises:
+            ValueError: Raised when Git rejects the branch name syntax.
+        """
+        normalized_branch_name_str = (
+            raw_branch_name_str or TaskService.DEFAULT_WORKTREE_BASE_BRANCH_NAME
+        ).strip()
+        if not normalized_branch_name_str:
+            normalized_branch_name_str = TaskService.DEFAULT_WORKTREE_BASE_BRANCH_NAME
+
+        from backend.dsl.services.git_worktree_service import GitWorktreeService
+
+        if not GitWorktreeService.is_valid_branch_name(normalized_branch_name_str):
+            raise ValueError(
+                f"Invalid worktree base branch name: {normalized_branch_name_str}"
+            )
+        return normalized_branch_name_str
+
+    @staticmethod
+    def _validate_worktree_base_branch_exists(
+        *,
+        repo_path_obj: Path,
+        branch_name_str: str,
+    ) -> None:
+        """Validate that a local worktree base branch exists in a repository.
+
+        Args:
+            repo_path_obj: Repository root path.
+            branch_name_str: Branch name expected to exist locally.
+
+        Raises:
+            ValueError: Raised when the branch is missing or cannot be probed.
+        """
+        from backend.dsl.services.git_worktree_service import GitWorktreeService
+
+        branch_exists_bool = GitWorktreeService.check_local_branch_exists(
+            repo_path_obj,
+            branch_name_str,
+        )
+        if branch_exists_bool is True:
+            return
+        if branch_exists_bool is False:
+            raise ValueError(
+                f"Worktree base branch '{branch_name_str}' does not exist locally."
+            )
+        raise ValueError(
+            f"Unable to verify worktree base branch '{branch_name_str}' in the linked repository."
+        )
+
     @staticmethod
     def _select_display_task_branch_name(
         canonical_task_branch_name_str: str,
@@ -117,6 +179,13 @@ class TaskService:
                 "关联项目当前绑定到错误的代码仓库。"
                 "请先把项目重绑到与已同步指纹一致的 Git remote。"
             )
+        base_branch_name_str = TaskService._normalize_worktree_base_branch_name(
+            task_obj.worktree_base_branch_name
+        )
+        TaskService._validate_worktree_base_branch_exists(
+            repo_path_obj=repo_path_obj,
+            branch_name_str=base_branch_name_str,
+        )
 
         from backend.dsl.services.git_worktree_service import GitWorktreeService
         from backend.dsl.services.worktree_branch_naming_service import (
@@ -147,11 +216,14 @@ class TaskService:
             repo_root_path=repo_path_obj,
             task_id=task_obj.id,
             task_branch_name_str=branch_naming_result_obj.branch_name_str,
+            base_branch_name_str=base_branch_name_str,
         )
         task_obj.worktree_path = str(created_worktree_path)
+        task_obj.worktree_base_branch_name = base_branch_name_str
         logger.info(
             f"Task {task_obj.id[:8]}... worktree created: {created_worktree_path} "
             f"(branch: {branch_naming_result_obj.branch_name_str}, "
+            f"base_branch: {base_branch_name_str}, "
             f"branch_naming_source: {branch_naming_result_obj.naming_source_str})"
         )
 
@@ -490,6 +562,11 @@ class TaskService:
             ValueError: 当关联的 Project 不存在时
         """
         normalized_project_id: str | None = None
+        normalized_worktree_base_branch_name_str = (
+            TaskService._normalize_worktree_base_branch_name(
+                task_create_schema.worktree_base_branch_name
+            )
+        )
         if task_create_schema.project_id:
             from backend.dsl.services.project_service import ProjectService
 
@@ -502,6 +579,10 @@ class TaskService:
                     f"Project with id {task_create_schema.project_id} not found"
                 )
             normalized_project_id = linked_project_obj.id
+            TaskService._validate_worktree_base_branch_exists(
+                repo_path_obj=Path(linked_project_obj.repo_path),
+                branch_name_str=normalized_worktree_base_branch_name_str,
+            )
 
         new_task = Task(
             run_account_id=run_account_id,
@@ -510,6 +591,7 @@ class TaskService:
             workflow_stage=WorkflowStage.BACKLOG,
             stage_updated_at=utc_now_naive(),
             project_id=normalized_project_id,
+            worktree_base_branch_name=normalized_worktree_base_branch_name_str,
             requirement_brief=task_create_schema.requirement_brief,
             auto_confirm_prd_and_execute=(
                 task_create_schema.auto_confirm_prd_and_execute
@@ -1042,6 +1124,32 @@ class TaskService:
         if task_update_schema.requirement_brief is not None:
             task_obj.requirement_brief = task_update_schema.requirement_brief
 
+        next_worktree_base_branch_name_str = (
+            task_obj.worktree_base_branch_name
+            or TaskService.DEFAULT_WORKTREE_BASE_BRANCH_NAME
+        )
+        worktree_base_branch_changed_bool = False
+        if "worktree_base_branch_name" in task_update_schema.model_fields_set:
+            normalized_next_worktree_base_branch_name_str = (
+                TaskService._normalize_worktree_base_branch_name(
+                    task_update_schema.worktree_base_branch_name
+                )
+            )
+            if (
+                normalized_next_worktree_base_branch_name_str
+                != next_worktree_base_branch_name_str
+            ):
+                if not TaskService.can_rebind_project(task_obj):
+                    raise ValueError(
+                        "Task worktree base branch is locked after start. "
+                        "Only backlog tasks without a worktree can change it."
+                    )
+                worktree_base_branch_changed_bool = True
+            next_worktree_base_branch_name_str = (
+                normalized_next_worktree_base_branch_name_str
+            )
+
+        project_changed_bool = False
         if "project_id" in task_update_schema.model_fields_set:
             normalized_next_project_id: str | None = None
             if task_update_schema.project_id:
@@ -1064,6 +1172,25 @@ class TaskService:
                         "Only backlog tasks without a worktree can change project_id."
                     )
                 task_obj.project_id = normalized_next_project_id
+                project_changed_bool = True
+
+        if (
+            worktree_base_branch_changed_bool or project_changed_bool
+        ) and task_obj.project_id:
+            from backend.dsl.services.project_service import ProjectService
+
+            linked_project_obj = ProjectService.get_project_by_id(
+                db_session,
+                task_obj.project_id,
+            )
+            if linked_project_obj is None:
+                raise ValueError(f"Project with id {task_obj.project_id} not found")
+            TaskService._validate_worktree_base_branch_exists(
+                repo_path_obj=Path(linked_project_obj.repo_path),
+                branch_name_str=next_worktree_base_branch_name_str,
+            )
+
+        task_obj.worktree_base_branch_name = next_worktree_base_branch_name_str
 
         db_session.commit()
         db_session.refresh(task_obj)

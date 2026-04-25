@@ -71,36 +71,41 @@ class SelectPendingPrdUseCase:
         normalized_pending_relative_path_str = validate_pending_prd_relative_path(
             pending_relative_path_str
         )
-        task_context = self.task_workflow_port.prepare_prd_workspace(task_id_str)
+        source_task_context = self.task_workflow_port.resolve_task_context(task_id_str)
         pending_prd_markdown_text = (
             self.prd_source_repository.read_pending_prd_markdown(
-                task_context.workspace_dir_path,
+                source_task_context.workspace_dir_path,
                 normalized_pending_relative_path_str,
             )
         )
         validate_prd_markdown_text(pending_prd_markdown_text)
+        target_task_context = self.task_workflow_port.prepare_prd_workspace(task_id_str)
         target_prd_file_name_str = build_task_prd_file_name(
-            task_id_str=task_context.task_id_str,
-            task_title_str=task_context.task_title_str,
+            task_id_str=target_task_context.task_id_str,
+            task_title_str=target_task_context.task_title_str,
             prd_markdown_text=pending_prd_markdown_text,
             reference_datetime=reference_datetime,
         )
 
         self.prd_source_repository.ensure_task_prd_absent(
-            task_context.workspace_dir_path,
-            task_context.task_id_str,
+            target_task_context.workspace_dir_path,
+            target_task_context.task_id_str,
         )
-        staged_prd_document = self.prd_source_repository.move_pending_prd_to_tasks_root(
-            task_context.workspace_dir_path,
-            normalized_pending_relative_path_str,
-            target_prd_file_name_str,
+        staged_prd_document = (
+            self.prd_source_repository.stage_pending_prd_to_tasks_root(
+                source_workspace_dir_path=source_task_context.workspace_dir_path,
+                target_workspace_dir_path=target_task_context.workspace_dir_path,
+                pending_relative_path_str=normalized_pending_relative_path_str,
+                target_file_name_str=target_prd_file_name_str,
+                pending_prd_markdown_text=pending_prd_markdown_text,
+            )
         )
         auto_started_implementation_bool = self.task_workflow_port.mark_prd_ready(
-            task_context,
+            target_task_context,
             staged_prd_document,
         )
         return PrdStagingOutcome(
-            task_id_str=task_context.task_id_str,
+            task_id_str=target_task_context.task_id_str,
             source_type=PrdSourceType.PENDING,
             staged_relative_path_str=staged_prd_document.relative_path_str,
             auto_started_implementation_bool=auto_started_implementation_bool,

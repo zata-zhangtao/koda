@@ -232,6 +232,121 @@ const REQUIREMENT_UPDATE_MARKER = "<!-- requirement-change:update -->";
 const REQUIREMENT_ABANDON_MARKER = "<!-- requirement-change:abandon -->";
 const REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->";
 const DESTROY_REASON_MIN_LENGTH = 5;
+const DEFAULT_WORKTREE_BASE_BRANCH_NAME = "main";
+const TASK_PRD_SOURCE_DRAFT_STORAGE_KEY_PREFIX = "koda:task-prd-source-draft:";
+
+interface ProjectBranchSelection {
+  branches: string[];
+  current_branch_name: string | null;
+}
+
+interface TaskPrdSourceDraftSnapshot {
+  sourceMode: PrdSourceMode;
+  pendingPrdRelativePath: string | null;
+}
+
+function isPrdSourceMode(candidateValue: unknown): candidateValue is PrdSourceMode {
+  return (
+    candidateValue === "ai_generate" ||
+    candidateValue === "pending" ||
+    candidateValue === "manual_import"
+  );
+}
+
+function buildTaskPrdSourceDraftStorageKey(taskId: string): string {
+  return `${TASK_PRD_SOURCE_DRAFT_STORAGE_KEY_PREFIX}${taskId}`;
+}
+
+function readTaskPrdSourceDraftSnapshot(
+  taskId: string | null
+): TaskPrdSourceDraftSnapshot | null {
+  if (!taskId || typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const storedDraftText = window.localStorage.getItem(
+      buildTaskPrdSourceDraftStorageKey(taskId)
+    );
+    if (!storedDraftText) {
+      return null;
+    }
+
+    const parsedDraftSnapshot = JSON.parse(storedDraftText) as {
+      sourceMode?: unknown;
+      pendingPrdRelativePath?: unknown;
+    };
+    if (!isPrdSourceMode(parsedDraftSnapshot.sourceMode)) {
+      return null;
+    }
+
+    return {
+      sourceMode: parsedDraftSnapshot.sourceMode,
+      pendingPrdRelativePath:
+        typeof parsedDraftSnapshot.pendingPrdRelativePath === "string"
+          ? parsedDraftSnapshot.pendingPrdRelativePath
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeTaskPrdSourceDraftSnapshot(
+  taskId: string,
+  draftSnapshot: TaskPrdSourceDraftSnapshot
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      buildTaskPrdSourceDraftStorageKey(taskId),
+      JSON.stringify(draftSnapshot)
+    );
+  } catch {
+    // localStorage can be unavailable in private-mode or constrained test DOMs.
+  }
+}
+
+function clearTaskPrdSourceDraftSnapshot(taskId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(buildTaskPrdSourceDraftStorageKey(taskId));
+  } catch {
+    // Ignore storage cleanup failures; server state remains authoritative.
+  }
+}
+
+function selectPreferredWorktreeBaseBranchName(
+  branchNameList: string[],
+  currentBranchName: string | null
+): string {
+  if (currentBranchName && branchNameList.includes(currentBranchName)) {
+    return currentBranchName;
+  }
+
+  if (branchNameList.includes(DEFAULT_WORKTREE_BASE_BRANCH_NAME)) {
+    return DEFAULT_WORKTREE_BASE_BRANCH_NAME;
+  }
+
+  return branchNameList[0] ?? DEFAULT_WORKTREE_BASE_BRANCH_NAME;
+}
+
+function buildBranchSelectOptionList(
+  branchNameList: string[],
+  selectedBranchName: string
+): string[] {
+  if (!selectedBranchName || branchNameList.includes(selectedBranchName)) {
+    return branchNameList;
+  }
+
+  return [selectedBranchName, ...branchNameList];
+}
 const FORCE_INTERRUPTIBLE_STAGE_SET = new Set<WorkflowStage>([
   WorkflowStage.PRD_GENERATING,
   WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
@@ -531,6 +646,8 @@ function App() {
   const committedTaskProjectFilterValueRef = useRef<string>(
     ALL_TASK_PROJECT_FILTER_VALUE
   );
+  const createRequirementProjectBranchRequestTokenRef = useRef(0);
+  const editRequirementProjectBranchRequestTokenRef = useRef(0);
   const lastRequestedTaskProjectFilterValueRef = useRef<string | null>(null);
   const currentSelectedTaskProjectFilterValueRef = useRef<string>(
     ALL_TASK_PROJECT_FILTER_VALUE
@@ -566,6 +683,8 @@ function App() {
   const [createRequirementAttachmentDraft, setCreateRequirementAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
   const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
+  const [newRequirementWorktreeBaseBranchName, setNewRequirementWorktreeBaseBranchName] =
+    useState(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
   const [
     isAutoConfirmPrdAndExecuteEnabled,
     setIsAutoConfirmPrdAndExecuteEnabled,
@@ -584,8 +703,17 @@ function App() {
   const [editRequirementTitle, setEditRequirementTitle] = useState("");
   const [editRequirementDescription, setEditRequirementDescription] = useState("");
   const [editRequirementProjectId, setEditRequirementProjectId] = useState<string | null>(null);
+  const [editRequirementWorktreeBaseBranchName, setEditRequirementWorktreeBaseBranchName] =
+    useState(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
   const [editRequirementAttachmentDraft, setEditRequirementAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
+  const [projectBranchNameListMap, setProjectBranchNameListMap] = useState<
+    Record<string, string[]>
+  >({});
+  const [projectCurrentBranchNameMap, setProjectCurrentBranchNameMap] = useState<
+    Record<string, string | null>
+  >({});
+  const [loadingProjectBranchId, setLoadingProjectBranchId] = useState<string | null>(null);
   const [feedbackInputText, setFeedbackInputText] = useState("");
   const [feedbackAttachmentDraft, setFeedbackAttachmentDraft] =
     useState<AttachmentDraft | null>(null);
@@ -667,10 +795,14 @@ function App() {
       createRequirementAttachmentInputRef.current.value = "";
     }
     setNewRequirementProjectId(nextProjectId);
+    setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
     setIsAutoConfirmPrdAndExecuteEnabled(false);
   }
 
-  function resetSelectedTaskPrdSourceDraft(): void {
+  function resetSelectedTaskPrdSourceDraft(taskIdToClear?: string | null): void {
+    if (taskIdToClear) {
+      clearTaskPrdSourceDraftSnapshot(taskIdToClear);
+    }
     setSelectedTaskPrdSourceMode("ai_generate");
     setPendingPrdFileList([]);
     setSelectedPendingPrdRelativePath(null);
@@ -684,18 +816,23 @@ function App() {
   }
 
   function openCreateRequirementPanel(): void {
-    resetCreateRequirementDraft(
-      deriveCreateRequirementProjectIdFromFilter(selectedTaskProjectFilterValue)
+    const defaultProjectId = deriveCreateRequirementProjectIdFromFilter(
+      selectedTaskProjectFilterValue
     );
+    resetCreateRequirementDraft(defaultProjectId);
     setIsCreatePanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
+    if (defaultProjectId) {
+      void handleCreateRequirementProjectChange(defaultProjectId);
+    }
   }
 
   function resetEditRequirementDraft(): void {
     setEditRequirementTitle("");
     setEditRequirementDescription("");
     setEditRequirementProjectId(null);
+    setEditRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
     setEditRequirementAttachmentDraft((previousAttachmentDraft) => {
       if (previousAttachmentDraft?.previewUrl) {
         URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
@@ -727,6 +864,112 @@ function App() {
     resetCreateRequirementDraft();
     setErrorMessage(null);
     setSuccessMessage(null);
+  }
+
+  async function loadProjectBranchOptions(
+    projectId: string
+  ): Promise<ProjectBranchSelection | null> {
+    setLoadingProjectBranchId(projectId);
+    try {
+      const projectBranchSelection = await projectApi.listBranches(projectId);
+      setProjectBranchNameListMap((previousBranchNameListMap) => ({
+        ...previousBranchNameListMap,
+        [projectId]: projectBranchSelection.branches,
+      }));
+      setProjectCurrentBranchNameMap((previousCurrentBranchNameMap) => ({
+        ...previousCurrentBranchNameMap,
+        [projectId]: projectBranchSelection.current_branch_name,
+      }));
+      return projectBranchSelection;
+    } catch (projectBranchLoadError) {
+      console.error(projectBranchLoadError);
+      setErrorMessage(
+        projectBranchLoadError instanceof Error
+          ? projectBranchLoadError.message
+          : "Failed to load project branches."
+      );
+      return null;
+    } finally {
+      setLoadingProjectBranchId((previousLoadingProjectBranchId) =>
+        previousLoadingProjectBranchId === projectId
+          ? null
+          : previousLoadingProjectBranchId
+      );
+    }
+  }
+
+  async function handleCreateRequirementProjectChange(
+    nextProjectId: string | null
+  ): Promise<void> {
+    createRequirementProjectBranchRequestTokenRef.current += 1;
+    const requestToken = createRequirementProjectBranchRequestTokenRef.current;
+    setNewRequirementProjectId(nextProjectId);
+
+    if (!nextProjectId) {
+      setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
+      return;
+    }
+
+    const cachedBranchNameList = projectBranchNameListMap[nextProjectId];
+    const cachedCurrentBranchName = projectCurrentBranchNameMap[nextProjectId] ?? null;
+    const projectBranchSelection =
+      cachedBranchNameList !== undefined
+        ? {
+            branches: cachedBranchNameList,
+            current_branch_name: cachedCurrentBranchName,
+          }
+        : await loadProjectBranchOptions(nextProjectId);
+
+    if (
+      requestToken !== createRequirementProjectBranchRequestTokenRef.current ||
+      projectBranchSelection === null
+    ) {
+      return;
+    }
+
+    setNewRequirementWorktreeBaseBranchName(
+      selectPreferredWorktreeBaseBranchName(
+        projectBranchSelection.branches,
+        projectBranchSelection.current_branch_name
+      )
+    );
+  }
+
+  async function handleEditRequirementProjectChange(
+    nextProjectId: string | null
+  ): Promise<void> {
+    editRequirementProjectBranchRequestTokenRef.current += 1;
+    const requestToken = editRequirementProjectBranchRequestTokenRef.current;
+    setEditRequirementProjectId(nextProjectId);
+
+    if (!nextProjectId) {
+      setEditRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
+      return;
+    }
+
+    const cachedBranchNameList = projectBranchNameListMap[nextProjectId];
+    const cachedCurrentBranchName = projectCurrentBranchNameMap[nextProjectId] ?? null;
+    const projectBranchSelection =
+      cachedBranchNameList !== undefined
+        ? {
+            branches: cachedBranchNameList,
+            current_branch_name: cachedCurrentBranchName,
+          }
+        : await loadProjectBranchOptions(nextProjectId);
+
+    if (
+      requestToken !== editRequirementProjectBranchRequestTokenRef.current ||
+      projectBranchSelection === null
+    ) {
+      return;
+    }
+
+    setEditRequirementWorktreeBaseBranchName(
+      selectPreferredWorktreeBaseBranchName(
+        projectBranchSelection.branches,
+        projectBranchSelection.current_branch_name
+      )
+    );
   }
 
   useEffect(() => {
@@ -774,6 +1017,7 @@ function App() {
       )
     ) {
       setNewRequirementProjectId(null);
+      setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
     }
   }, [newRequirementProjectId, projectList]);
 
@@ -783,6 +1027,7 @@ function App() {
       !projectList.some((projectItem) => projectItem.id === editRequirementProjectId)
     ) {
       setEditRequirementProjectId(null);
+      setEditRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
     }
   }, [editRequirementProjectId, projectList]);
 
@@ -1289,6 +1534,26 @@ function App() {
   const canRebindSelectedTaskProject = selectedTask
     ? canRebindTaskProject(selectedTask)
     : false;
+  const newRequirementProjectBranchNameList = newRequirementProjectId
+    ? projectBranchNameListMap[newRequirementProjectId] ?? []
+    : [];
+  const newRequirementBranchOptionList = buildBranchSelectOptionList(
+    newRequirementProjectBranchNameList,
+    newRequirementWorktreeBaseBranchName
+  );
+  const newRequirementProjectCurrentBranchName = newRequirementProjectId
+    ? projectCurrentBranchNameMap[newRequirementProjectId] ?? null
+    : null;
+  const editRequirementProjectBranchNameList = editRequirementProjectId
+    ? projectBranchNameListMap[editRequirementProjectId] ?? []
+    : [];
+  const editRequirementBranchOptionList = buildBranchSelectOptionList(
+    editRequirementProjectBranchNameList,
+    editRequirementWorktreeBaseBranchName
+  );
+  const editRequirementProjectCurrentBranchName = editRequirementProjectId
+    ? projectCurrentBranchNameMap[editRequirementProjectId] ?? null
+    : null;
   const canDestroySelectedTask = selectedTask
     ? canDestroyTask(selectedTask)
     : false;
@@ -1582,10 +1847,30 @@ function App() {
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
     setIsManualCompletionChecklistOpen(false);
-    resetSelectedTaskPrdSourceDraft();
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
     setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
+    const savedPrdSourceDraftSnapshot = readTaskPrdSourceDraftSnapshot(detailTaskId);
+    if (savedPrdSourceDraftSnapshot) {
+      setSelectedTaskPrdSourceMode(savedPrdSourceDraftSnapshot.sourceMode);
+      setSelectedPendingPrdRelativePath(
+        savedPrdSourceDraftSnapshot.pendingPrdRelativePath
+      );
+      setManualImportEntryMode("upload");
+      setManualImportPrdFile(null);
+      setManualImportPrdMarkdownText("");
+      if (
+        savedPrdSourceDraftSnapshot.sourceMode === "pending" &&
+        selectedTask !== null
+      ) {
+        void loadPendingPrdFilesForTask(
+          selectedTask,
+          savedPrdSourceDraftSnapshot.pendingPrdRelativePath
+        );
+      }
+      return;
+    }
+    resetSelectedTaskPrdSourceDraft();
   }, [detailTaskId]);
 
   useEffect(() => {
@@ -1954,7 +2239,7 @@ function App() {
 
     // On fetch failure, preserve previous state rather than wiping to empty.
     // This prevents the UI from going blank during transient server restarts
-    // (e.g. hot-reload after a task branch merges changes into main).
+    // (e.g. hot-reload after a task branch merges changes into its base branch).
     if (runAccountResult.status === "fulfilled") {
       setCurrentRunAccount(runAccountResult.value);
     }
@@ -2283,6 +2568,7 @@ function App() {
       const createdTask = await taskApi.create({
         task_title: nextRequirementTitle,
         project_id: newRequirementProjectId,
+        worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
         requirement_brief: nextRequirementBrief,
         auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
       });
@@ -2357,7 +2643,10 @@ function App() {
     }
   }
 
-  async function loadPendingPrdFilesForTask(taskItem: Task): Promise<void> {
+  async function loadPendingPrdFilesForTask(
+    taskItem: Task,
+    preferredPendingPrdRelativePath: string | null = null
+  ): Promise<void> {
     setIsPendingPrdListLoading(true);
     setErrorMessage(null);
     try {
@@ -2365,8 +2654,18 @@ function App() {
         taskItem.id
       );
       setPendingPrdFileList(pendingPrdFileListResponse.files);
+      const restoredPendingPrdRelativePath =
+        preferredPendingPrdRelativePath &&
+        pendingPrdFileListResponse.files.some(
+          (pendingPrdFile) =>
+            pendingPrdFile.relative_path === preferredPendingPrdRelativePath
+        )
+          ? preferredPendingPrdRelativePath
+          : null;
       setSelectedPendingPrdRelativePath(
-        pendingPrdFileListResponse.files[0]?.relative_path ?? null
+        restoredPendingPrdRelativePath ??
+          pendingPrdFileListResponse.files[0]?.relative_path ??
+          null
       );
     } catch (pendingPrdLoadError) {
       console.error(pendingPrdLoadError);
@@ -2396,10 +2695,25 @@ function App() {
     if (manualImportPrdInputRef.current) {
       manualImportPrdInputRef.current.value = "";
     }
+    writeTaskPrdSourceDraftSnapshot(taskItem.id, {
+      sourceMode: nextPrdSourceMode,
+      pendingPrdRelativePath: null,
+    });
 
     if (nextPrdSourceMode === "pending") {
       await loadPendingPrdFilesForTask(taskItem);
     }
+  }
+
+  function handleChangeSelectedPendingPrdRelativePath(
+    taskItem: Task,
+    nextPendingPrdRelativePath: string | null
+  ): void {
+    setSelectedPendingPrdRelativePath(nextPendingPrdRelativePath);
+    writeTaskPrdSourceDraftSnapshot(taskItem.id, {
+      sourceMode: "pending",
+      pendingPrdRelativePath: nextPendingPrdRelativePath,
+    });
   }
 
   function handleChangeManualImportEntryMode(
@@ -2471,7 +2785,7 @@ function App() {
       );
       reconcileLocalTaskSnapshot(updatedTask);
       setSelectedTaskId(updatedTask.id);
-      resetSelectedTaskPrdSourceDraft();
+      resetSelectedTaskPrdSourceDraft(updatedTask.id);
       setSuccessMessage("Pending PRD 已移动到 tasks 根目录。");
       await loadDashboardData(true);
     } catch (selectPendingPrdError) {
@@ -2511,7 +2825,7 @@ function App() {
           : await taskApi.importPrd(taskItem.id, manualImportPrdFile as File);
       reconcileLocalTaskSnapshot(updatedTask);
       setSelectedTaskId(updatedTask.id);
-      resetSelectedTaskPrdSourceDraft();
+      resetSelectedTaskPrdSourceDraft(updatedTask.id);
       setSuccessMessage("PRD 已导入到 tasks 根目录。");
       await loadDashboardData(true);
     } catch (importPrdError) {
@@ -2835,9 +3149,18 @@ function App() {
     setEditRequirementTitle(selectedTask.task_title);
     setEditRequirementDescription(selectedTaskSnapshot.summary);
     setEditRequirementProjectId(selectedTask.project_id);
+    setEditRequirementWorktreeBaseBranchName(
+      selectedTask.worktree_base_branch_name ?? DEFAULT_WORKTREE_BASE_BRANCH_NAME
+    );
     setIsEditPanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
+    if (
+      selectedTask.project_id &&
+      projectBranchNameListMap[selectedTask.project_id] === undefined
+    ) {
+      void loadProjectBranchOptions(selectedTask.project_id);
+    }
   }
 
   function handleOpenDestroyTaskModal(): void {
@@ -2875,8 +3198,17 @@ function App() {
     const summaryChanged = nextRequirementBrief !== selectedTaskSnapshot.summary;
     const attachmentChanged = editRequirementAttachmentDraft !== null;
     const projectChanged = editRequirementProjectId !== selectedTask.project_id;
+    const baseBranchChanged =
+      editRequirementWorktreeBaseBranchName !==
+      (selectedTask.worktree_base_branch_name ?? DEFAULT_WORKTREE_BASE_BRANCH_NAME);
 
-    if (!titleChanged && !summaryChanged && !attachmentChanged && !projectChanged) {
+    if (
+      !titleChanged &&
+      !summaryChanged &&
+      !attachmentChanged &&
+      !projectChanged &&
+      !baseBranchChanged
+    ) {
       closeRequirementEditor();
       return;
     }
@@ -2895,6 +3227,9 @@ function App() {
         task_title: nextRequirementTitle,
         requirement_brief: nextRequirementBrief,
         project_id: projectChanged ? editRequirementProjectId : undefined,
+        worktree_base_branch_name: baseBranchChanged
+          ? editRequirementWorktreeBaseBranchName
+          : undefined,
       });
       reconcileLocalTaskSnapshot(updatedTask);
       setSelectedTaskId(updatedTask.id);
@@ -3074,13 +3409,15 @@ function App() {
         const isManualSelfReviewOverride =
           taskItem.workflow_stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
           !hasLatestSelfReviewCyclePassed(devLogsByTaskId[taskItem.id] ?? []);
+        const completionBaseBranchName =
+          taskItem.worktree_base_branch_name || DEFAULT_WORKTREE_BASE_BRANCH_NAME;
         const completionTask = await taskApi.complete(taskItem.id);
         reconcileLocalTaskSnapshot(completionTask);
         setSelectedTaskId(completionTask.id);
         setSuccessMessage(
           isManualSelfReviewOverride
-            ? "已记录人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase main、必要时自动修复冲突、合并到 main，并清理 worktree。"
-            : "Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase main, auto-fix conflicts if needed, merge into main, and clean up the worktree."
+            ? `已记录人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase ${completionBaseBranchName}、必要时自动修复冲突、合并到 ${completionBaseBranchName}，并清理 worktree。`
+            : `Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase ${completionBaseBranchName}, auto-fix conflicts if needed, merge into ${completionBaseBranchName}, and clean up the worktree.`
         );
         await loadDashboardData(true);
         return;
@@ -4129,7 +4466,9 @@ function App() {
                   className="devflow-input devflow-input--select"
                   value={newRequirementProjectId ?? ""}
                   onChange={(changeEvent) =>
-                    setNewRequirementProjectId(changeEvent.target.value || null)
+                    void handleCreateRequirementProjectChange(
+                      changeEvent.target.value || null
+                    )
                   }
                 >
                   <option value="">-- 不关联项目 --</option>
@@ -4146,6 +4485,43 @@ function App() {
                     </option>
                   ))}
                 </select>
+
+                {newRequirementProjectId ? (
+                  <>
+                    <select
+                      className="devflow-input devflow-input--select"
+                      value={newRequirementWorktreeBaseBranchName}
+                      disabled={
+                        activeMutationName === "create" ||
+                        loadingProjectBranchId === newRequirementProjectId
+                      }
+                      onChange={(changeEvent) =>
+                        setNewRequirementWorktreeBaseBranchName(
+                          changeEvent.target.value
+                        )
+                      }
+                    >
+                      {loadingProjectBranchId === newRequirementProjectId &&
+                      newRequirementBranchOptionList.length === 0 ? (
+                        <option value={newRequirementWorktreeBaseBranchName}>
+                          Loading branches...
+                        </option>
+                      ) : null}
+                      {newRequirementBranchOptionList.map((branchName) => (
+                        <option key={branchName} value={branchName}>
+                          {branchName}
+                          {branchName === newRequirementProjectCurrentBranchName
+                            ? " (current)"
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="devflow-create-panel__hint">
+                      Worktree base branch: create task branches from this local
+                      branch instead of assuming `main`.
+                    </p>
+                  </>
+                ) : null}
 
                 <label className="devflow-create-panel__auto-execute">
                   <input
@@ -4355,6 +4731,21 @@ function App() {
                             </p>
                           </div>
                         ) : null}
+
+                        {selectedTask.project_id ? (
+                          <div className="devflow-detail__fact-card">
+                            <span className="devflow-detail__fact-label">
+                              Worktree 基底分支
+                            </span>
+                            <span className="devflow-detail__fact-value">
+                              {selectedTask.worktree_base_branch_name ||
+                                DEFAULT_WORKTREE_BASE_BRANCH_NAME}
+                            </span>
+                            <p className="devflow-detail__fact-hint">
+                              创建 task worktree 与 Complete 收尾都会使用这个分支。
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -4404,7 +4795,8 @@ function App() {
                                 activeMutationName === "prd_source"
                               }
                               onChange={(changeEvent) =>
-                                setSelectedPendingPrdRelativePath(
+                                handleChangeSelectedPendingPrdRelativePath(
+                                  selectedTask,
                                   changeEvent.target.value || null
                                 )
                               }
@@ -4612,6 +5004,56 @@ function App() {
                         </ActionButton>
                       ) : null}
 
+                      {selectedTaskStage === WorkflowStage.BACKLOG &&
+                      selectedTaskPrdSourceMode === "pending" &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
+                        <ActionButton
+                          variant="primary"
+                          busy={activeMutationName === "prd_source"}
+                          disabled={
+                            !canSubmitPrdSourceAction(
+                              selectedTaskPrdSourceMode,
+                              selectedPendingPrdRelativePath,
+                              manualImportPrdFile,
+                              manualImportEntryMode,
+                              manualImportPrdMarkdownText
+                            )
+                          }
+                          onClick={() => {
+                            void handleSelectPendingPrdSource(selectedTask);
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>{getPrdSourceActionLabel("pending")}</span>
+                        </ActionButton>
+                      ) : null}
+
+                      {selectedTaskStage === WorkflowStage.BACKLOG &&
+                      selectedTaskPrdSourceMode === "manual_import" &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
+                        <ActionButton
+                          variant="primary"
+                          busy={activeMutationName === "prd_source"}
+                          disabled={
+                            !canSubmitPrdSourceAction(
+                              selectedTaskPrdSourceMode,
+                              selectedPendingPrdRelativePath,
+                              manualImportPrdFile,
+                              manualImportEntryMode,
+                              manualImportPrdMarkdownText
+                            )
+                          }
+                          onClick={() => {
+                            void handleImportManualPrdSource(selectedTask);
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>{getPrdSourceActionLabel("manual_import")}</span>
+                        </ActionButton>
+                      ) : null}
+
                       {/* ── PRD 撰写中: 重新生成 + 确认 PRD ── */}
                       {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
                       selectedTaskPrdSourceMode === "ai_generate" &&
@@ -4639,6 +5081,56 @@ function App() {
                             <span>确认 PRD</span>
                           </ActionButton>
                         </>
+                      ) : null}
+
+                      {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
+                      selectedTaskPrdSourceMode === "pending" &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
+                        <ActionButton
+                          variant="primary"
+                          busy={activeMutationName === "prd_source"}
+                          disabled={
+                            !canSubmitPrdSourceAction(
+                              selectedTaskPrdSourceMode,
+                              selectedPendingPrdRelativePath,
+                              manualImportPrdFile,
+                              manualImportEntryMode,
+                              manualImportPrdMarkdownText
+                            )
+                          }
+                          onClick={() => {
+                            void handleSelectPendingPrdSource(selectedTask);
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>{getPrdSourceActionLabel("pending")}</span>
+                        </ActionButton>
+                      ) : null}
+
+                      {selectedTaskStage === WorkflowStage.PRD_GENERATING &&
+                      selectedTaskPrdSourceMode === "manual_import" &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+                      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
+                        <ActionButton
+                          variant="primary"
+                          busy={activeMutationName === "prd_source"}
+                          disabled={
+                            !canSubmitPrdSourceAction(
+                              selectedTaskPrdSourceMode,
+                              selectedPendingPrdRelativePath,
+                              manualImportPrdFile,
+                              manualImportEntryMode,
+                              manualImportPrdMarkdownText
+                            )
+                          }
+                          onClick={() => {
+                            void handleImportManualPrdSource(selectedTask);
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>{getPrdSourceActionLabel("manual_import")}</span>
+                        </ActionButton>
                       ) : null}
 
                       {/* ── PRD 待确认: 确认 PRD + 开始执行 ── */}
@@ -5008,7 +5500,9 @@ function App() {
                         className="devflow-input devflow-input--select"
                         value={editRequirementProjectId ?? ""}
                         onChange={(changeEvent) =>
-                          setEditRequirementProjectId(changeEvent.target.value || null)
+                          void handleEditRequirementProjectChange(
+                            changeEvent.target.value || null
+                          )
                         }
                         disabled={
                           !canRebindSelectedTaskProject ||
@@ -5029,6 +5523,44 @@ function App() {
                           </option>
                         ))}
                       </select>
+
+                      {editRequirementProjectId ? (
+                        <>
+                          <select
+                            className="devflow-input devflow-input--select"
+                            value={editRequirementWorktreeBaseBranchName}
+                            disabled={
+                              !canRebindSelectedTaskProject ||
+                              activeMutationName === "update" ||
+                              loadingProjectBranchId === editRequirementProjectId
+                            }
+                            onChange={(changeEvent) =>
+                              setEditRequirementWorktreeBaseBranchName(
+                                changeEvent.target.value
+                              )
+                            }
+                          >
+                            {loadingProjectBranchId === editRequirementProjectId &&
+                            editRequirementBranchOptionList.length === 0 ? (
+                              <option value={editRequirementWorktreeBaseBranchName}>
+                                Loading branches...
+                              </option>
+                            ) : null}
+                            {editRequirementBranchOptionList.map((branchName) => (
+                              <option key={branchName} value={branchName}>
+                                {branchName}
+                                {branchName === editRequirementProjectCurrentBranchName
+                                  ? " (current)"
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="devflow-create-panel__hint">
+                            Worktree base branch is editable only before the task has
+                            started or created a worktree.
+                          </p>
+                        </>
+                      ) : null}
 
                       <p className="devflow-create-panel__hint">
                         {canRebindSelectedTaskProject

@@ -245,10 +245,34 @@ class GitWorktreeService:
         return None
 
     @staticmethod
+    def is_valid_branch_name(branch_name_str: str) -> bool:
+        """Validate a branch name with Git's own refname parser.
+
+        Args:
+            branch_name_str: Branch name to validate.
+
+        Returns:
+            bool: True when Git accepts the branch name.
+        """
+        try:
+            completed_process = subprocess.run(
+                ["git", "check-ref-format", "--branch", branch_name_str],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return False
+        return completed_process.returncode == 0
+
+    @staticmethod
     def create_task_worktree(
         repo_root_path: Path,
         task_id: str,
         task_branch_name_str: str | None = None,
+        base_branch_name_str: str = "main",
     ) -> Path:
         """Create a task worktree using repo-local scripts when available.
 
@@ -256,6 +280,7 @@ class GitWorktreeService:
             repo_root_path: Repository root path
             task_id: Task UUID
             task_branch_name_str: Optional branch name override
+            base_branch_name_str: Existing local branch used as the worktree base
 
         Returns:
             Path: Created worktree path
@@ -272,6 +297,7 @@ class GitWorktreeService:
             repo_root_path=repo_root_path,
             task_id=task_id,
             task_branch_name_str=task_branch_name_str,
+            base_branch_name_str=base_branch_name_str,
         )
 
         try:
@@ -396,13 +422,15 @@ class GitWorktreeService:
         repo_root_path: Path,
         feature_branch_name: str,
         worktree_path: Path | None,
+        base_branch_name_str: str = "main",
     ) -> WorktreeDestroyResult:
         """Clean up a successfully merged task worktree and branch.
 
         Args:
             repo_root_path: Repository root path.
-            feature_branch_name: Task branch name already merged into ``main``.
+            feature_branch_name: Task branch name already merged into the base branch.
             worktree_path: Task worktree path, if one was recorded.
+            base_branch_name_str: Branch used as the merge target and fallback checkout.
 
         Returns:
             WorktreeDestroyResult: Cleanup execution summary after script and fallback.
@@ -428,7 +456,7 @@ class GitWorktreeService:
             cleanup_command_argument_list = [
                 str(cleanup_script_path),
                 feature_branch_name,
-                "main",
+                base_branch_name_str,
                 "--delete",
             ]
             if resolved_worktree_path is not None:
@@ -672,6 +700,7 @@ class GitWorktreeService:
         repo_root_path: Path,
         task_id: str,
         worktree_path: Path | None,
+        base_branch_name_str: str = "main",
     ) -> WorktreeDestroyResult:
         """Clean up an abandoned task worktree and branch.
 
@@ -682,6 +711,7 @@ class GitWorktreeService:
             repo_root_path: Repository root path
             task_id: Task UUID
             worktree_path: Task worktree path, if one was recorded
+            base_branch_name_str: Branch used by cleanup scripts as a fallback checkout
 
         Returns:
             WorktreeDestroyResult: Cleanup execution summary
@@ -715,7 +745,7 @@ class GitWorktreeService:
             cleanup_command_argument_list = [
                 str(cleanup_script_path),
                 registered_branch_name_for_worktree,
-                "main",
+                base_branch_name_str,
                 "--delete",
             ]
             if resolved_worktree_path is not None:
@@ -917,6 +947,7 @@ class GitWorktreeService:
         repo_root_path: Path,
         task_id: str,
         task_branch_name_str: str | None = None,
+        base_branch_name_str: str = "main",
     ) -> WorktreeCreateCommandSpec:
         """Choose the correct worktree creation command for the repository.
 
@@ -924,6 +955,7 @@ class GitWorktreeService:
             repo_root_path: Repository root path
             task_id: Task UUID
             task_branch_name_str: Optional explicit branch name
+            base_branch_name_str: Existing local branch used as the worktree base
 
         Returns:
             WorktreeCreateCommandSpec: Command and expected path information
@@ -955,6 +987,7 @@ class GitWorktreeService:
                     str(path_and_branch_script_path),
                     str(default_worktree_path),
                     resolved_task_branch_name_str,
+                    base_branch_name_str,
                 ],
                 expected_worktree_path=default_worktree_path,
                 requires_post_create_bootstrap=True,
@@ -977,6 +1010,8 @@ class GitWorktreeService:
                 command_argument_list=[
                     str(branch_only_script_path),
                     resolved_task_branch_name_str,
+                    "--base",
+                    base_branch_name_str,
                 ],
                 expected_worktree_path=None,
                 branch_name_for_lookup=resolved_task_branch_name_str,
@@ -990,7 +1025,7 @@ class GitWorktreeService:
                 str(default_worktree_path),
                 "-b",
                 resolved_task_branch_name_str,
-                "main",
+                base_branch_name_str,
             ],
             expected_worktree_path=default_worktree_path,
             requires_post_create_bootstrap=True,

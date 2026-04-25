@@ -165,6 +165,71 @@ class ProjectService:
         return command_output_str or None
 
     @staticmethod
+    def list_local_branch_names(repo_path_obj: Path) -> list[str]:
+        """List local branch names for a project repository.
+
+        Args:
+            repo_path_obj: Repository root path.
+
+        Returns:
+            list[str]: Sorted local branch names.
+
+        Raises:
+            ValueError: Raised when the repository path is invalid or Git cannot list branches.
+        """
+        normalized_repo_path_obj = repo_path_obj.expanduser().resolve()
+        if not ProjectService.is_repo_path_valid(str(normalized_repo_path_obj)):
+            raise ValueError(
+                f"Project repo_path is not valid on this machine: {normalized_repo_path_obj}"
+            )
+
+        try:
+            completed_process = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(normalized_repo_path_obj),
+                    "branch",
+                    "--list",
+                    "--format=%(refname:short)",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (FileNotFoundError, OSError, subprocess.CalledProcessError) as git_error:
+            raise ValueError(
+                f"Unable to list local branches for project repo: {normalized_repo_path_obj}"
+            ) from git_error
+
+        return sorted(
+            {
+                raw_branch_name_str.strip()
+                for raw_branch_name_str in completed_process.stdout.splitlines()
+                if raw_branch_name_str.strip()
+            }
+        )
+
+    @staticmethod
+    def get_current_branch_name(repo_path_obj: Path) -> str | None:
+        """Return the currently checked-out local branch for a project repository.
+
+        Args:
+            repo_path_obj: Repository root path.
+
+        Returns:
+            str | None: Current branch name, or None for detached HEAD/invalid paths.
+        """
+        normalized_repo_path_obj = repo_path_obj.expanduser().resolve()
+        current_branch_name_str = ProjectService._run_git_command(
+            normalized_repo_path_obj,
+            ["branch", "--show-current"],
+        )
+        return current_branch_name_str or None
+
+    @staticmethod
     def get_repo_fingerprint(repo_path_obj: Path) -> RepoFingerprint:
         """读取仓库当前的 remote 与 HEAD 指纹.
 

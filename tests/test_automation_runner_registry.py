@@ -273,6 +273,7 @@ def test_run_task_completion_forwards_commit_information_contract(
         dev_log_text_list: list[str],
         work_dir_path: Path,
         worktree_path_str: str,
+        base_branch_name_str: str = "main",
     ) -> None:
         recorded_call_dict.update(
             {
@@ -284,6 +285,7 @@ def test_run_task_completion_forwards_commit_information_contract(
                 "dev_log_text_list": dev_log_text_list,
                 "work_dir_path": work_dir_path,
                 "worktree_path_str": worktree_path_str,
+                "base_branch_name_str": base_branch_name_str,
             }
         )
 
@@ -317,6 +319,7 @@ def test_run_task_completion_forwards_commit_information_contract(
     assert recorded_call_dict["dev_log_text_list"] == ["ctx line"]
     assert recorded_call_dict["work_dir_path"] == Path("/tmp/complete-wrapper")
     assert recorded_call_dict["worktree_path_str"] == "/tmp/repo-wt-complete-wrapper"
+    assert recorded_call_dict["base_branch_name_str"] == "main"
 
 
 def test_run_codex_task_with_claude_runner_keeps_stage_flow(

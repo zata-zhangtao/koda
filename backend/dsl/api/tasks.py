@@ -2537,6 +2537,7 @@ def resume_task(
             dev_log_text_list=dev_log_text_snapshot_list,
             work_dir_path=worktree_dir_path,
             worktree_path_str=resumable_task.worktree_path,
+            base_branch_name_str=(resumable_task.worktree_base_branch_name or "main"),
         )
 
     return _hydrate_task_response(
@@ -2557,17 +2558,17 @@ def complete_task(
     顺序固定为：
     1. 在任务 worktree 中执行 `git add .`
     2. 在任务 worktree 中执行 `git commit -m "<resolved commit information>"`
-    3. 在任务 worktree 中执行 `git rebase main`
+    3. 在任务 worktree 中执行 `git rebase <worktree_base_branch_name>`
     4. 若 rebase 冲突，自动调用 Codex 修复冲突并继续 rebase
-    5. 在当前持有 `main` 分支的工作区执行 `git merge <task branch>`
+    5. 在当前持有基底分支的工作区执行 `git merge <task branch>`
     6. 清理 task worktree 与本地任务分支
 
     若任务仍处于 `self_review_in_progress` 且尚未出现最近一轮通过标记，
     接口仍允许人工显式触发 `Complete`，并会先写入一条 DevLog 留痕。
     若任务处于 `changes_requested`，表示自动化已等待人工介入；用户在
     worktree 中完成修复后也可以点击 `Complete` 直接进入 Git 收尾。
-    若在合并到 `main` 前失败，任务回退到 `changes_requested`。
-    若已成功合并到 `main` 但清理失败，任务仍会进入 `done`，同时记录人工清理提示。
+    若在合并到基底分支前失败，任务回退到 `changes_requested`。
+    若已成功合并到基底分支但清理失败，任务仍会进入 `done`，同时记录人工清理提示。
 
     Args:
         task_id: 任务 ID
@@ -2663,6 +2664,9 @@ def complete_task(
     )
     run_account_id_snapshot_str: str = completion_task.run_account_id
     worktree_path_snapshot_str: str = completion_task.worktree_path
+    base_branch_name_snapshot_str: str = (
+        completion_task.worktree_base_branch_name or "main"
+    )
 
     register_task_background_activity(task_id)
     background_tasks.add_task(
@@ -2675,6 +2679,7 @@ def complete_task(
         dev_log_text_list=dev_log_text_snapshot_list,
         work_dir_path=worktree_dir_path,
         worktree_path_str=worktree_path_snapshot_str,
+        base_branch_name_str=base_branch_name_snapshot_str,
     )
 
     completion_task.log_count = (
@@ -2952,6 +2957,7 @@ def destroy_task(
                 repo_root_path=repo_root_path,
                 task_id=task_id,
                 worktree_path=Path(worktree_path_snapshot_str),
+                base_branch_name_str=task_obj.worktree_base_branch_name or "main",
             )
         except ValueError as cleanup_error:
             raise HTTPException(

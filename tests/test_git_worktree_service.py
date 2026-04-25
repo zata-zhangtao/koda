@@ -158,14 +158,16 @@ def test_create_task_worktree_passes_task_root_to_path_aware_script(
 set -euo pipefail
 target_path="$1"
 branch_name="$2"
-printf '%s\\n%s\\n' "$target_path" "$branch_name" > "{script_capture_path}"
-git worktree add "$target_path" -b "$branch_name" main >/dev/null
+base_branch_name="$3"
+printf '%s\\n%s\\n%s\\n' "$target_path" "$branch_name" "$base_branch_name" > "{script_capture_path}"
+git worktree add "$target_path" -b "$branch_name" "$base_branch_name" >/dev/null
 """,
     )
 
     created_worktree_path = GitWorktreeService.create_task_worktree(
         repo_root_path=repo_root_path,
         task_id="12345678-task-id",
+        base_branch_name_str="main",
     )
 
     assert (
@@ -176,6 +178,7 @@ git worktree add "$target_path" -b "$branch_name" main >/dev/null
     assert script_capture_path.read_text(encoding="utf-8").splitlines() == [
         str(created_worktree_path),
         "task/12345678",
+        "main",
     ]
     assert (created_worktree_path / ".env").read_text(encoding="utf-8") == (
         source_env_file_path.read_text(encoding="utf-8")
@@ -251,6 +254,30 @@ printf '%s\\n' "$*" >> "{uv_log_path}"
     assert uv_log_path.read_text(encoding="utf-8").strip() == "sync --all-extras"
 
 
+def test_create_task_worktree_can_use_non_main_base_branch(tmp_path: Path) -> None:
+    """Raw fallback worktree creation should branch from the selected local base."""
+    repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    _run_git_command(repo_root_path, ["checkout", "-b", "develop"])
+    develop_marker_file_path = repo_root_path / "develop.txt"
+    develop_marker_file_path.write_text("develop branch only\n", encoding="utf-8")
+    _commit_all_changes(repo_root_path, "add develop marker")
+    _run_git_command(repo_root_path, ["checkout", "main"])
+
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+        base_branch_name_str="develop",
+    )
+
+    assert (
+        _run_git_command(created_worktree_path, ["symbolic-ref", "--short", "HEAD"])
+        == "task/12345678"
+    )
+    assert (created_worktree_path / "develop.txt").read_text(
+        encoding="utf-8"
+    ) == "develop branch only\n"
+
+
 def test_create_task_worktree_fails_when_post_create_bootstrap_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -268,7 +295,8 @@ def test_create_task_worktree_fails_when_post_create_bootstrap_fails(
 set -euo pipefail
 target_path="$1"
 branch_name="$2"
-git worktree add "$target_path" -b "$branch_name" main >/dev/null
+base_branch_name="${3:-main}"
+git worktree add "$target_path" -b "$branch_name" "$base_branch_name" >/dev/null
 """,
     )
 
@@ -304,9 +332,13 @@ def test_create_task_worktree_rejects_branch_only_script_outside_task_root(
         """#!/usr/bin/env bash
 set -euo pipefail
 branch_name="$1"
+base_branch_name="main"
+if [ "${2:-}" = "--base" ]; then
+  base_branch_name="$3"
+fi
 branch_short_name="${branch_name#task/}"
 target_path="../rogue/${branch_short_name}"
-git worktree add "$target_path" -b "$branch_name" main >/dev/null
+git worktree add "$target_path" -b "$branch_name" "$base_branch_name" >/dev/null
 """,
     )
 

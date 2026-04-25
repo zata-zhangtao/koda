@@ -23,7 +23,11 @@ from backend.dsl.prd_sources.domain.models import (
 class FakeTaskWorkflowPort:
     """Fake task workflow port for use-case tests."""
 
-    def __init__(self, workspace_dir_path: Path) -> None:
+    def __init__(
+        self,
+        workspace_dir_path: Path,
+        prepared_workspace_dir_path: Path | None = None,
+    ) -> None:
         """Initialize the fake workflow port."""
         self.task_context = PrdTaskContext(
             task_id_str="cf2b9461-0000-4000-8000-000000000000",
@@ -31,6 +35,14 @@ class FakeTaskWorkflowPort:
             task_title_str="导入 PRD",
             workspace_dir_path=workspace_dir_path,
             worktree_path_str=str(workspace_dir_path),
+            auto_confirm_prd_and_execute_bool=False,
+        )
+        self.prepared_task_context = PrdTaskContext(
+            task_id_str="cf2b9461-0000-4000-8000-000000000000",
+            run_account_id_str="run-account",
+            task_title_str="导入 PRD",
+            workspace_dir_path=prepared_workspace_dir_path or workspace_dir_path,
+            worktree_path_str=str(prepared_workspace_dir_path or workspace_dir_path),
             auto_confirm_prd_and_execute_bool=False,
         )
         self.marked_ready_bool = False
@@ -41,7 +53,7 @@ class FakeTaskWorkflowPort:
 
     def prepare_prd_workspace(self, task_id_str: str) -> PrdTaskContext:
         """Return the prepared fake task context."""
-        return self.task_context
+        return self.prepared_task_context
 
     def mark_prd_ready(
         self,
@@ -59,7 +71,9 @@ class FakePrdSourceRepository:
     def __init__(self) -> None:
         """Initialize the fake repository."""
         self.ensure_absent_called_bool = False
+        self.ensure_absent_workspace_dir_path: Path | None = None
         self.moved_pending_relative_path_str: str | None = None
+        self.pending_stage_call_tuple: tuple[Path, Path, str] | None = None
         self.imported_markdown_text: str | None = None
 
     def list_pending_prd_candidates(
@@ -84,6 +98,7 @@ class FakePrdSourceRepository:
     ) -> None:
         """Record conflict validation."""
         self.ensure_absent_called_bool = True
+        self.ensure_absent_workspace_dir_path = workspace_dir_path
 
     def move_pending_prd_to_tasks_root(
         self,
@@ -97,6 +112,27 @@ class FakePrdSourceRepository:
             file_name_str=target_file_name_str,
             relative_path_str=f"tasks/{target_file_name_str}",
             absolute_path=workspace_dir_path / "tasks" / target_file_name_str,
+            source_type=PrdSourceType.PENDING,
+        )
+
+    def stage_pending_prd_to_tasks_root(
+        self,
+        source_workspace_dir_path: Path,
+        target_workspace_dir_path: Path,
+        pending_relative_path_str: str,
+        target_file_name_str: str,
+        pending_prd_markdown_text: str,
+    ) -> StagedPrdDocument:
+        """Record fake cross-workspace pending staging."""
+        self.pending_stage_call_tuple = (
+            source_workspace_dir_path,
+            target_workspace_dir_path,
+            pending_relative_path_str,
+        )
+        return StagedPrdDocument(
+            file_name_str=target_file_name_str,
+            relative_path_str=f"tasks/{target_file_name_str}",
+            absolute_path=target_workspace_dir_path / "tasks" / target_file_name_str,
             source_type=PrdSourceType.PENDING,
         )
 
@@ -135,6 +171,41 @@ def test_select_pending_prd_use_case_validates_path_before_ports(
 
     assert workflow_port.marked_ready_bool is False
     assert repository.ensure_absent_called_bool is False
+
+
+def test_select_pending_prd_use_case_stages_from_source_into_prepared_workspace(
+    tmp_path: Path,
+) -> None:
+    """Pending selection should survive worktree creation changing workspace roots."""
+    source_workspace_dir_path = tmp_path / "project"
+    target_workspace_dir_path = tmp_path / "task-worktree"
+    workflow_port = FakeTaskWorkflowPort(
+        source_workspace_dir_path,
+        target_workspace_dir_path,
+    )
+    repository = FakePrdSourceRepository()
+    use_case = SelectPendingPrdUseCase(
+        task_workflow_port=workflow_port,
+        prd_source_repository=repository,
+    )
+
+    outcome = use_case.execute(
+        "cf2b9461-0000-4000-8000-000000000000",
+        "tasks/pending/manual.md",
+        reference_datetime=datetime(2026, 4, 23, 13, 5, 0),
+    )
+
+    assert repository.ensure_absent_workspace_dir_path == target_workspace_dir_path
+    assert repository.pending_stage_call_tuple == (
+        source_workspace_dir_path,
+        target_workspace_dir_path,
+        "tasks/pending/manual.md",
+    )
+    assert workflow_port.marked_ready_bool is True
+    assert outcome.source_type == PrdSourceType.PENDING
+    assert (
+        outcome.staged_relative_path_str == "tasks/20260423-130500-prd-选择已有-prd.md"
+    )
 
 
 def test_import_prd_use_case_stages_markdown_and_marks_ready(tmp_path: Path) -> None:

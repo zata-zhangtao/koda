@@ -1442,6 +1442,7 @@ def test_complete_task_skips_manual_override_log_after_self_review_passed(
         scheduled_completion_task.kwargs["commit_information_source_str"]
         == tasks_api._COMMIT_INFORMATION_SOURCE_AI_SUMMARY
     )
+    assert scheduled_completion_task.kwargs["base_branch_name_str"] == "main"
     assert not any(
         "已记录人工接管" in log_item.text_content for log_item in recorded_log_list
     )
@@ -1616,6 +1617,7 @@ def test_complete_task_allows_retry_from_changes_requested_after_completion_fail
         scheduled_completion_task.kwargs["commit_information_source_str"]
         == tasks_api._COMMIT_INFORMATION_SOURCE_REQUIREMENT_BRIEF
     )
+    assert scheduled_completion_task.kwargs["base_branch_name_str"] == "main"
 
 
 def test_complete_task_allows_manual_takeover_from_changes_requested_after_worktree_fix(
@@ -1670,6 +1672,7 @@ def test_complete_task_allows_manual_takeover_from_changes_requested_after_workt
     assert len(background_tasks.tasks) == 1
     scheduled_completion_task = background_tasks.tasks[0]
     assert scheduled_completion_task.func is tasks_api.run_codex_completion
+    assert scheduled_completion_task.kwargs["base_branch_name_str"] == "main"
     assert any(
         "用户在任务进入 `changes_requested` 后手动触发了 `Complete`" in dev_log_text
         for dev_log_text in scheduled_completion_task.kwargs["dev_log_text_list"]
@@ -2552,6 +2555,7 @@ def test_resume_task_schedules_pr_preparing_completion_with_resolved_commit_info
         scheduled_completion_task.kwargs["commit_information_source_str"]
         == tasks_api._COMMIT_INFORMATION_SOURCE_AI_SUMMARY
     )
+    assert scheduled_completion_task.kwargs["base_branch_name_str"] == "main"
 
 
 def test_list_tasks_uses_precomputed_log_counts(
@@ -2987,8 +2991,11 @@ def test_force_interrupt_task_rejects_non_running_stage(
 
 def test_update_task_rebinds_backlog_project_and_emits_audit_log(
     db_session: Session,
+    tmp_path: Path,
 ) -> None:
     """Updating a backlog task project should persist the new project and add an audit log."""
+    repo_one_root_path = _create_git_repo(tmp_path / "project-one")
+    repo_two_root_path = _create_git_repo(tmp_path / "project-two")
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -2998,12 +3005,12 @@ def test_update_task_rebinds_backlog_project_and_emits_audit_log(
     )
     project_one_obj = Project(
         display_name="project-one",
-        repo_path="/tmp/project-one",
+        repo_path=str(repo_one_root_path),
         description=None,
     )
     project_two_obj = Project(
         display_name="project-two",
-        repo_path="/tmp/project-two",
+        repo_path=str(repo_two_root_path),
         description=None,
     )
     db_session.add_all([run_account_obj, project_one_obj, project_two_obj])
@@ -3195,7 +3202,7 @@ def test_destroy_task_records_reason_and_cleans_up_started_task(
     monkeypatch.setattr(
         GitWorktreeService,
         "destroy_task_worktree",
-        lambda repo_root_path, task_id, worktree_path=None: (
+        lambda repo_root_path, task_id, worktree_path=None, **_kwargs: (
             recorded_cleanup_argument_list.append(
                 (repo_root_path, task_id, worktree_path)
             )
@@ -3327,14 +3334,16 @@ def test_destroy_task_rejects_partial_cleanup_results(
     monkeypatch.setattr(
         GitWorktreeService,
         "destroy_task_worktree",
-        lambda repo_root_path, task_id, worktree_path=None: WorktreeDestroyResult(
-            cleanup_succeeded=True,
-            worktree_removed=False,
-            branch_deleted=True,
-            output_line_list=[
-                "Repo-local cleanup script failed; falling back to force cleanup.",
-                "fatal: '/tmp/repo-wt-12345678' contains modified or untracked files, use --force to delete it",
-            ],
+        lambda repo_root_path, task_id, worktree_path=None, **_kwargs: (
+            WorktreeDestroyResult(
+                cleanup_succeeded=True,
+                worktree_removed=False,
+                branch_deleted=True,
+                output_line_list=[
+                    "Repo-local cleanup script failed; falling back to force cleanup.",
+                    "fatal: '/tmp/repo-wt-12345678' contains modified or untracked files, use --force to delete it",
+                ],
+            )
         ),
     )
 

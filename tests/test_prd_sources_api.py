@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import backend.dsl.models  # noqa: F401
 from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.project import Project
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.prd_sources.api import (
@@ -158,6 +159,91 @@ def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
     assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
     assert updated_task.lifecycle_status == TaskLifecycleStatus.OPEN
     assert background_tasks.tasks == []
+
+
+def test_select_pending_prd_file_moves_project_pending_into_created_worktree(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backlog project tasks should move pending PRDs from project root to worktree."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_root_path = tmp_path / "project-root"
+    project_root_path.mkdir()
+    worktree_root_path = tmp_path / "task-worktree"
+    existing_project_prd_directory_path = worktree_root_path / "tasks"
+    existing_project_prd_directory_path.mkdir(parents=True)
+    existing_project_prd_file_path = (
+        existing_project_prd_directory_path
+        / "20260425-135415-prd-template-asset-import.md"
+    )
+    existing_project_prd_file_path.write_text(
+        "# Historical Project PRD\n\nThis file belongs to the project, not the task.\n",
+        encoding="utf-8",
+    )
+    project_obj = Project(
+        display_name="Demo Project",
+        repo_path=str(project_root_path),
+        description=None,
+    )
+    task_obj = Task(
+        run_account=run_account_obj,
+        project=project_obj,
+        task_title="导入 PRD",
+        lifecycle_status=TaskLifecycleStatus.PENDING,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([run_account_obj, project_obj, task_obj])
+    db_session.commit()
+    db_session.refresh(task_obj)
+    _freeze_prd_filename_timestamp(monkeypatch)
+    pending_directory_path = project_root_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    pending_file_path = pending_directory_path / "manual.md"
+    pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：项目 pending PRD\n",
+        encoding="utf-8",
+    )
+
+    def fake_ensure_task_worktree_if_needed(
+        db_session: Session,
+        task_obj: Task,
+    ) -> None:
+        """Simulate task worktree creation after pending was listed from project."""
+        _ = db_session
+        worktree_root_path.mkdir(parents=True, exist_ok=True)
+        task_obj.worktree_path = str(worktree_root_path)
+
+    monkeypatch.setattr(
+        "backend.dsl.prd_sources.infrastructure.task_workflow_adapter."
+        "TaskService._ensure_task_worktree_if_needed",
+        fake_ensure_task_worktree_if_needed,
+    )
+
+    updated_task = select_pending_prd_file(
+        task_obj.id,
+        SelectPendingPrdRequestSchema(relative_path="tasks/pending/manual.md"),
+        BackgroundTasks(),
+        db_session,
+    )
+
+    staged_prd_file_path = find_task_prd_file_path(worktree_root_path, task_obj.id)
+    assert staged_prd_file_path is not None
+    assert re.fullmatch(
+        r"\d{8}-\d{6}-prd-项目-pending-prd\.md",
+        staged_prd_file_path.name,
+    )
+    assert staged_prd_file_path.read_text(encoding="utf-8").startswith("# PRD")
+    assert existing_project_prd_file_path.exists()
+    assert not pending_file_path.exists()
+    assert updated_task.worktree_path == str(worktree_root_path)
+    assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
 
 
 def test_import_prd_file_writes_tasks_root_and_marks_ready(

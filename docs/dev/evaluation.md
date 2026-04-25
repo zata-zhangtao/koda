@@ -40,7 +40,7 @@
 2. 为任务补充几条日志
 3. 点击“开始任务”，确认是否生成 PRD
 4. 检查 PRD 顶部是否同时包含 `原始需求标题` 与 `需求名称（AI 归纳）`
-5. 在任务详情选择“从 tasks/pending 选择”，确认 pending Markdown PRD 会被移动到 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
+5. 在任务详情选择“从 tasks/pending 选择”，确认详情 action 区仍显示“使用选中的 PRD”；刷新页面后仍恢复 pending 来源草稿与已选文件，再点击后确认 pending Markdown PRD 会被移动到目标 workspace 的 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
 6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，并能通过现有 PRD 面板读取
 7. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
 8. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
@@ -75,14 +75,15 @@
 3. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
 4. 对未启动的 backlog 任务点击 `Delete`，确认任务和关联日志/附件从列表中直接消失，不进入 `Changes` 归档视图
 5. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
-6. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-7. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
-8. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
-9. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
-10. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
-11. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
-12. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
-13. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
+6. 对 backlog 项目任务使用未提交的 `tasks/pending/*.md` PRD 启动，确认系统从项目仓库读取 pending 文件，创建 task worktree 后把 PRD staged 到 worktree 的 `tasks/` 根目录，并删除项目仓库里的原 pending 文件
+7. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
+8. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
+9. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+10. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
+11. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+12. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
+13. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
+14. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
 
 ### 媒体与导出
 

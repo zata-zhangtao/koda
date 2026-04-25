@@ -128,6 +128,12 @@ export interface Project {
   created_at: string;
 }
 
+/** Project local branches */
+export interface ProjectBranchList {
+  branches: string[];
+  current_branch_name: string | null;
+}
+
 /** Task 类型 */
 export interface TaskBranchHealth {
   expected_branch_name: string;
@@ -148,6 +154,7 @@ export interface Task {
   last_ai_activity_at: string | null;
   stage_updated_at: string;
   worktree_path: string | null;
+  worktree_base_branch_name: string;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
   business_sync_original_workflow_stage: string | null;

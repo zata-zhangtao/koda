@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 import uuid
@@ -24,10 +23,6 @@ from backend.dsl.prd_sources.domain.policies import (
     validate_pending_prd_relative_path,
     validate_prd_markdown_text,
 )
-
-_TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN = re.compile(r"^\d{8}-\d{6}-prd-.+\.md$")
-_TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN = re.compile(r"^prd-[0-9a-f]{8}\.md$")
-_TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN = re.compile(r"^prd-[0-9a-f]{8}-.+\.md$")
 
 
 class FilesystemPrdRepository:
@@ -134,10 +129,13 @@ class FilesystemPrdRepository:
             PrdAlreadyExistsError: If a matching PRD already exists.
         """
         tasks_directory_path = workspace_dir_path / "tasks"
-        if tasks_directory_path.exists() and any(
-            _is_task_prd_file_name(task_prd_file_path.name)
-            for task_prd_file_path in tasks_directory_path.glob("*.md")
-        ):
+        task_short_id_str = task_id_str[:8]
+        legacy_task_prd_file_path_list = []
+        if tasks_directory_path.exists():
+            legacy_task_prd_file_path_list = list(
+                tasks_directory_path.glob(f"prd-{task_short_id_str}*.md")
+            )
+        if legacy_task_prd_file_path_list:
             raise PrdAlreadyExistsError(
                 "This task already has a PRD file. Replace is not supported yet."
             )
@@ -176,6 +174,76 @@ class FilesystemPrdRepository:
             raise InvalidPrdContentError(
                 "Failed to move selected pending PRD."
             ) from os_error
+
+        return StagedPrdDocument(
+            file_name_str=target_prd_file_path.name,
+            relative_path_str=f"tasks/{target_prd_file_path.name}",
+            absolute_path=target_prd_file_path,
+            source_type=PrdSourceType.PENDING,
+        )
+
+    def stage_pending_prd_to_tasks_root(
+        self,
+        source_workspace_dir_path: Path,
+        target_workspace_dir_path: Path,
+        pending_relative_path_str: str,
+        target_file_name_str: str,
+        pending_prd_markdown_text: str,
+    ) -> StagedPrdDocument:
+        """Stage a pending PRD into a target workspace and remove the source file.
+
+        This supports backlog tasks whose pending files are listed from the
+        project repository before a task worktree exists. Once staging starts,
+        the task worktree may become the target workspace, so source and target
+        are not always the same directory.
+
+        Args:
+            source_workspace_dir_path: Workspace containing the pending PRD.
+            target_workspace_dir_path: Workspace receiving the staged PRD.
+            pending_relative_path_str: Workspace-relative pending PRD path.
+            target_file_name_str: Target task PRD filename.
+            pending_prd_markdown_text: Validated Markdown content read from source.
+
+        Returns:
+            StagedPrdDocument: Staged PRD metadata.
+        """
+        if source_workspace_dir_path.resolve() == target_workspace_dir_path.resolve():
+            return self.move_pending_prd_to_tasks_root(
+                workspace_dir_path=target_workspace_dir_path,
+                pending_relative_path_str=pending_relative_path_str,
+                target_file_name_str=target_file_name_str,
+            )
+
+        source_pending_file_path = self._resolve_pending_prd_path(
+            source_workspace_dir_path,
+            pending_relative_path_str,
+        )
+        target_prd_file_path = self._resolve_target_prd_path(
+            target_workspace_dir_path,
+            target_file_name_str,
+        )
+        if target_prd_file_path.exists():
+            raise PrdAlreadyExistsError("Target PRD file already exists.")
+
+        validate_prd_markdown_text(pending_prd_markdown_text)
+        target_prd_file_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_prd_file_path = target_prd_file_path.with_name(
+            f".{target_prd_file_path.name}.tmp-{uuid.uuid4().hex}"
+        )
+        try:
+            temporary_prd_file_path.write_text(
+                pending_prd_markdown_text,
+                encoding="utf-8",
+            )
+            temporary_prd_file_path.replace(target_prd_file_path)
+            source_pending_file_path.unlink()
+        except OSError as os_error:
+            raise InvalidPrdContentError(
+                "Failed to stage selected pending PRD."
+            ) from os_error
+        finally:
+            if temporary_prd_file_path.exists():
+                temporary_prd_file_path.unlink(missing_ok=True)
 
         return StagedPrdDocument(
             file_name_str=target_prd_file_path.name,
@@ -306,12 +374,3 @@ def _is_relative_to(candidate_path: Path, parent_path: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def _is_task_prd_file_name(file_name_str: str) -> bool:
-    """Return whether a filename looks like a task PRD file."""
-    return bool(
-        _TASK_PRD_TIMESTAMPED_FILE_NAME_PATTERN.fullmatch(file_name_str)
-        or _TASK_PRD_LEGACY_FIXED_FILE_NAME_PATTERN.fullmatch(file_name_str)
-        or _TASK_PRD_LEGACY_SEMANTIC_FILE_NAME_PATTERN.fullmatch(file_name_str)
-    )
