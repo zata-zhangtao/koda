@@ -948,9 +948,9 @@ def test_app_exposes_abandon_action_for_abandoned_status() -> None:
         "async function handleAbandonRequirement(taskItem: Task): Promise<void>"
         in app_source_text
     )
-    assert (
-        "taskApi.updateStatus(taskItem.id, TaskLifecycleStatus.ABANDONED)"
-        in app_source_text
+    assert re.search(
+        r"taskApi\.updateStatus\(\s*taskItem\.id,\s*TaskLifecycleStatus\.ABANDONED\s*\)",
+        app_source_text,
     )
     assert "buildRequirementAbandonLog(" in app_source_text
     assert "<span>Abandon</span>" in app_source_text
