@@ -9,7 +9,10 @@ from backend.dsl.prd_sources.application.ports import (
     PrdSourceRepositoryPort,
     TaskWorkflowPort,
 )
-from backend.dsl.prd_sources.domain.errors import InvalidPrdContentError
+from backend.dsl.prd_sources.domain.errors import (
+    InvalidPrdContentError,
+    PendingPrdNotFoundError,
+)
 from backend.dsl.prd_sources.domain.models import (
     PendingPrdCandidate,
     PrdSourceType,
@@ -39,7 +42,9 @@ class ListPendingPrdFilesUseCase:
         Returns:
             list[PendingPrdCandidate]: Pending PRD files.
         """
-        task_context = self.task_workflow_port.resolve_task_context(task_id_str)
+        task_context = self.task_workflow_port.resolve_pending_source_context(
+            task_id_str
+        )
         return self.prd_source_repository.list_pending_prd_candidates(
             task_context.workspace_dir_path,
         )
@@ -71,15 +76,25 @@ class SelectPendingPrdUseCase:
         normalized_pending_relative_path_str = validate_pending_prd_relative_path(
             pending_relative_path_str
         )
-        source_task_context = self.task_workflow_port.resolve_task_context(task_id_str)
-        pending_prd_markdown_text = (
-            self.prd_source_repository.read_pending_prd_markdown(
-                source_task_context.workspace_dir_path,
-                normalized_pending_relative_path_str,
-            )
+        source_task_context = self.task_workflow_port.resolve_pending_source_context(
+            task_id_str
         )
-        validate_prd_markdown_text(pending_prd_markdown_text)
         target_task_context = self.task_workflow_port.prepare_prd_workspace(task_id_str)
+        try:
+            pending_prd_markdown_text = (
+                self.prd_source_repository.read_pending_prd_markdown(
+                    target_task_context.workspace_dir_path,
+                    normalized_pending_relative_path_str,
+                )
+            )
+        except PendingPrdNotFoundError:
+            pending_prd_markdown_text = (
+                self.prd_source_repository.read_pending_prd_markdown(
+                    source_task_context.workspace_dir_path,
+                    normalized_pending_relative_path_str,
+                )
+            )
+        validate_prd_markdown_text(pending_prd_markdown_text)
         target_prd_file_name_str = build_task_prd_file_name(
             task_id_str=target_task_context.task_id_str,
             task_title_str=target_task_context.task_title_str,

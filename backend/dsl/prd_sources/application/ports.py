@@ -68,6 +68,9 @@ class TaskWorkflowPort(Protocol):
     def resolve_task_context(self, task_id_str: str) -> PrdTaskContext:
         """Resolve task metadata and its effective workspace."""
 
+    def resolve_pending_source_context(self, task_id_str: str) -> PrdTaskContext:
+        """Resolve task metadata and the workspace that lists pending templates."""
+
     def prepare_prd_workspace(self, task_id_str: str) -> PrdTaskContext:
         """Prepare the workspace needed for staging a PRD."""
 

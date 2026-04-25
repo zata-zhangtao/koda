@@ -9,6 +9,7 @@
 **修订记录**：
 - 2026-04-20 重新规划后端为 DSL 内领域切片式简洁架构，禁止继续在 `backend/dsl/services/` 下平铺新增 PRD source service。
 - 2026-04-20 补充“手动导入 PRD”支持直接粘贴 Markdown 文本与 `.md` 文件，并新增文本导入 API 与前端粘贴入口。
+- 2026-04-26 明确项目仓库 `tasks/pending` 是模板池；pending staging 应移动 task worktree 内的 pending 副本，项目模板不被删除。
 
 ## 背景
 
@@ -20,7 +21,7 @@
 
 1. 保留现有 AI 生成 PRD 的默认能力，不改变当前生成 PRD 的主路径。
 2. 新增从 `tasks/pending` 列出并选择 Markdown PRD 的能力。
-3. 选择 pending PRD 后，将该文件从 `tasks/pending/` 移动到同一任务工作目录的 `tasks/` 根目录。
+3. 选择 pending PRD 后，将 task worktree 内的同名文件从 `tasks/pending/` 移动到该 worktree 的 `tasks/` 根目录；项目仓库中的 pending 模板保留不变。
 4. 新增手动导入 PRD 的能力，将上传文件或粘贴的 Markdown 内容写入任务工作目录的 `tasks/` 根目录。
 5. pending 选择和手动导入都必须生成或修正为现有任务专属 PRD 文件名合同：`tasks/prd-{task_id[:8]}-<requirement-slug>.md`。
 6. 导入或移动完成后，任务应进入现有 PRD ready 后续链路，继续复用当前 PRD 预览、结构化待确认问题、确认 PRD、开始执行、自检与测试流程。
@@ -38,7 +39,7 @@
 ## 用户故事
 
 1. 作为用户，我可以继续按原方式创建需求并点击“开始任务”，让 AI 自动生成 PRD。
-2. 作为用户，我可以把已写好的 Markdown PRD 放入 `tasks/pending`，在 UI 中选择它并启动任务，系统会把它移动到 `tasks/` 根目录并进入 PRD 确认。
+2. 作为用户，我可以把已写好的 Markdown PRD 放入项目仓库的 `tasks/pending` 模板池，在 UI 中选择它并启动任务；系统会在 task worktree 中把同名 pending 副本移动到 `tasks/` 根目录并进入 PRD 确认。
 3. 作为用户，我可以从本机选择一个 Markdown PRD 文件上传，系统把内容导入到 `tasks/` 根目录并进入 PRD 确认。
 4. 作为用户，我可以直接在 UI 中粘贴 PRD Markdown，系统把内容导入到 `tasks/` 根目录并进入 PRD 确认。
 5. 作为维护者，我可以在 `backend/dsl/prd_sources/` 内看到该能力的 API、用例、领域规则和基础设施适配器，而不是在 `api/tasks.py` 与 `services/` 平铺文件之间追踪业务逻辑。
@@ -119,13 +120,14 @@ backend/dsl/prd_sources/
 | 来源 | 行为 |
 | --- | --- |
 | AI 生成 | 保持当前流程：任务进入 `prd_generating`，runner 生成 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` |
-| Pending 选择 | 从 `tasks/pending/*.md` 中选择一个文件，后端移动到 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` |
+| Pending 选择 | 从项目仓库模板池的 `tasks/pending/*.md` 中选择一个文件；后端在 task worktree 中移动同名 pending 副本到 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`，若 worktree 缺少副本则把模板内容写入 worktree 的 `tasks/` 根目录 |
 | 手动导入 | 前端上传 `.md` 文件，或直接粘贴 Markdown 文本 / `.md` 文件；后端按对应入口校验后写入 `tasks/prd-{task_id[:8]}-<requirement-slug>.md` |
 
 ### Pending PRD 列表
 
-- 后端只列出任务有效工作目录下的 `tasks/pending/*.md`。
-- 任务有效工作目录沿用现有优先级：任务 worktree > 关联项目仓库根 > Koda 仓库根目录。
+- 项目关联任务的 pending 列表来自项目仓库根目录下的 `tasks/pending/*.md` 模板池，即使任务已经存在 worktree。
+- 非项目任务继续从任务有效工作目录下的 `tasks/pending/*.md` 列表读取候选。
+- 任务有效工作目录沿用现有优先级：任务 worktree > Koda 仓库根目录。
 - 当 `tasks/pending` 不存在时，接口返回空列表，不报错。
 - 列表项至少包含 `file_name`、`relative_path`、`size_bytes`、`updated_at` 和可选标题预览。
 - `relative_path` 必须由后端生成，前端不得传任意绝对路径。
@@ -137,7 +139,8 @@ backend/dsl/prd_sources/
 - 目标文件名通过领域策略生成，最终必须满足 `tasks/prd-{task_id[:8]}-<requirement-slug>.md`。
 - slug 优先使用 PRD 内的 `需求名称（AI 归纳）`，其次使用 `原始需求标题`，最后回退到任务标题。
 - 如果目标任务已经存在当前 PRD 文件，首版应拒绝覆盖并返回 409，避免误删用户确认中的 PRD。
-- pending 选择必须使用移动语义；移动成功后源文件不再留在 `tasks/pending`。
+- pending 选择必须在 task worktree 内使用移动语义；移动成功后 worktree 中的同名源文件不再留在 `tasks/pending`。
+- 如果 task worktree 中没有同名 pending 副本，则允许把项目模板内容写入 worktree 的 `tasks/` 根目录作为兼容 fallback，但不得删除项目仓库中的 pending 模板。
 - 手动导入使用写入语义；不会尝试删除用户本机原始文件。
 - 所有 Markdown 读取/写入必须显式使用 `encoding="utf-8"`。
 
@@ -199,7 +202,7 @@ backend/dsl/prd_sources/
 - pending/import 相关 route 不直接添加到 `backend/dsl/api/tasks.py`。
 - `backend/dsl/prd_sources/domain/` 不导入 FastAPI、SQLAlchemy ORM model、真实文件系统 adapter 或前端类型。
 - `tasks/pending` 不存在时，pending 列表接口返回空列表。
-- `tasks/pending/example.md` 被选择后，源文件从 `tasks/pending` 消失，并在 `tasks/prd-{task_id[:8]}-<slug>.md` 出现。
+- `tasks/pending/example.md` 被选择后，task worktree 内的源文件从 `tasks/pending` 消失，并在该 worktree 的 `tasks/prd-{task_id[:8]}-<slug>.md` 出现；项目仓库中的 pending 模板仍保留。
 - 手动导入 `.md` 文件或粘贴 Markdown 文本 / `.md` 文件后，目标 PRD 出现在 `tasks/prd-{task_id[:8]}-<slug>.md`，且内容与导入内容一致。
 - pending/import 成功后，普通模式任务进入 `prd_waiting_confirmation`，前端能通过现有 PRD 面板读取内容。
 - pending/import 成功后，自动模式任务与现有自动确认策略一致，直接进入实现链路。

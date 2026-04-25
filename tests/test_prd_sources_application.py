@@ -51,6 +51,10 @@ class FakeTaskWorkflowPort:
         """Return the fake task context."""
         return self.task_context
 
+    def resolve_pending_source_context(self, task_id_str: str) -> PrdTaskContext:
+        """Return the fake pending source task context."""
+        return self.task_context
+
     def prepare_prd_workspace(self, task_id_str: str) -> PrdTaskContext:
         """Return the prepared fake task context."""
         return self.prepared_task_context

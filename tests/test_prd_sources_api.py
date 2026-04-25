@@ -124,6 +124,56 @@ def test_list_pending_prd_files_returns_empty_when_directory_missing(
     assert response_schema.files == []
 
 
+def test_list_pending_prd_files_prefers_project_repo_when_worktree_exists(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Project tasks should list pending PRDs from project repo, not worktree."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_root_path = tmp_path / "project-root"
+    worktree_root_path = tmp_path / "task-worktree"
+    project_pending_directory_path = project_root_path / "tasks" / "pending"
+    worktree_pending_directory_path = worktree_root_path / "tasks" / "pending"
+    project_pending_directory_path.mkdir(parents=True)
+    worktree_pending_directory_path.mkdir(parents=True)
+    (project_pending_directory_path / "project.md").write_text(
+        "# Project Pending\n",
+        encoding="utf-8",
+    )
+    (worktree_pending_directory_path / "worktree.md").write_text(
+        "# Worktree Pending\n",
+        encoding="utf-8",
+    )
+    project_obj = Project(
+        display_name="Demo Project",
+        repo_path=str(project_root_path),
+        description=None,
+    )
+    task_obj = Task(
+        run_account=run_account_obj,
+        project=project_obj,
+        task_title="导入 PRD",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+        worktree_path=str(worktree_root_path),
+    )
+    db_session.add_all([run_account_obj, project_obj, task_obj])
+    db_session.commit()
+    db_session.refresh(task_obj)
+
+    response_schema = list_pending_prd_files(task_obj.id, db_session)
+
+    assert [pending_file.file_name for pending_file in response_schema.files] == [
+        "project.md"
+    ]
+
+
 def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
     db_session: Session,
     tmp_path: Path,
@@ -218,6 +268,12 @@ def test_select_pending_prd_file_moves_project_pending_into_created_worktree(
         """Simulate task worktree creation after pending was listed from project."""
         _ = db_session
         worktree_root_path.mkdir(parents=True, exist_ok=True)
+        worktree_pending_directory_path = worktree_root_path / "tasks" / "pending"
+        worktree_pending_directory_path.mkdir(parents=True, exist_ok=True)
+        (worktree_pending_directory_path / "manual.md").write_text(
+            "# PRD\n\n**需求名称（AI 归纳）**：项目 pending PRD\n",
+            encoding="utf-8",
+        )
         task_obj.worktree_path = str(worktree_root_path)
 
     monkeypatch.setattr(
@@ -241,8 +297,132 @@ def test_select_pending_prd_file_moves_project_pending_into_created_worktree(
     )
     assert staged_prd_file_path.read_text(encoding="utf-8").startswith("# PRD")
     assert existing_project_prd_file_path.exists()
-    assert not pending_file_path.exists()
+    assert pending_file_path.exists()
+    assert not (worktree_root_path / "tasks" / "pending" / "manual.md").exists()
     assert updated_task.worktree_path == str(worktree_root_path)
+    assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
+
+
+def test_select_pending_prd_file_moves_existing_worktree_pending(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Existing worktrees should move their pending copy and preserve project templates."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_root_path = tmp_path / "project-root"
+    project_root_path.mkdir()
+    worktree_root_path = tmp_path / "task-worktree"
+    project_obj = Project(
+        display_name="Demo Project",
+        repo_path=str(project_root_path),
+        description=None,
+    )
+    task_obj = Task(
+        run_account=run_account_obj,
+        project=project_obj,
+        task_title="导入 PRD",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+        worktree_path=str(worktree_root_path),
+    )
+    db_session.add_all([run_account_obj, project_obj, task_obj])
+    db_session.commit()
+    db_session.refresh(task_obj)
+    _freeze_prd_filename_timestamp(monkeypatch)
+
+    project_pending_directory_path = project_root_path / "tasks" / "pending"
+    project_pending_directory_path.mkdir(parents=True)
+    project_pending_file_path = project_pending_directory_path / "manual.md"
+    project_pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：项目 pending PRD\n",
+        encoding="utf-8",
+    )
+    worktree_pending_directory_path = worktree_root_path / "tasks" / "pending"
+    worktree_pending_directory_path.mkdir(parents=True)
+    worktree_pending_file_path = worktree_pending_directory_path / "manual.md"
+    worktree_pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：旧 worktree pending 副本\n",
+        encoding="utf-8",
+    )
+
+    updated_task = select_pending_prd_file(
+        task_obj.id,
+        SelectPendingPrdRequestSchema(relative_path="tasks/pending/manual.md"),
+        BackgroundTasks(),
+        db_session,
+    )
+
+    staged_prd_file_path = find_task_prd_file_path(worktree_root_path, task_obj.id)
+    assert staged_prd_file_path is not None
+    assert "旧 worktree pending 副本" in staged_prd_file_path.read_text(
+        encoding="utf-8"
+    )
+    assert project_pending_file_path.exists()
+    assert not worktree_pending_file_path.exists()
+    assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
+
+
+def test_select_pending_prd_file_copies_project_template_when_worktree_missing(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing worktree pending files should fall back to the project template."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_root_path = tmp_path / "project-root"
+    project_root_path.mkdir()
+    worktree_root_path = tmp_path / "task-worktree"
+    (worktree_root_path / "tasks").mkdir(parents=True)
+    project_obj = Project(
+        display_name="Demo Project",
+        repo_path=str(project_root_path),
+        description=None,
+    )
+    task_obj = Task(
+        run_account=run_account_obj,
+        project=project_obj,
+        task_title="导入 PRD",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+        worktree_path=str(worktree_root_path),
+    )
+    db_session.add_all([run_account_obj, project_obj, task_obj])
+    db_session.commit()
+    db_session.refresh(task_obj)
+    _freeze_prd_filename_timestamp(monkeypatch)
+
+    project_pending_directory_path = project_root_path / "tasks" / "pending"
+    project_pending_directory_path.mkdir(parents=True)
+    project_pending_file_path = project_pending_directory_path / "manual.md"
+    project_pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：项目 pending PRD\n",
+        encoding="utf-8",
+    )
+
+    updated_task = select_pending_prd_file(
+        task_obj.id,
+        SelectPendingPrdRequestSchema(relative_path="tasks/pending/manual.md"),
+        BackgroundTasks(),
+        db_session,
+    )
+
+    staged_prd_file_path = find_task_prd_file_path(worktree_root_path, task_obj.id)
+    assert staged_prd_file_path is not None
+    assert "项目 pending PRD" in staged_prd_file_path.read_text(encoding="utf-8")
+    assert project_pending_file_path.exists()
     assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
 
 

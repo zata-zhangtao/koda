@@ -62,6 +62,23 @@ class SqlAlchemyTaskWorkflowAdapter:
         workspace_dir_path = self._resolve_effective_work_dir_path(task_obj)
         return self._build_context(task_obj, workspace_dir_path)
 
+    def resolve_pending_source_context(self, task_id_str: str) -> PrdTaskContext:
+        """Resolve the workspace that lists selectable pending PRD templates.
+
+        Project-linked tasks list pending templates from the project repository,
+        even after a task worktree exists. Staging still happens inside the
+        task worktree.
+
+        Args:
+            task_id_str: Task UUID string.
+
+        Returns:
+            PrdTaskContext: Task context with pending template workspace.
+        """
+        task_obj = self._get_task_or_raise(task_id_str)
+        workspace_dir_path = self._resolve_pending_source_work_dir_path(task_obj)
+        return self._build_context(task_obj, workspace_dir_path)
+
     def prepare_prd_workspace(self, task_id_str: str) -> PrdTaskContext:
         """Prepare a task workspace without starting PRD generation.
 
@@ -159,18 +176,36 @@ class SqlAlchemyTaskWorkflowAdapter:
             if worktree_dir_path.exists():
                 return worktree_dir_path
 
-        if task_obj.project_id:
-            project_obj = (
-                self._db_session.query(Project)
-                .filter(Project.id == task_obj.project_id)
-                .first()
-            )
-            if project_obj is not None:
-                project_repo_path = Path(project_obj.repo_path)
-                if project_repo_path.exists():
-                    return project_repo_path
+        project_repo_path = self._resolve_project_repo_path(task_obj)
+        if project_repo_path is not None:
+            return project_repo_path
 
         return config.BASE_DIR
+
+    def _resolve_pending_source_work_dir_path(self, task_obj: Task) -> Path:
+        """Resolve the workspace that contains selectable pending PRDs."""
+        project_repo_path = self._resolve_project_repo_path(task_obj)
+        if project_repo_path is not None:
+            return project_repo_path
+        return self._resolve_effective_work_dir_path(task_obj)
+
+    def _resolve_project_repo_path(self, task_obj: Task) -> Path | None:
+        """Resolve a linked project's repository path when available."""
+        if not task_obj.project_id:
+            return None
+
+        project_obj = (
+            self._db_session.query(Project)
+            .filter(Project.id == task_obj.project_id)
+            .first()
+        )
+        if project_obj is None:
+            return None
+
+        project_repo_path = Path(project_obj.repo_path)
+        if not project_repo_path.exists():
+            return None
+        return project_repo_path
 
     def _build_context(
         self, task_obj: Task, workspace_dir_path: Path

@@ -101,7 +101,7 @@ backend/dsl/<domain>/
 3. 默认 PRD 来源是 AI 生成：`run_codex_prd` 调起当前配置 runner（`codex` / `claude`）生成 PRD，成功后按任务策略分流：
    - 默认：推进到 `prd_waiting_confirmation`，等待用户确认
    - 自动模式（`auto_confirm_prd_and_execute=true`）：直接推进到 `implementation_in_progress` 并启动实现链路
-4. 用户也可以在任务详情中选择非 AI 来源：从 `tasks/pending/*.md` 选择 PRD，或手动上传 / 粘贴 Markdown PRD。前端会保留每个 task 的 PRD 来源草稿，且 action 区会按当前来源显示“开始任务 / 使用选中的 PRD / 导入 PRD”，避免选择 pending 后主 CTA 消失。pending PRD 会先从当前有效 workspace 读取；如果 staging 过程中为 backlog 项目任务新建了 worktree，则把已读取的 Markdown 写入目标 worktree 的 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md`，并删除原 `tasks/pending/` 文件。手动导入也写入同一目标路径，然后进入与 AI 生成一致的 PRD ready 后续链路。
+4. 用户也可以在任务详情中选择非 AI 来源：从 `tasks/pending/*.md` 选择 PRD，或手动上传 / 粘贴 Markdown PRD。前端会保留每个 task 的 PRD 来源草稿，且 action 区会按当前来源显示“开始任务 / 使用选中的 PRD / 导入 PRD”，避免选择 pending 后主 CTA 消失。项目任务的 pending 列表来自项目仓库模板池；staging 时会在目标 task worktree 内把同名 `tasks/pending/*.md` 移动到 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md`。如果 worktree 中没有该 pending 副本，则把项目模板内容写入 worktree 的 `tasks/` 根目录，但不删除项目仓库里的 pending 模板。手动导入也写入同一目标路径，然后进入与 AI 生成一致的 PRD ready 后续链路。
 5. 系统会为每次阶段切换维护 `stage_updated_at`，并在 `prd_waiting_confirmation` / `changes_requested` 上通过统一通知服务与后台扫描器计算停滞提醒
 6. 点击“开始执行”，后端进入 `implementation_in_progress`
 7. `run_codex_task` 调起当前配置 runner 完成实现，成功后推进到 `self_review_in_progress`

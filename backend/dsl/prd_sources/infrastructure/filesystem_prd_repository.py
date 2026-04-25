@@ -190,19 +190,19 @@ class FilesystemPrdRepository:
         target_file_name_str: str,
         pending_prd_markdown_text: str,
     ) -> StagedPrdDocument:
-        """Stage a pending PRD into a target workspace and remove the source file.
+        """Stage a pending PRD into the target workspace.
 
-        This supports backlog tasks whose pending files are listed from the
-        project repository before a task worktree exists. Once staging starts,
-        the task worktree may become the target workspace, so source and target
-        are not always the same directory.
+        Project pending files are templates. When the task worktree contains the
+        selected pending file, staging moves that worktree copy into ``tasks/``.
+        If the worktree copy is missing, staging writes the already-read
+        Markdown into the target root without deleting the project template.
 
         Args:
-            source_workspace_dir_path: Workspace containing the pending PRD.
+            source_workspace_dir_path: Workspace containing the template PRD.
             target_workspace_dir_path: Workspace receiving the staged PRD.
             pending_relative_path_str: Workspace-relative pending PRD path.
             target_file_name_str: Target task PRD filename.
-            pending_prd_markdown_text: Validated Markdown content read from source.
+            pending_prd_markdown_text: Validated Markdown content read earlier.
 
         Returns:
             StagedPrdDocument: Staged PRD metadata.
@@ -214,10 +214,6 @@ class FilesystemPrdRepository:
                 target_file_name_str=target_file_name_str,
             )
 
-        source_pending_file_path = self._resolve_pending_prd_path(
-            source_workspace_dir_path,
-            pending_relative_path_str,
-        )
         target_prd_file_path = self._resolve_target_prd_path(
             target_workspace_dir_path,
             target_file_name_str,
@@ -225,18 +221,28 @@ class FilesystemPrdRepository:
         if target_prd_file_path.exists():
             raise PrdAlreadyExistsError("Target PRD file already exists.")
 
+        try:
+            target_pending_file_path = self._resolve_pending_prd_path(
+                target_workspace_dir_path,
+                pending_relative_path_str,
+            )
+        except PendingPrdNotFoundError:
+            target_pending_file_path = None
+
         validate_prd_markdown_text(pending_prd_markdown_text)
         target_prd_file_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_prd_file_path = target_prd_file_path.with_name(
             f".{target_prd_file_path.name}.tmp-{uuid.uuid4().hex}"
         )
         try:
-            temporary_prd_file_path.write_text(
-                pending_prd_markdown_text,
-                encoding="utf-8",
-            )
-            temporary_prd_file_path.replace(target_prd_file_path)
-            source_pending_file_path.unlink()
+            if target_pending_file_path is not None:
+                target_pending_file_path.replace(target_prd_file_path)
+            else:
+                temporary_prd_file_path.write_text(
+                    pending_prd_markdown_text,
+                    encoding="utf-8",
+                )
+                temporary_prd_file_path.replace(target_prd_file_path)
         except OSError as os_error:
             raise InvalidPrdContentError(
                 "Failed to stage selected pending PRD."

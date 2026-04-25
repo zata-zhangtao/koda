@@ -75,7 +75,7 @@
 3. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
 4. 对未启动的 backlog 任务点击 `Delete`，确认任务和关联日志/附件从列表中直接消失，不进入 `Changes` 归档视图
 5. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
-6. 对 backlog 项目任务使用未提交的 `tasks/pending/*.md` PRD 启动，确认系统从项目仓库读取 pending 文件，创建 task worktree 后把 PRD staged 到 worktree 的 `tasks/` 根目录，并删除项目仓库里的原 pending 文件
+6. 对 backlog 项目任务使用 `tasks/pending/*.md` PRD 启动，确认 pending 列表来自项目仓库模板池；创建或复用 task worktree 后，系统会把 worktree 中同名 pending 副本移动到 worktree 的 `tasks/` 根目录，项目仓库里的 pending 模板仍保留；如果 worktree 中没有同名副本，则只把项目模板内容写入 worktree 的 `tasks/` 根目录
 7. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
 8. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
 9. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
