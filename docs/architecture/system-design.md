@@ -70,7 +70,7 @@ flowchart LR
 - `runners/registry.py`：Runner 注册中心与配置解析
 - `runners/codex_cli_runner.py`、`runners/claude_cli_runner.py`：CLI 适配器
 
-当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。`worktree_path` 写入任务前，系统还会补齐基础环境准备，包括复制仓库内 `.env*` 文件、按现有策略处理前端依赖，以及在存在 `pyproject.toml` 时执行 `uv sync --all-extras`。
+当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。`worktree_path` 写入任务前，系统还会补齐基础环境准备：默认把仓库内 `.env*`、前端 `node_modules` 和 Python `.venv` 从源仓库软链接到 worktree；如果源仓库缺少 `.venv`，才回退执行 `uv sync --all-extras`。
 对应任务分支默认采用 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 语义命名，失败时回退为标题规则化 slug，若仍为空再回退为 `task/<task_id[:8]>`，并在日志中记录命名来源。
 
 ### 数据层
@@ -138,7 +138,7 @@ flowchart TD
 
 `pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m ...`；若 staging 后已经干净，说明用户已经提交过，系统会跳过 commit，随后执行 `git rebase <worktree_base_branch_name>`。前端会立即用 `/complete` 返回的 `pr_preparing` 任务快照更新本地任务列表，并在 open 的 `pr_preparing` 状态继续 dashboard 轮询，即使运行态标记短暂丢失，也会自动拉到最终 `done / CLOSED` 快照。新建/编辑任务时可从绑定项目的本地分支中选择 worktree 基底分支，默认仍为 `main`；真正同步该基底分支之前，系统会先解析它的已配置 remote；若没有显式配置，则先查找实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，避免把 remote 名字硬编码死。若 `git commit` 被 commit hook 自动改写文件并退出非零，Koda 会自动重新 `git add .` 并重试一次 commit；若 rebase / merge 冲突则自动调用当前 runner（如 Codex）修复，然后复用当前持有基底分支的工作区完成 merge。merge 成功后，cleanup 也不再只看 repo-local script 的退出码，而是会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。详情页会对 worktree-backed 的 `changes_requested` 任务继续暴露 `Complete`，让用户在人工修复实现、自检、lint 或 Git 环境问题后直接收尾，而不是只能回到实现阶段重跑整条自动化。后台 watchdog 现在也会覆盖卡住的 `pr_preparing` 任务：如果阶段停留时间超过阈值，且当前进程内只残留一个“运行中”标记、但连 completion start `DevLog`（`🚀 已收到完成请求...`）都没写出来，watchdog 会先清理这类陈旧运行态，再自动走一次 `resume` 补救，而不是让 UI 永久停在“交付收尾中”。
 
-对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
+对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。任务 worktree 创建是 Koda 自身能力：普通项目不需要提供 `just worktree`、`scripts/git_worktree.sh` 或其他分支名式脚本。只有显式接收 `<target_path> <branch_name> <base_branch>` 的 path-aware script（如 `scripts/new-worktree.sh` / `scripts/create-worktree.sh`）才会作为项目自定义钩子被调用；旧式 branch-only `git_worktree.sh` 会被忽略，避免项目脚本不支持 `--base` 或自行选择路径导致启动失败。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
 
 `test_in_progress` 现在已有第一种真实落地语义：承载 post-review pre-commit lint 与 lint-fix 闭环；更重的容器级集成测试仍属于后续自动化扩展。`acceptance_in_progress` 目前仍主要是为后续自动化预留的阶段定义。
 

@@ -77,13 +77,14 @@
 5. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
 6. 对 backlog 项目任务使用 `tasks/pending/*.md` PRD 启动，确认 pending 列表来自项目仓库模板池；创建或复用 task worktree 后，系统会把 worktree 中同名 pending 副本移动到 worktree 的 `tasks/` 根目录，项目仓库里的 pending 模板仍保留；如果 worktree 中没有同名副本，则只把项目模板内容写入 worktree 的 `tasks/` 根目录
 7. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-8. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
-9. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
-10. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
-11. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
-12. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
-13. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
-14. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
+8. 在绑定项目中临时放置一个不支持 `--base` 的旧式 `scripts/git_worktree.sh`，启动任务仍应走 Koda 内置创建流程并生成上述默认路径；只有 `scripts/new-worktree.sh` / `scripts/create-worktree.sh` 这类显式接收目标路径的脚本才可覆盖创建命令
+9. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
+10. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+11. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
+12. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+13. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
+14. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
+15. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
 
 ### 媒体与导出
 

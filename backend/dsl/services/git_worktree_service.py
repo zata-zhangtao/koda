@@ -19,15 +19,14 @@ class WorktreeCreateCommandSpec:
 
     Attributes:
         command_argument_list: Command to execute
-        expected_worktree_path: Path expected to exist after success for path-aware strategies
-        branch_name_for_lookup: Branch name used to resolve the real path for branch-only scripts
+        expected_worktree_path: Path expected to exist after success when the
+            command contract declares the destination
         requires_post_create_bootstrap: Whether Koda should run the shared
             environment bootstrap after the create command succeeds
     """
 
     command_argument_list: list[str]
-    expected_worktree_path: Path | None
-    branch_name_for_lookup: str | None = None
+    expected_worktree_path: Path
     requires_post_create_bootstrap: bool = False
 
 
@@ -274,7 +273,13 @@ class GitWorktreeService:
         task_branch_name_str: str | None = None,
         base_branch_name_str: str = "main",
     ) -> Path:
-        """Create a task worktree using repo-local scripts when available.
+        """Create a task worktree using Koda's owned lifecycle.
+
+        Koda owns normal task worktree creation and falls back to project-local
+        scripts only when they accept the target path explicitly. Legacy
+        branch-only helpers such as ``scripts/git_worktree.sh`` are intentionally
+        ignored because their CLI contract is project-specific and cannot reliably
+        honor Koda's path and base-branch policy.
 
         Args:
             repo_root_path: Repository root path
@@ -318,10 +323,7 @@ class GitWorktreeService:
                 f"创建 git worktree 失败：{failure_reason_text}"
             ) from git_error
 
-        created_worktree_path = GitWorktreeService._resolve_created_worktree_path(
-            repo_root_path=repo_root_path,
-            command_spec_obj=command_spec_obj,
-        )
+        created_worktree_path = command_spec_obj.expected_worktree_path
         if not created_worktree_path.exists():
             raise ValueError(
                 f"创建 git worktree 后未找到预期目录：{created_worktree_path}"
@@ -987,6 +989,11 @@ class GitWorktreeService:
     ) -> WorktreeCreateCommandSpec:
         """Choose the correct worktree creation command for the repository.
 
+        Path-aware project scripts remain supported as explicit extension points.
+        Branch-only project scripts are ignored so every linked project gets a
+        reliable Koda-owned default without needing its own ``just worktree`` or
+        compatible wrapper.
+
         Args:
             repo_root_path: Repository root path
             task_id: Task UUID
@@ -1027,30 +1034,6 @@ class GitWorktreeService:
                 ],
                 expected_worktree_path=default_worktree_path,
                 requires_post_create_bootstrap=True,
-            )
-
-        branch_only_script_candidates = [
-            repo_root_path / "scripts" / "git_worktree.sh",
-            repo_root_path / "git_worktree.sh",
-        ]
-        branch_only_script_path = next(
-            (
-                candidate
-                for candidate in branch_only_script_candidates
-                if candidate.exists()
-            ),
-            None,
-        )
-        if branch_only_script_path is not None:
-            return WorktreeCreateCommandSpec(
-                command_argument_list=[
-                    str(branch_only_script_path),
-                    resolved_task_branch_name_str,
-                    "--base",
-                    base_branch_name_str,
-                ],
-                expected_worktree_path=None,
-                branch_name_for_lookup=resolved_task_branch_name_str,
             )
 
         return WorktreeCreateCommandSpec(
@@ -1127,95 +1110,6 @@ class GitWorktreeService:
                 return candidate_bootstrap_script_path
 
         return current_file_path.parents[3] / "scripts" / "bootstrap_worktree_env.sh"
-
-    @staticmethod
-    def _resolve_created_worktree_path(
-        repo_root_path: Path,
-        command_spec_obj: WorktreeCreateCommandSpec,
-    ) -> Path:
-        """Resolve the created worktree path after a successful create command.
-
-        Args:
-            repo_root_path: Repository root path
-            command_spec_obj: Create command specification
-
-        Returns:
-            Path: The created worktree path
-
-        Raises:
-            ValueError: When the created path cannot be resolved or violates the task root policy
-        """
-        if command_spec_obj.expected_worktree_path is not None:
-            return command_spec_obj.expected_worktree_path
-
-        branch_name_for_lookup = command_spec_obj.branch_name_for_lookup
-        if branch_name_for_lookup is None:
-            raise ValueError("创建 git worktree 后未找到预期目录：缺少分支定位信息。")
-
-        resolved_worktree_path = GitWorktreeService._resolve_worktree_path_for_branch(
-            repo_root_path=repo_root_path,
-            branch_name_str=branch_name_for_lookup,
-        )
-        if resolved_worktree_path is None:
-            raise ValueError(
-                "创建 git worktree 后未找到预期目录："
-                f"未找到分支 {branch_name_for_lookup} 对应的 worktree。"
-            )
-
-        GitWorktreeService._validate_worktree_path_within_task_root(
-            repo_root_path=repo_root_path,
-            created_worktree_path=resolved_worktree_path,
-        )
-        return resolved_worktree_path
-
-    @staticmethod
-    def _resolve_worktree_path_for_branch(
-        repo_root_path: Path,
-        branch_name_str: str,
-    ) -> Path | None:
-        """Resolve the worktree path that currently holds the target branch.
-
-        Args:
-            repo_root_path: Repository root path
-            branch_name_str: Branch name to locate
-
-        Returns:
-            Path | None: Matching worktree path when found
-        """
-        try:
-            completed_process = subprocess.run(
-                ["git", "worktree", "list", "--porcelain"],
-                cwd=str(repo_root_path),
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except (OSError, subprocess.CalledProcessError):
-            return None
-
-        current_worktree_path: Path | None = None
-        branch_reference_str = f"refs/heads/{branch_name_str}"
-        for output_line_str in completed_process.stdout.splitlines():
-            if output_line_str.startswith("worktree "):
-                current_worktree_path = Path(
-                    output_line_str.removeprefix("worktree ").strip()
-                )
-                continue
-
-            if (
-                output_line_str.startswith("branch ")
-                and current_worktree_path is not None
-            ):
-                current_branch_reference_str = output_line_str.removeprefix(
-                    "branch "
-                ).strip()
-                if current_branch_reference_str == branch_reference_str:
-                    return current_worktree_path.resolve()
-                current_worktree_path = None
-
-        return None
 
     @staticmethod
     def _branch_exists(repo_root_path: Path, branch_name_str: str) -> bool:

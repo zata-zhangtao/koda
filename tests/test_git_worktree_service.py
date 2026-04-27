@@ -220,7 +220,7 @@ def test_create_task_worktree_bootstraps_env_and_dependencies_for_raw_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Raw fallback should bootstrap env files and dependency commands."""
+    """Raw fallback should symlink local env and dependency directories by default."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
     _write_text_file(
         repo_root_path / "pyproject.toml",
@@ -241,6 +241,15 @@ def test_create_task_worktree_bootstraps_env_and_dependencies_for_raw_fallback(
         repo_root_path / "frontend" / ".env.local",
         "VITE_API_URL=http://localhost\n",
     )
+    source_node_modules_path = repo_root_path / "frontend" / "node_modules"
+    source_node_modules_path.mkdir(parents=True, exist_ok=True)
+    _write_text_file(
+        source_node_modules_path / ".source-installed",
+        "source frontend dependencies\n",
+    )
+    source_venv_path = repo_root_path / ".venv"
+    source_venv_path.mkdir(parents=True, exist_ok=True)
+    _write_text_file(source_venv_path / "pyvenv.cfg", "home = /tmp/python\n")
 
     fake_bin_directory_path = tmp_path / "fake-bin"
     fake_bin_directory_path.mkdir(parents=True, exist_ok=True)
@@ -251,8 +260,8 @@ def test_create_task_worktree_bootstraps_env_and_dependencies_for_raw_fallback(
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "{npm_log_path}"
-mkdir -p node_modules
-touch node_modules/.fake-installed
+echo "npm should not be called when source node_modules exists" >&2
+exit 42
 """,
     )
     _write_shell_script(
@@ -260,6 +269,8 @@ touch node_modules/.fake-installed
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "{uv_log_path}"
+echo "uv should not be called when source .venv exists" >&2
+exit 42
 """,
     )
     monkeypatch.setenv(
@@ -275,14 +286,18 @@ printf '%s\\n' "$*" >> "{uv_log_path}"
     assert (created_worktree_path / ".env").read_text(
         encoding="utf-8"
     ) == "API_KEY=secret\n"
+    assert (created_worktree_path / ".env").is_symlink()
     assert (created_worktree_path / "frontend" / ".env.local").read_text(
         encoding="utf-8"
     ) == "VITE_API_URL=http://localhost\n"
+    assert (created_worktree_path / "frontend" / ".env.local").is_symlink()
+    assert (created_worktree_path / "frontend" / "node_modules").is_symlink()
     assert (
-        created_worktree_path / "frontend" / "node_modules" / ".fake-installed"
+        created_worktree_path / "frontend" / "node_modules" / ".source-installed"
     ).exists()
-    assert npm_log_path.read_text(encoding="utf-8").strip() == "ci --ignore-scripts"
-    assert uv_log_path.read_text(encoding="utf-8").strip() == "sync --all-extras"
+    assert (created_worktree_path / ".venv").is_symlink()
+    assert npm_log_path.exists() is False
+    assert uv_log_path.exists() is False
 
 
 def test_create_task_worktree_can_use_non_main_base_branch(tmp_path: Path) -> None:
@@ -353,33 +368,37 @@ exit 1
         )
 
 
-def test_create_task_worktree_rejects_branch_only_script_outside_task_root(
+def test_create_task_worktree_ignores_branch_only_project_script(
     tmp_path: Path,
 ) -> None:
-    """Branch-only scripts should fail when the created worktree is outside `../task/`."""
+    """Legacy branch-only project scripts should not shadow Koda's owned create flow."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")
+    branch_only_script_marker_path = repo_root_path / "branch-only-invoked.txt"
     _write_shell_script(
         repo_root_path / "git_worktree.sh",
-        """#!/usr/bin/env bash
+        f"""#!/usr/bin/env bash
 set -euo pipefail
-branch_name="$1"
-base_branch_name="main"
-if [ "${2:-}" = "--base" ]; then
-  base_branch_name="$3"
-fi
-branch_short_name="${branch_name#task/}"
-target_path="../rogue/${branch_short_name}"
-git worktree add "$target_path" -b "$branch_name" "$base_branch_name" >/dev/null
+touch "{branch_only_script_marker_path}"
+echo "branch-only script should not be invoked" >&2
+exit 42
 """,
     )
 
-    with pytest.raises(ValueError, match=r"实际路径不在 \.\./task/ 根目录下"):
-        GitWorktreeService.create_task_worktree(
-            repo_root_path=repo_root_path,
-            task_id="12345678-task-id",
-        )
+    created_worktree_path = GitWorktreeService.create_task_worktree(
+        repo_root_path=repo_root_path,
+        task_id="12345678-task-id",
+    )
 
-    assert (repo_root_path.parent / "task").exists() is True
+    assert (
+        created_worktree_path
+        == repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+    )
+    assert created_worktree_path.exists() is True
+    assert branch_only_script_marker_path.exists() is False
+    assert (
+        _run_git_command(created_worktree_path, ["symbolic-ref", "--short", "HEAD"])
+        == "task/12345678"
+    )
 
 
 def test_destroy_task_worktree_falls_back_when_cleanup_script_leaves_artifacts(

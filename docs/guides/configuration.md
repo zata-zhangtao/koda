@@ -81,6 +81,19 @@ KODA_OPEN_PATH_COMMAND_TEMPLATE='trae-cn {target_path_shell}'
 - 若模板包含未知占位符、渲染为空命令或可执行文件不存在，后端会返回可诊断错误信息。
 - 建议优先使用 `{target_path_shell}`，避免目录路径包含空格时触发命令解析问题。
 
+### Worktree 环境准备策略
+
+Koda 创建 task worktree 后会运行 `scripts/bootstrap_worktree_env.sh`。默认策略是复用主项目本地运行环境，尽量用软链接而不是复制或重新安装：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WORKTREE_ENV_FILE_STRATEGY` | `symlink-from-main` | `.env*` 文件默认从源仓库软链接到 worktree；可设为 `copy` 改回复制 |
+| `WORKTREE_FRONTEND_STRATEGY` | `symlink-from-main` | 前端 `node_modules` 默认从源仓库软链接；可设为 `install-per-worktree` 独立安装 |
+| `WORKTREE_PYTHON_ENV_STRATEGY` | `symlink-from-main` | Python `.venv` 默认从源仓库软链接；可设为 `install-per-worktree` 独立 `uv sync --all-extras` |
+| `WORKTREE_SKIP_FRONTEND_INSTALL` | `false` | 仅在 `WORKTREE_FRONTEND_STRATEGY=install-per-worktree` 时生效 |
+
+如果默认软链接策略找不到源仓库 `.venv`，Koda 会回退执行 `uv sync --all-extras`，避免创建出不能运行的 Python worktree。
+
 ### 本机 agent 可选调优项
 
 | 配置项 | 默认值 | 说明 |

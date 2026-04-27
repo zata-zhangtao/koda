@@ -8,7 +8,7 @@ Usage:
   ./scripts/bootstrap_worktree_env.sh <source_repo_path> <target_worktree_path>
 
 Description:
-  Copy .env files and prepare frontend / Python dependencies for a worktree.
+  Link local runtime files and prepare frontend / Python dependencies for a worktree.
 EOF
 }
 
@@ -40,7 +40,7 @@ resolve_frontend_dependency_strategy() {
     local configured_strategy="${WORKTREE_FRONTEND_STRATEGY:-}"
 
     if [ -z "$configured_strategy" ]; then
-        echo "install-per-worktree"
+        echo "symlink-from-main"
         return 0
     fi
 
@@ -53,6 +53,64 @@ resolve_frontend_dependency_strategy() {
             echo "install-per-worktree"
             ;;
     esac
+}
+
+resolve_env_file_strategy() {
+    local configured_strategy="${WORKTREE_ENV_FILE_STRATEGY:-}"
+
+    if [ -z "$configured_strategy" ]; then
+        echo "symlink-from-main"
+        return 0
+    fi
+
+    case "$configured_strategy" in
+        symlink-from-main|copy)
+            echo "$configured_strategy"
+            ;;
+        *)
+            echo "WARN: unknown WORKTREE_ENV_FILE_STRATEGY=$configured_strategy; fallback to symlink-from-main." >&2
+            echo "symlink-from-main"
+            ;;
+    esac
+}
+
+resolve_python_dependency_strategy() {
+    local configured_strategy="${WORKTREE_PYTHON_ENV_STRATEGY:-}"
+
+    if [ -z "$configured_strategy" ]; then
+        echo "symlink-from-main"
+        return 0
+    fi
+
+    case "$configured_strategy" in
+        symlink-from-main|install-per-worktree)
+            echo "$configured_strategy"
+            ;;
+        *)
+            echo "WARN: unknown WORKTREE_PYTHON_ENV_STRATEGY=$configured_strategy; fallback to symlink-from-main." >&2
+            echo "symlink-from-main"
+            ;;
+    esac
+}
+
+link_path_if_missing() {
+    local source_path="$1"
+    local target_path="$2"
+    local display_path="$3"
+
+    if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+        echo "INFO: target already exists; skip symlink: $display_path"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$target_path")"
+    if ln -s "$source_path" "$target_path"; then
+        echo "INFO: linked $display_path"
+        return 0
+    fi
+
+    echo "ERROR: failed to create symlink: $target_path -> $source_path" >&2
+    return 1
 }
 
 setup_frontend_node_modules_symlinks() {
@@ -209,9 +267,26 @@ install_frontend_dependencies_for_worktree() {
 
 install_python_dependencies() {
     local worktree_root_path="$1"
+    local source_root_path="$2"
 
     if [ ! -f "$worktree_root_path/pyproject.toml" ]; then
         return 0
+    fi
+
+    local python_dependency_strategy
+    python_dependency_strategy="$(resolve_python_dependency_strategy)"
+    echo "INFO: Python dependency strategy: $python_dependency_strategy"
+
+    if [ "$python_dependency_strategy" = "symlink-from-main" ]; then
+        local source_venv_path="$source_root_path/.venv"
+        local target_venv_path="$worktree_root_path/.venv"
+
+        if [ -d "$source_venv_path" ]; then
+            link_path_if_missing "$source_venv_path" "$target_venv_path" ".venv"
+            return 0
+        fi
+
+        echo "WARN: source .venv does not exist; fallback to uv sync --all-extras."
     fi
 
     if ! command_exists uv; then
@@ -226,21 +301,33 @@ install_python_dependencies() {
     )
 }
 
-copy_env_files_to_worktree() {
+copy_or_link_env_files_to_worktree() {
     local source_root_path="$1"
     local target_root_path="$2"
-    local copied_env_file_count=0
+    local env_file_strategy
+    env_file_strategy="$(resolve_env_file_strategy)"
+    local processed_env_file_count=0
     local source_env_example_path="$source_root_path/.env.example"
     local source_env_file_path=""
     local relative_env_file_path=""
     local target_env_file_path=""
 
+    echo "INFO: env file strategy: $env_file_strategy"
+
     while IFS= read -r source_env_file_path; do
         relative_env_file_path="${source_env_file_path#"$source_root_path"/}"
         target_env_file_path="$target_root_path/$relative_env_file_path"
         mkdir -p "$(dirname "$target_env_file_path")"
-        cp "$source_env_file_path" "$target_env_file_path"
-        copied_env_file_count=$((copied_env_file_count + 1))
+
+        if [ "$env_file_strategy" = "symlink-from-main" ]; then
+            if [ -e "$target_env_file_path" ] || [ -L "$target_env_file_path" ]; then
+                continue
+            fi
+            ln -s "$source_env_file_path" "$target_env_file_path"
+        else
+            cp "$source_env_file_path" "$target_env_file_path"
+        fi
+        processed_env_file_count=$((processed_env_file_count + 1))
     done < <(
         find "$source_root_path" -type f -name ".env*" \
             -not -path "$source_root_path/.git/*" \
@@ -249,14 +336,18 @@ copy_env_files_to_worktree() {
             -not -path "$source_root_path/site/*"
     )
 
-    if [ "$copied_env_file_count" -gt 0 ]; then
-        echo "INFO: copied $copied_env_file_count .env files into the worktree."
+    if [ "$processed_env_file_count" -gt 0 ]; then
+        echo "INFO: prepared $processed_env_file_count .env files in the worktree."
         return 0
     fi
 
     if [ -f "$source_env_example_path" ] && [ ! -f "$target_root_path/.env" ]; then
-        cp "$source_env_example_path" "$target_root_path/.env"
-        echo "INFO: no .env files found; created .env from .env.example."
+        if [ "$env_file_strategy" = "symlink-from-main" ]; then
+            ln -s "$source_env_example_path" "$target_root_path/.env"
+        else
+            cp "$source_env_example_path" "$target_root_path/.env"
+        fi
+        echo "INFO: no .env files found; prepared .env from .env.example."
         return 0
     fi
 
@@ -282,7 +373,7 @@ bootstrap_worktree_environment() {
         return 1
     fi
 
-    copy_env_files_to_worktree "$source_root_path" "$target_root_path"
+    copy_or_link_env_files_to_worktree "$source_root_path" "$target_root_path"
 
     local frontend_dependency_strategy
     frontend_dependency_strategy="$(resolve_frontend_dependency_strategy)"
@@ -298,7 +389,7 @@ bootstrap_worktree_environment() {
         fi
     fi
 
-    install_python_dependencies "$target_root_path"
+    install_python_dependencies "$target_root_path" "$source_root_path"
 }
 
 if [ -n "${BASH_VERSION:-}" ] && [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -28,7 +28,7 @@
 
 1. 前端点击“开始任务”
 2. 后端将任务推进到 `prd_generating`
-3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，还会复制 `.env*` 并准备基础前后端依赖环境
+3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，还会软链接 `.env*` 与主项目依赖目录，并准备基础前后端依赖环境
 4. 新建 worktree 分支默认命名为 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 命名，失败时自动回退到标题规则化 slug，若仍为空则回退到 `task/<task_id[:8]>`
 5. `run_codex_prd` 组装 PRD Prompt
 6. 后端按配置调用目标 runner CLI（`codex` 或 `claude`）
@@ -330,9 +330,9 @@ Codex 的工作目录选择顺序如下：
 
 对任务型 worktree 来说，目录创建成功还不算完成。当前实现会在保存 `worktree_path` 前补做以下准备：
 
-- 复制源仓库中的 `.env*` 文件到新 worktree（保留相对路径）
-- 若检测到前端项目，则按现有 `WORKTREE_FRONTEND_STRATEGY` / `WORKTREE_SKIP_FRONTEND_INSTALL` 约定处理依赖
-- 若检测到 `pyproject.toml`，则尝试执行 `uv sync --all-extras`
+- 默认把源仓库中的 `.env*` 文件软链接到新 worktree（保留相对路径）；`WORKTREE_ENV_FILE_STRATEGY=copy` 可改为复制
+- 若检测到前端项目，默认把源仓库对应的 `node_modules` 软链接到 worktree；`WORKTREE_FRONTEND_STRATEGY=install-per-worktree` 可改为每个 worktree 独立安装
+- 若检测到 `pyproject.toml`，默认把源仓库 `.venv` 软链接到 worktree；源仓库没有 `.venv` 时才尝试执行 `uv sync --all-extras`，也可用 `WORKTREE_PYTHON_ENV_STRATEGY=install-per-worktree` 强制每个 worktree 独立同步
 - 分支命名来源会记录到后端日志（`ai` / `title_fallback` / `legacy_fallback`），便于排查命名回退
 
 如果 bootstrap 失败，任务启动会直接报错，而不是把不可直接使用的 worktree 写入任务状态。
