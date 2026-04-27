@@ -409,6 +409,42 @@ class GitWorktreeService:
             for raw_remote_name_str in remote_list_process.stdout.splitlines()
             if raw_remote_name_str.strip()
         ]
+        remote_tracking_ref_process = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/remotes",
+            ],
+            cwd=str(repo_root_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if remote_tracking_ref_process.returncode == 0:
+            remote_tracking_ref_name_set = {
+                raw_remote_tracking_ref_name_str.strip()
+                for raw_remote_tracking_ref_name_str in (
+                    remote_tracking_ref_process.stdout.splitlines()
+                )
+                if raw_remote_tracking_ref_name_str.strip()
+            }
+            matching_remote_name_list = [
+                remote_name_str
+                for remote_name_str in remote_name_list
+                if f"{remote_name_str}/{branch_name_str}"
+                in remote_tracking_ref_name_set
+            ]
+            if len(matching_remote_name_list) == 1:
+                return matching_remote_name_list[0]
+            if matching_remote_name_list:
+                if "origin" in matching_remote_name_list:
+                    return "origin"
+                if "zata" in matching_remote_name_list:
+                    return "zata"
+                return matching_remote_name_list[0]
+
         if len(remote_name_list) == 1:
             return remote_name_list[0]
         if "origin" in remote_name_list:

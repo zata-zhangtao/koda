@@ -101,6 +101,37 @@ def _commit_all_changes(repo_root_path: Path, commit_message_text: str) -> None:
     _run_git_command(repo_root_path, ["commit", "-m", commit_message_text])
 
 
+def test_resolve_preferred_remote_name_prefers_remote_tracking_base_branch(
+    tmp_path: Path,
+) -> None:
+    """Remote resolution should choose the remote that actually tracks the base."""
+    repo_root_path = _create_git_repo(tmp_path / "multi-remote-repo")
+    _run_git_command(
+        repo_root_path,
+        ["remote", "add", "origin", "git@example.invalid:fork/customer-agent.git"],
+    )
+    _run_git_command(
+        repo_root_path,
+        ["remote", "add", "grt", "git@example.invalid:upstream/customer-agent.git"],
+    )
+    _run_git_command(repo_root_path, ["checkout", "-b", "main-custom"])
+    _run_git_command(
+        repo_root_path,
+        ["config", "branch.main-custom.vscode-merge-base", "origin/main"],
+    )
+    _run_git_command(
+        repo_root_path,
+        ["update-ref", "refs/remotes/grt/main-custom", "HEAD"],
+    )
+
+    preferred_remote_name = GitWorktreeService.resolve_preferred_remote_name(
+        repo_root_path=repo_root_path,
+        branch_name_str="main-custom",
+    )
+
+    assert preferred_remote_name == "grt"
+
+
 def test_create_task_worktree_uses_default_branch_and_path(tmp_path: Path) -> None:
     """Fallback worktree creation should create the expected task branch and path."""
     repo_root_path = _create_git_repo(tmp_path / "demo-repo")

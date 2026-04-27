@@ -1411,6 +1411,111 @@ def test_execute_git_completion_flow_uses_ai_message_when_commit_is_needed(
     )
 
 
+def test_execute_git_completion_flow_preserves_hyphenated_base_remote_ref(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Complete should pass hyphenated base branch refs as single Git args."""
+    from backend.dsl.services.git_worktree_service import GitWorktreeService
+
+    worktree_path = tmp_path / "repo-wt-94256946"
+    base_worktree_path = tmp_path / "repo"
+    worktree_path.mkdir()
+    base_worktree_path.mkdir()
+    recorded_command_argument_by_label_dict: dict[str, list[str]] = {}
+    recorded_cleanup_base_branch_name_list: list[str] = []
+
+    def fake_run_logged_command(**kwargs) -> subprocess.CompletedProcess[str]:
+        command_log_label_str = kwargs["command_log_label_str"]
+        command_argument_list = kwargs["command_argument_list"]
+        recorded_command_argument_by_label_dict[command_log_label_str] = (
+            command_argument_list
+        )
+        stdout_by_label_dict = {
+            "resolve-branch": "task/94256946-create-tests-folder\n",
+            "repo-status": "",
+            "git-fetch-grt": "",
+            "git-pull-ff-only-grt": "",
+            "base-worktree-branch": "main-custom\n",
+            "worktree-status": "",
+            "git-add": "",
+            "post-add-status": "",
+            "git-rebase-base": "",
+            "merge-feature": "Merge made by the 'ort' strategy.\n",
+        }
+        return build_completed_process(
+            command_argument_list=command_argument_list,
+            return_code_int=0,
+            stdout_text=stdout_by_label_dict[command_log_label_str],
+        )
+
+    def fake_cleanup_completed_task_worktree(
+        repo_root_path,
+        feature_branch_name,
+        worktree_path,
+        base_branch_name_str="main",
+    ) -> WorktreeDestroyResult:
+        recorded_cleanup_base_branch_name_list.append(base_branch_name_str)
+        return WorktreeDestroyResult(
+            cleanup_succeeded=True,
+            worktree_removed=True,
+            branch_deleted=True,
+            output_line_list=[],
+        )
+
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_primary_repo_root_from_worktree",
+        lambda _worktree_path: base_worktree_path,
+    )
+    monkeypatch.setattr(
+        codex_runner,
+        "_resolve_worktree_path_for_branch",
+        lambda _repo_root_path, _branch_name_str: base_worktree_path,
+    )
+    monkeypatch.setattr(codex_runner, "_run_logged_command", fake_run_logged_command)
+    monkeypatch.setattr(codex_runner, "_write_log_to_db", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "resolve_preferred_remote_name",
+        staticmethod(lambda repo_root_path, branch_name_str="main": "grt"),
+    )
+    monkeypatch.setattr(
+        GitWorktreeService,
+        "cleanup_completed_task_worktree",
+        staticmethod(fake_cleanup_completed_task_worktree),
+    )
+
+    completion_result = codex_runner._execute_git_completion_flow(
+        task_id_str="94256946-create-tests-folder",
+        run_account_id_str="run-account-1",
+        task_title_str="Create tests folder",
+        commit_information_text_str="Create tests folder.",
+        dev_log_text_list=["Complete failed with a fork remote mismatch."],
+        worktree_path_str=str(worktree_path),
+        base_branch_name_str="main-custom",
+    )
+
+    assert completion_result.merged_to_main is True
+    assert recorded_command_argument_by_label_dict["git-pull-ff-only-grt"] == [
+        "git",
+        "merge",
+        "--ff-only",
+        "grt/main-custom",
+    ]
+    assert recorded_command_argument_by_label_dict["git-rebase-base"] == [
+        "git",
+        "rebase",
+        "main-custom",
+    ]
+    assert recorded_command_argument_by_label_dict["merge-feature"] == [
+        "git",
+        "merge",
+        "task/94256946-create-tests-folder",
+    ]
+    assert recorded_cleanup_base_branch_name_list == ["main-custom"]
+
+
 def test_run_codex_prd_moves_to_changes_requested_and_sends_failure_notification(
     tmp_path: Path,
 ) -> None:
