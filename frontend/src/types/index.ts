@@ -184,6 +184,16 @@ export interface PendingPrdFileList {
   files: PendingPrdFile[];
 }
 
+/** PRD 先行创建任务时返回的任务草稿建议 */
+export interface PrdTaskDraftSuggestion {
+  source_type: "pending" | "manual_import" | "ai_generated";
+  suggested_task_title: string;
+  suggested_requirement_brief: string;
+  source_file_name: string | null;
+  source_relative_path: string | null;
+  source_updated_at: string | null;
+}
+
 /** TaskSchedule 类型 */
 export interface TaskSchedule {
   id: string;

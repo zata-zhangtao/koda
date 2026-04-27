@@ -874,6 +874,12 @@ img {
     linear-gradient(135deg, rgba(240, 253, 250, 0.94) 0%, rgba(255, 251, 235, 0.72) 100%);
 }
 
+.devflow-prd-source-panel--create {
+  margin-top: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .devflow-prd-source-panel__header {
   display: flex;
   flex-direction: column;
@@ -933,6 +939,16 @@ img {
   color: #78716c;
   font-size: 0.72rem;
   line-height: 1.5;
+}
+
+.devflow-prd-source-panel__draft-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+  color: #57534e;
+  font-size: 0.74rem;
+  font-weight: 700;
 }
 
 .devflow-detail__actions-hint {

@@ -228,4 +228,4 @@ docker compose -f deploy/public-forward/docker-compose.yml logs -f caddy
 - 仅支持 HTTP/HTTPS 流量，不支持 TCP/UDP 透传。
 - 单租户设计：一个 `KODA_TUNNEL_ID` 对应一个本机实例。
 - 不包含 WAF、多租户隔离、高可用容灾。
-- 不建议将 Vite 开发服务器（port 5173）直接暴露，始终使用 `just public-run`（`SERVE_FRONTEND_DIST=true`）。
+- 不建议将 Vite 开发服务器（port 23456）直接暴露，始终使用 `just public-run`（`SERVE_FRONTEND_DIST=true`）。

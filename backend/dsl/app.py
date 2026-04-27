@@ -13,7 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.dsl.prd_sources.api import router as prd_sources_router
+from backend.dsl.prd_sources.api import (
+    router as prd_sources_router,
+    taskless_router as taskless_prd_sources_router,
+)
 from backend.dsl.api import (
     app_config_router,
     chronicle_router,
@@ -35,7 +38,7 @@ from utils.settings import config
 
 def _build_dev_cors_origins() -> list[str]:
     """构建本地开发模式下的 CORS 白名单."""
-    frontend_port_str = os.getenv("KODA_DEV_FRONTEND_PORT", "5173")
+    frontend_port_str = os.getenv("KODA_DEV_FRONTEND_PORT", "23456")
     return [
         f"http://localhost:{frontend_port_str}",
         f"http://127.0.0.1:{frontend_port_str}",
@@ -212,6 +215,7 @@ def create_application() -> FastAPI:
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)
+    application.include_router(taskless_prd_sources_router)
     application.include_router(prd_sources_router)
     application.include_router(task_qa_router)
     application.include_router(task_schedules_router)

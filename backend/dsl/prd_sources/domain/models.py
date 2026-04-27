@@ -37,6 +37,55 @@ class PendingPrdCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class PrdTasklessSourceContext:
+    """Workspace context used before a task exists.
+
+    Attributes:
+        run_account_id_str: Active run account UUID string.
+        project_id_str: Optional project UUID string selected by the user.
+        workspace_dir_path: Workspace that contains selectable PRDs.
+    """
+
+    run_account_id_str: str
+    project_id_str: str | None
+    workspace_dir_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class PrdTaskDraftTextSuggestion:
+    """Suggested task fields extracted from a PRD.
+
+    Attributes:
+        task_title_str: Suggested task title.
+        requirement_brief_str: Suggested requirement description.
+    """
+
+    task_title_str: str
+    requirement_brief_str: str
+
+
+@dataclass(frozen=True, slots=True)
+class PrdTaskDraftSuggestion:
+    """Task draft returned before creating a real task.
+
+    Attributes:
+        source_type: PRD source type used to build the draft.
+        suggested_task_title_str: Suggested task title.
+        suggested_requirement_brief_str: Suggested task description.
+        source_file_name_str: Optional source filename.
+        source_relative_path_str: Optional workspace-relative source path.
+        source_updated_at: Optional source file update timestamp.
+    """
+
+    source_type: PrdSourceType
+    suggested_task_title_str: str
+    suggested_requirement_brief_str: str
+    source_file_name_str: str | None = None
+    source_relative_path_str: str | None = None
+    source_updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StagedPrdDocument:
     """A PRD document staged into the task `tasks/` root.
 

@@ -36,6 +36,35 @@ export function canSubmitPrdSourceAction(
   return manualImportPrdFile !== null;
 }
 
+export function canSubmitPrdFirstTaskCreate(
+  prdSourceMode: PrdSourceMode,
+  taskTitleText: string,
+  requirementBriefText: string,
+  isDraftConfirmed: boolean,
+  selectedPendingPrdRelativePath: string | null,
+  pendingSourceUpdatedAt: string | null,
+  manualImportPrdFile: File | null,
+  manualImportEntryMode: ManualImportEntryMode,
+  manualImportPrdMarkdownText: string
+): boolean {
+  if (!taskTitleText.trim() || !requirementBriefText.trim()) {
+    return false;
+  }
+  if (prdSourceMode === "ai_generate") {
+    return true;
+  }
+  if (!isDraftConfirmed) {
+    return false;
+  }
+  if (prdSourceMode === "pending") {
+    return Boolean(selectedPendingPrdRelativePath && pendingSourceUpdatedAt);
+  }
+  if (manualImportEntryMode === "paste") {
+    return manualImportPrdMarkdownText.trim().length > 0;
+  }
+  return manualImportPrdFile !== null;
+}
+
 export function isMarkdownPrdImportFile(candidateFile: File): boolean {
   const normalizedFileName = candidateFile.name.trim().toLowerCase();
   const normalizedFileType = candidateFile.type.trim().toLowerCase();

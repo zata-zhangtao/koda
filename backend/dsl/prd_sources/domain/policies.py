@@ -79,6 +79,121 @@ def build_task_prd_file_name(
     return f"{timestamp_prefix_text}-prd-{semantic_slug_str}.md"
 
 
+def build_task_draft_title_from_prd(
+    prd_markdown_text: str,
+    *,
+    source_file_name_str: str | None = None,
+) -> str:
+    """Build a task draft title from PRD metadata and headings.
+
+    Args:
+        prd_markdown_text: Full PRD Markdown text.
+        source_file_name_str: Optional source file name used as a fallback.
+
+    Returns:
+        str: Suggested task title.
+    """
+    candidate_text_tuple = (
+        extract_prd_metadata_value(prd_markdown_text, "需求名称（AI 归纳）"),
+        extract_prd_metadata_value(prd_markdown_text, "原始需求标题"),
+        extract_first_markdown_heading(prd_markdown_text),
+        _build_title_from_file_name(source_file_name_str),
+        "Imported PRD",
+    )
+    for candidate_text in candidate_text_tuple:
+        normalized_candidate_text = normalize_task_draft_text(candidate_text)
+        if normalized_candidate_text:
+            return normalized_candidate_text[:200]
+    return "Imported PRD"
+
+
+def build_task_draft_requirement_brief_from_prd(
+    prd_markdown_text: str,
+    *,
+    fallback_title_str: str,
+    max_length_int: int = 1200,
+) -> str:
+    """Build a compact task draft description from PRD Markdown.
+
+    Args:
+        prd_markdown_text: Full PRD Markdown text.
+        fallback_title_str: Title used when no readable body exists.
+        max_length_int: Maximum returned character count.
+
+    Returns:
+        str: Suggested task description.
+    """
+    description_line_list: list[str] = []
+    inside_fenced_block_bool = False
+    for raw_line_text in prd_markdown_text.splitlines():
+        stripped_line_text = raw_line_text.strip()
+        if stripped_line_text.startswith("```"):
+            inside_fenced_block_bool = not inside_fenced_block_bool
+            continue
+        if inside_fenced_block_bool:
+            continue
+        if not stripped_line_text:
+            if description_line_list and description_line_list[-1] != "":
+                description_line_list.append("")
+            continue
+        if _is_prd_metadata_line(stripped_line_text):
+            continue
+        if stripped_line_text.startswith("#"):
+            continue
+
+        normalized_line_text = normalize_task_draft_text(stripped_line_text)
+        if normalized_line_text:
+            description_line_list.append(normalized_line_text)
+
+        joined_description_text = "\n".join(description_line_list).strip()
+        if len(joined_description_text) >= max_length_int:
+            return joined_description_text[:max_length_int].strip()
+
+    joined_description_text = "\n".join(description_line_list).strip()
+    if joined_description_text:
+        return joined_description_text[:max_length_int].strip()
+
+    normalized_fallback_title = normalize_task_draft_text(fallback_title_str)
+    return f"基于已选择 PRD 创建任务：{normalized_fallback_title or 'Imported PRD'}"
+
+
+def extract_first_markdown_heading(prd_markdown_text: str) -> str:
+    """Extract the first Markdown heading from a PRD document.
+
+    Args:
+        prd_markdown_text: Full PRD Markdown text.
+
+    Returns:
+        str: Heading text, or an empty string.
+    """
+    for markdown_line_text in prd_markdown_text.splitlines():
+        stripped_line_text = markdown_line_text.strip()
+        if stripped_line_text.startswith("#"):
+            return stripped_line_text.lstrip("#").strip()
+    return ""
+
+
+def normalize_task_draft_text(raw_text: str | None) -> str:
+    """Normalize a text field for task draft display.
+
+    Args:
+        raw_text: Raw text value.
+
+    Returns:
+        str: Trimmed text with collapsed horizontal whitespace.
+    """
+    if raw_text is None:
+        return ""
+    normalized_text = unicodedata.normalize("NFKC", raw_text)
+    normalized_line_list = [
+        re.sub(r"[ \t]+", " ", line_text).strip()
+        for line_text in normalized_text.splitlines()
+    ]
+    return "\n".join(
+        line_text for line_text in normalized_line_list if line_text
+    ).strip("`*_ ")
+
+
 def build_semantic_slug_from_available_text(
     *,
     task_id_str: str,
@@ -105,6 +220,24 @@ def build_semantic_slug_from_available_text(
             return normalized_slug_str
 
     return normalize_task_prd_requirement_slug("需求文档")
+
+
+def _build_title_from_file_name(source_file_name_str: str | None) -> str:
+    """Build a readable fallback title from a file name."""
+    if not source_file_name_str:
+        return ""
+    file_stem_text = source_file_name_str.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return file_stem_text.replace("-", " ").replace("_", " ")
+
+
+def _is_prd_metadata_line(stripped_line_text: str) -> bool:
+    """Return whether a line is one of the PRD metadata fields."""
+    return bool(
+        re.match(
+            r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:需求名称（AI 归纳）|原始需求标题)(?:\*\*)?\s*[:：]",
+            stripped_line_text,
+        )
+    )
 
 
 def extract_prd_metadata_value(prd_markdown_text: str, metadata_key_str: str) -> str:

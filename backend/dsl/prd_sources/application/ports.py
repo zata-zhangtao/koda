@@ -7,7 +7,9 @@ from typing import Protocol
 
 from backend.dsl.prd_sources.domain.models import (
     PendingPrdCandidate,
+    PrdTaskDraftTextSuggestion,
     PrdTaskContext,
+    PrdTasklessSourceContext,
     StagedPrdDocument,
 )
 
@@ -80,3 +82,32 @@ class TaskWorkflowPort(Protocol):
         staged_prd_document: StagedPrdDocument,
     ) -> bool:
         """Mark a staged PRD ready and return whether implementation started."""
+
+    def resolve_taskless_pending_source_context(
+        self,
+        project_id_str: str | None,
+    ) -> PrdTasklessSourceContext:
+        """Resolve the pending source workspace before a task exists."""
+
+    def create_task_from_prd_draft(
+        self,
+        *,
+        task_title_str: str,
+        project_id_str: str | None,
+        worktree_base_branch_name_str: str,
+        requirement_brief_str: str,
+        auto_confirm_prd_and_execute_bool: bool,
+    ) -> str:
+        """Create a task from a confirmed PRD-first draft."""
+
+
+class PrdTaskDraftSuggestionPort(Protocol):
+    """Port for optional AI-generated task draft suggestions."""
+
+    def suggest_task_draft(
+        self,
+        *,
+        prd_markdown_text: str,
+        source_file_name_str: str | None,
+    ) -> PrdTaskDraftTextSuggestion | None:
+        """Suggest task fields from a PRD, or return None to use fallback."""

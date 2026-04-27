@@ -42,17 +42,20 @@
 4. 检查 PRD 顶部是否同时包含 `原始需求标题` 与 `需求名称（AI 归纳）`
 5. 在任务详情选择“从 tasks/pending 选择”，确认详情 action 区仍显示“使用选中的 PRD”；刷新页面后仍恢复 pending 来源草稿与已选文件，再点击后确认 pending Markdown PRD 会被移动到目标 workspace 的 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
 6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，并能通过现有 PRD 面板读取
-7. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
-8. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
-9. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
-10. 检查阶段是否推进到 `self_review_in_progress`
-11. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
-12. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
-13. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
-14. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
-15. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
-16. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
-17. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
+7. 在创建面板选择“从 tasks/pending 选择”，确认列表项同时显示标题/文件名、大小和 Updated 时间戳；点击“生成草稿”后 title 与 description 被预填，未勾选确认项时不能创建 task
+8. 修改 pending PRD 文件后，使用旧草稿点击“Create from PRD”，确认接口返回冲突错误并提示刷新草稿，不应显示创建成功
+9. 在创建面板选择“手动导入 PRD”，分别验证上传 `.md` 与粘贴 Markdown；确认 AI/回退预填 title 与 description，用户勾选确认后创建 task，并进入 `prd_waiting_confirmation`
+10. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
+11. 当上下文很少时，确认 `需求名称（AI 归纳）` 仍然非空，并回退为原始标题的规范化版本
+12. 点击“开始执行”，观察时间线是否实时写入 Codex 输出
+13. 检查阶段是否推进到 `self_review_in_progress`
+14. 让第一轮 self-review 故意返回 blocker，确认时间线出现“review -> 自动回改 -> review”的顺序与摘要，而不是立刻进入 `changes_requested`
+15. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
+16. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
+17. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
+18. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
+19. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
+20. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 
 ### Sidecar Q&A
 

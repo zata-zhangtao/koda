@@ -8,14 +8,21 @@ from pathlib import Path
 import pytest
 
 from backend.dsl.prd_sources.application.use_cases import (
+    BuildPrdTaskDraftUseCase,
+    CreateTaskFromImportedPrdUseCase,
+    CreateTaskFromPendingPrdUseCase,
     ImportPrdUseCase,
     SelectPendingPrdUseCase,
 )
-from backend.dsl.prd_sources.domain.errors import UnsafePrdPathError
+from backend.dsl.prd_sources.domain.errors import (
+    StalePendingPrdError,
+    UnsafePrdPathError,
+)
 from backend.dsl.prd_sources.domain.models import (
     PendingPrdCandidate,
     PrdSourceType,
     PrdTaskContext,
+    PrdTasklessSourceContext,
     StagedPrdDocument,
 )
 
@@ -46,6 +53,8 @@ class FakeTaskWorkflowPort:
             auto_confirm_prd_and_execute_bool=False,
         )
         self.marked_ready_bool = False
+        self.created_task_id_str = "created-task-0000-4000-8000-000000000000"
+        self.created_task_payload: dict[str, object] | None = None
 
     def resolve_task_context(self, task_id_str: str) -> PrdTaskContext:
         """Return the fake task context."""
@@ -68,12 +77,52 @@ class FakeTaskWorkflowPort:
         self.marked_ready_bool = True
         return False
 
+    def resolve_taskless_pending_source_context(
+        self,
+        project_id_str: str | None,
+    ) -> PrdTasklessSourceContext:
+        """Return the fake taskless source context."""
+        return PrdTasklessSourceContext(
+            run_account_id_str="run-account",
+            project_id_str=project_id_str,
+            workspace_dir_path=self.task_context.workspace_dir_path,
+        )
+
+    def create_task_from_prd_draft(
+        self,
+        *,
+        task_title_str: str,
+        project_id_str: str | None,
+        worktree_base_branch_name_str: str,
+        requirement_brief_str: str,
+        auto_confirm_prd_and_execute_bool: bool,
+    ) -> str:
+        """Record a fake task creation request."""
+        self.created_task_payload = {
+            "task_title": task_title_str,
+            "project_id": project_id_str,
+            "worktree_base_branch_name": worktree_base_branch_name_str,
+            "requirement_brief": requirement_brief_str,
+            "auto_confirm_prd_and_execute": auto_confirm_prd_and_execute_bool,
+        }
+        return self.created_task_id_str
+
 
 class FakePrdSourceRepository:
     """Fake PRD source repository for use-case tests."""
 
     def __init__(self) -> None:
         """Initialize the fake repository."""
+        self.pending_candidate_list = [
+            PendingPrdCandidate(
+                file_name_str="manual.md",
+                relative_path_str="tasks/pending/manual.md",
+                size_bytes_int=100,
+                updated_at=datetime(2026, 4, 23, 13, 5, 0),
+                title_preview_text="选择已有 PRD",
+            )
+        ]
+        self.pending_markdown_text = "**需求名称（AI 归纳）**：选择已有 PRD\n"
         self.ensure_absent_called_bool = False
         self.ensure_absent_workspace_dir_path: Path | None = None
         self.moved_pending_relative_path_str: str | None = None
@@ -84,8 +133,8 @@ class FakePrdSourceRepository:
         self,
         workspace_dir_path: Path,
     ) -> list[PendingPrdCandidate]:
-        """Return no pending candidates."""
-        return []
+        """Return configured pending candidates."""
+        return self.pending_candidate_list
 
     def read_pending_prd_markdown(
         self,
@@ -93,7 +142,7 @@ class FakePrdSourceRepository:
         pending_relative_path_str: str,
     ) -> str:
         """Return fake pending PRD Markdown."""
-        return "**需求名称（AI 归纳）**：选择已有 PRD\n"
+        return self.pending_markdown_text
 
     def ensure_task_prd_absent(
         self,
@@ -177,6 +226,32 @@ def test_select_pending_prd_use_case_validates_path_before_ports(
     assert repository.ensure_absent_called_bool is False
 
 
+def test_build_prd_task_draft_use_case_returns_pending_timestamp(
+    tmp_path: Path,
+) -> None:
+    """Pending draft suggestions should include source metadata for stale checks."""
+    workflow_port = FakeTaskWorkflowPort(tmp_path)
+    repository = FakePrdSourceRepository()
+    repository.pending_markdown_text = (
+        "# PRD\n\n**需求名称（AI 归纳）**：PRD 先行任务\n\n"
+        "用户选择 pending PRD 后确认 task 草稿。\n"
+    )
+    use_case = BuildPrdTaskDraftUseCase(
+        task_workflow_port=workflow_port,
+        prd_source_repository=repository,
+    )
+
+    draft_suggestion = use_case.execute_pending(
+        project_id_str=None,
+        pending_relative_path_str="tasks/pending/manual.md",
+    )
+
+    assert draft_suggestion.suggested_task_title_str == "PRD 先行任务"
+    assert "用户选择 pending PRD" in draft_suggestion.suggested_requirement_brief_str
+    assert draft_suggestion.source_relative_path_str == "tasks/pending/manual.md"
+    assert draft_suggestion.source_updated_at == datetime(2026, 4, 23, 13, 5, 0)
+
+
 def test_select_pending_prd_use_case_stages_from_source_into_prepared_workspace(
     tmp_path: Path,
 ) -> None:
@@ -210,6 +285,63 @@ def test_select_pending_prd_use_case_stages_from_source_into_prepared_workspace(
     assert (
         outcome.staged_relative_path_str == "tasks/20260423-130500-prd-选择已有-prd.md"
     )
+
+
+def test_create_task_from_pending_prd_rejects_stale_source_timestamp(
+    tmp_path: Path,
+) -> None:
+    """Final create should reject pending PRDs changed after draft generation."""
+    workflow_port = FakeTaskWorkflowPort(tmp_path)
+    repository = FakePrdSourceRepository()
+    use_case = CreateTaskFromPendingPrdUseCase(
+        task_workflow_port=workflow_port,
+        prd_source_repository=repository,
+    )
+
+    with pytest.raises(StalePendingPrdError):
+        use_case.execute(
+            task_title_str="Confirmed title",
+            project_id_str=None,
+            worktree_base_branch_name_str="main",
+            requirement_brief_str="Confirmed description",
+            auto_confirm_prd_and_execute_bool=False,
+            pending_relative_path_str="tasks/pending/manual.md",
+            expected_source_updated_at=datetime(2026, 4, 23, 13, 6, 0),
+        )
+
+    assert workflow_port.created_task_payload is None
+
+
+def test_create_task_from_imported_prd_creates_task_then_stages_import(
+    tmp_path: Path,
+) -> None:
+    """Imported PRD final create should create a task and reuse import staging."""
+    workflow_port = FakeTaskWorkflowPort(tmp_path)
+    repository = FakePrdSourceRepository()
+    use_case = CreateTaskFromImportedPrdUseCase(
+        task_workflow_port=workflow_port,
+        prd_source_repository=repository,
+    )
+
+    outcome = use_case.execute_pasted_markdown(
+        task_title_str="Confirmed imported PRD",
+        project_id_str=None,
+        worktree_base_branch_name_str="main",
+        requirement_brief_str="Confirmed description",
+        auto_confirm_prd_and_execute_bool=False,
+        original_file_name_str="pasted-prd.md",
+        prd_markdown_text="**需求名称（AI 归纳）**：导入后创建\n",
+    )
+
+    assert workflow_port.created_task_payload == {
+        "task_title": "Confirmed imported PRD",
+        "project_id": None,
+        "worktree_base_branch_name": "main",
+        "requirement_brief": "Confirmed description",
+        "auto_confirm_prd_and_execute": False,
+    }
+    assert repository.imported_markdown_text == "**需求名称（AI 归纳）**：导入后创建\n"
+    assert outcome.task_id_str == workflow_port.prepared_task_context.task_id_str
 
 
 def test_import_prd_use_case_stages_markdown_and_marks_ready(tmp_path: Path) -> None:

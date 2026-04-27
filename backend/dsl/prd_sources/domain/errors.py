@@ -11,6 +11,10 @@ class TaskNotFoundError(PrdSourceError):
     """Raised when the target task cannot be found."""
 
 
+class ProjectNotFoundError(PrdSourceError):
+    """Raised when the requested project cannot be found."""
+
+
 class TaskAutomationRunningError(PrdSourceError):
     """Raised when a task already has running automation."""
 
@@ -31,5 +35,13 @@ class InvalidPrdContentError(PrdSourceError):
     """Raised when imported or selected PRD content is invalid."""
 
 
+class InvalidTaskDraftError(PrdSourceError):
+    """Raised when a PRD-first task draft is incomplete or invalid."""
+
+
 class PrdAlreadyExistsError(PrdSourceError):
     """Raised when the task already has a staged PRD file."""
+
+
+class StalePendingPrdError(PrdSourceError):
+    """Raised when a pending PRD changed after draft generation."""

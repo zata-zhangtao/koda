@@ -74,6 +74,7 @@ import {
 import {
   MANUAL_IMPORT_ENTRY_MODE_LABEL_MAP,
   PRD_SOURCE_MODE_LABEL_MAP,
+  canSubmitPrdFirstTaskCreate,
   canSubmitPrdSourceAction,
   getPrdSourceActionLabel,
   isMarkdownPrdImportFile,
@@ -119,6 +120,7 @@ import {
   type TaskCardMetadata,
   type TaskDisplayStageKey,
   type PendingPrdFile,
+  type PrdTaskDraftSuggestion,
   type PrdPendingQuestion,
   type PrdPendingQuestionAnswerSelectionMap,
   type PrdPendingQuestionAnswerSelectionMapByTaskId,
@@ -639,6 +641,7 @@ function renderAttachmentPreview(attachmentDraft: AttachmentDraft): ReactNode {
 
 function App() {
   const createRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const createPrdImportInputRef = useRef<HTMLInputElement | null>(null);
   const editRequirementAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const feedbackAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const manualImportPrdInputRef = useRef<HTMLInputElement | null>(null);
@@ -685,6 +688,27 @@ function App() {
   const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
   const [newRequirementWorktreeBaseBranchName, setNewRequirementWorktreeBaseBranchName] =
     useState(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
+  const [createPrdSourceMode, setCreatePrdSourceMode] =
+    useState<PrdSourceMode>("ai_generate");
+  const [createPendingPrdFileList, setCreatePendingPrdFileList] = useState<
+    PendingPrdFile[]
+  >([]);
+  const [
+    createSelectedPendingPrdRelativePath,
+    setCreateSelectedPendingPrdRelativePath,
+  ] = useState<string | null>(null);
+  const [createManualImportEntryMode, setCreateManualImportEntryMode] =
+    useState<ManualImportEntryMode>("upload");
+  const [createManualImportPrdFile, setCreateManualImportPrdFile] =
+    useState<File | null>(null);
+  const [createManualImportPrdMarkdownText, setCreateManualImportPrdMarkdownText] =
+    useState("");
+  const [isCreatePendingPrdListLoading, setIsCreatePendingPrdListLoading] =
+    useState(false);
+  const [createPrdTaskDraftSuggestion, setCreatePrdTaskDraftSuggestion] =
+    useState<PrdTaskDraftSuggestion | null>(null);
+  const [isCreatePrdTaskDraftConfirmed, setIsCreatePrdTaskDraftConfirmed] =
+    useState(false);
   const [
     isAutoConfirmPrdAndExecuteEnabled,
     setIsAutoConfirmPrdAndExecuteEnabled,
@@ -785,6 +809,15 @@ function App() {
   function resetCreateRequirementDraft(nextProjectId: string | null = null): void {
     setNewRequirementTitle("");
     setNewRequirementDescription("");
+    setCreatePrdSourceMode("ai_generate");
+    setCreatePendingPrdFileList([]);
+    setCreateSelectedPendingPrdRelativePath(null);
+    setCreateManualImportEntryMode("upload");
+    setCreateManualImportPrdFile(null);
+    setCreateManualImportPrdMarkdownText("");
+    setIsCreatePendingPrdListLoading(false);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
     setCreateRequirementAttachmentDraft((previousAttachmentDraft) => {
       if (previousAttachmentDraft?.previewUrl) {
         URL.revokeObjectURL(previousAttachmentDraft.previewUrl);
@@ -793,6 +826,9 @@ function App() {
     });
     if (createRequirementAttachmentInputRef.current) {
       createRequirementAttachmentInputRef.current.value = "";
+    }
+    if (createPrdImportInputRef.current) {
+      createPrdImportInputRef.current.value = "";
     }
     setNewRequirementProjectId(nextProjectId);
     setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
@@ -907,6 +943,9 @@ function App() {
 
     if (!nextProjectId) {
       setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
+      if (createPrdSourceMode === "pending") {
+        await loadPendingPrdFilesForCreate(null);
+      }
       return;
     }
 
@@ -933,6 +972,9 @@ function App() {
         projectBranchSelection.current_branch_name
       )
     );
+    if (createPrdSourceMode === "pending") {
+      await loadPendingPrdFilesForCreate(nextProjectId);
+    }
   }
 
   async function handleEditRequirementProjectChange(
@@ -2549,13 +2591,34 @@ function App() {
   async function handleCreateRequirement(): Promise<void> {
     const nextRequirementTitle = newRequirementTitle.trim();
     const nextRequirementDescription = newRequirementDescription.trim();
-    const nextRequirementBrief = buildRequirementBrief(
-      nextRequirementDescription,
-      createRequirementAttachmentDraft
-    );
+    const nextRequirementBrief =
+      createPrdSourceMode === "ai_generate"
+        ? buildRequirementBrief(
+            nextRequirementDescription,
+            createRequirementAttachmentDraft
+          )
+        : nextRequirementDescription;
 
     if (!nextRequirementTitle || !nextRequirementBrief) {
       setErrorMessage("Title and description or image/video are required.");
+      setSuccessMessage(null);
+      return;
+    }
+    if (
+      createPrdSourceMode !== "ai_generate" &&
+      !canSubmitPrdFirstTaskCreate(
+        createPrdSourceMode,
+        nextRequirementTitle,
+        nextRequirementBrief,
+        isCreatePrdTaskDraftConfirmed,
+        createSelectedPendingPrdRelativePath,
+        createPrdTaskDraftSuggestion?.source_updated_at ?? null,
+        createManualImportPrdFile,
+        createManualImportEntryMode,
+        createManualImportPrdMarkdownText
+      )
+    ) {
+      setErrorMessage("请先生成草稿，确认标题和描述，并补齐 PRD 来源。");
       setSuccessMessage(null);
       return;
     }
@@ -2565,15 +2628,50 @@ function App() {
     setSuccessMessage(null);
 
     try {
-      const createdTask = await taskApi.create({
-        task_title: nextRequirementTitle,
-        project_id: newRequirementProjectId,
-        worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
-        requirement_brief: nextRequirementBrief,
-        auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
-      });
+      const createdTask =
+        createPrdSourceMode === "pending"
+          ? await taskApi.createTaskFromPendingPrd({
+              task_title: nextRequirementTitle,
+              project_id: newRequirementProjectId,
+              worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
+              requirement_brief: nextRequirementBrief,
+              auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
+              relative_path: createSelectedPendingPrdRelativePath as string,
+              source_updated_at: createPrdTaskDraftSuggestion?.source_updated_at ?? "",
+            })
+          : createPrdSourceMode === "manual_import" &&
+              createManualImportEntryMode === "paste"
+            ? await taskApi.createTaskFromPastedPrd({
+                task_title: nextRequirementTitle,
+                project_id: newRequirementProjectId,
+                worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
+                requirement_brief: nextRequirementBrief,
+                auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
+                prd_markdown_text: createManualImportPrdMarkdownText,
+              })
+            : createPrdSourceMode === "manual_import"
+              ? await taskApi.createTaskFromImportedPrd(
+                  {
+                    task_title: nextRequirementTitle,
+                    project_id: newRequirementProjectId,
+                    worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
+                    requirement_brief: nextRequirementBrief,
+                    auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
+                  },
+                  createManualImportPrdFile as File
+                )
+              : await taskApi.create({
+                  task_title: nextRequirementTitle,
+                  project_id: newRequirementProjectId,
+                  worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
+                  requirement_brief: nextRequirementBrief,
+                  auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
+                });
 
-      if (createRequirementAttachmentDraft) {
+      if (
+        createPrdSourceMode === "ai_generate" &&
+        createRequirementAttachmentDraft
+      ) {
         if (createRequirementAttachmentDraft.kind === "image") {
           await mediaApi.uploadImage(
             createRequirementAttachmentDraft.file,
@@ -2587,7 +2685,7 @@ function App() {
             createdTask.id
           );
         }
-      } else {
+      } else if (createPrdSourceMode === "ai_generate") {
         await logApi.create({
           task_id: createdTask.id,
           text_content: nextRequirementDescription,
@@ -2599,7 +2697,11 @@ function App() {
       setWorkspaceView("active");
       setSelectedTaskId(createdTask.id);
       resetCreateRequirementDraft();
-      setSuccessMessage("Requirement created successfully.");
+      setSuccessMessage(
+        createPrdSourceMode === "ai_generate"
+          ? "Requirement created successfully."
+          : "Task 已根据 PRD 创建，后续流程已进入 PRD 确认。"
+      );
       await loadDashboardData(true);
 
       window.setTimeout(() => {
@@ -2638,6 +2740,193 @@ function App() {
       );
       // 刷新数据，让界面与数据库实际状态同步
       await loadDashboardData(true);
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function loadPendingPrdFilesForCreate(
+    projectId: string | null,
+    preferredPendingPrdRelativePath: string | null = null
+  ): Promise<void> {
+    setIsCreatePendingPrdListLoading(true);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setErrorMessage(null);
+    try {
+      const pendingPrdFileListResponse =
+        await taskApi.listTasklessPendingPrdFiles(projectId);
+      setCreatePendingPrdFileList(pendingPrdFileListResponse.files);
+      const restoredPendingPrdRelativePath =
+        preferredPendingPrdRelativePath &&
+        pendingPrdFileListResponse.files.some(
+          (pendingPrdFile) =>
+            pendingPrdFile.relative_path === preferredPendingPrdRelativePath
+        )
+          ? preferredPendingPrdRelativePath
+          : null;
+      setCreateSelectedPendingPrdRelativePath(
+        restoredPendingPrdRelativePath ??
+          pendingPrdFileListResponse.files[0]?.relative_path ??
+          null
+      );
+    } catch (pendingPrdLoadError) {
+      console.error(pendingPrdLoadError);
+      setCreatePendingPrdFileList([]);
+      setCreateSelectedPendingPrdRelativePath(null);
+      setErrorMessage(
+        pendingPrdLoadError instanceof Error
+          ? pendingPrdLoadError.message
+          : "Failed to load pending PRD files."
+      );
+    } finally {
+      setIsCreatePendingPrdListLoading(false);
+    }
+  }
+
+  async function handleChangeCreatePrdSourceMode(
+    nextPrdSourceMode: PrdSourceMode
+  ): Promise<void> {
+    setCreatePrdSourceMode(nextPrdSourceMode);
+    setCreatePendingPrdFileList([]);
+    setCreateSelectedPendingPrdRelativePath(null);
+    setCreateManualImportEntryMode("upload");
+    setCreateManualImportPrdFile(null);
+    setCreateManualImportPrdMarkdownText("");
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setSuccessMessage(null);
+    setErrorMessage(null);
+    if (createPrdImportInputRef.current) {
+      createPrdImportInputRef.current.value = "";
+    }
+    if (nextPrdSourceMode === "pending") {
+      await loadPendingPrdFilesForCreate(newRequirementProjectId);
+    }
+  }
+
+  function handleChangeCreateSelectedPendingPrdRelativePath(
+    nextPendingPrdRelativePath: string | null
+  ): void {
+    setCreateSelectedPendingPrdRelativePath(nextPendingPrdRelativePath);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+  }
+
+  function handleChangeCreateManualImportEntryMode(
+    nextManualImportEntryMode: ManualImportEntryMode
+  ): void {
+    setCreateManualImportEntryMode(nextManualImportEntryMode);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleCreateManualImportPrdFileChange(
+    changeEvent: ChangeEvent<HTMLInputElement>
+  ): void {
+    const nextManualImportPrdFile = changeEvent.target.files?.[0] ?? null;
+    setCreateManualImportPrdFile(nextManualImportPrdFile);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleCreateManualImportPrdMarkdownTextChange(
+    changeEvent: ChangeEvent<HTMLTextAreaElement>
+  ): void {
+    setCreateManualImportPrdMarkdownText(changeEvent.target.value);
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }
+
+  function handleCreateManualImportPrdPaste(
+    clipboardEvent: ClipboardEvent<HTMLTextAreaElement>
+  ): void {
+    const pastedFile = getClipboardFile(clipboardEvent);
+    if (!pastedFile) {
+      return;
+    }
+
+    if (!isMarkdownPrdImportFile(pastedFile)) {
+      clipboardEvent.preventDefault();
+      setErrorMessage("这里只支持粘贴 Markdown 文本或 .md 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    clipboardEvent.preventDefault();
+    setCreateManualImportEntryMode("upload");
+    setCreateManualImportPrdFile(pastedFile);
+    setCreateManualImportPrdMarkdownText("");
+    setCreatePrdTaskDraftSuggestion(null);
+    setIsCreatePrdTaskDraftConfirmed(false);
+    setErrorMessage(null);
+    setSuccessMessage("已从剪贴板读取 Markdown 文件，点击“生成草稿”即可。");
+    if (createPrdImportInputRef.current) {
+      createPrdImportInputRef.current.value = "";
+    }
+  }
+
+  async function handleBuildCreatePrdTaskDraft(): Promise<void> {
+    if (createPrdSourceMode === "pending" && !createSelectedPendingPrdRelativePath) {
+      setErrorMessage("请选择一个 tasks/pending 中的 PRD 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+    if (
+      createPrdSourceMode === "manual_import" &&
+      createManualImportEntryMode === "paste" &&
+      createManualImportPrdMarkdownText.trim().length === 0
+    ) {
+      setErrorMessage("请先粘贴 PRD Markdown 内容。");
+      setSuccessMessage(null);
+      return;
+    }
+    if (
+      createPrdSourceMode === "manual_import" &&
+      createManualImportEntryMode === "upload" &&
+      !createManualImportPrdFile
+    ) {
+      setErrorMessage("请选择一个 Markdown PRD 文件。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    setActiveMutationName("prd_source");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const draftSuggestion =
+        createPrdSourceMode === "pending"
+          ? await taskApi.buildPrdTaskDraftFromPending({
+              project_id: newRequirementProjectId,
+              relative_path: createSelectedPendingPrdRelativePath ?? "",
+            })
+          : createManualImportEntryMode === "paste"
+            ? await taskApi.buildPrdTaskDraftFromPastedPrd(
+                createManualImportPrdMarkdownText
+              )
+            : await taskApi.buildPrdTaskDraftFromImportedPrd(
+                createManualImportPrdFile as File
+              );
+
+      setCreatePrdTaskDraftSuggestion(draftSuggestion);
+      setNewRequirementTitle(draftSuggestion.suggested_task_title);
+      setNewRequirementDescription(draftSuggestion.suggested_requirement_brief);
+      setIsCreatePrdTaskDraftConfirmed(false);
+      setSuccessMessage("AI 已根据 PRD 预填标题和描述，请确认后创建任务。");
+    } catch (draftError) {
+      console.error(draftError);
+      setErrorMessage(
+        draftError instanceof Error
+          ? draftError.message
+          : "Failed to build task draft from PRD."
+      );
     } finally {
       setActiveMutationName(null);
     }
@@ -4393,6 +4682,28 @@ function App() {
 
             {isCreatePanelOpen && canCreateRequirements ? (
               <CardSurface className="devflow-create-panel">
+                <select
+                  className="devflow-input devflow-input--select"
+                  value={createPrdSourceMode}
+                  disabled={
+                    activeMutationName === "create" ||
+                    activeMutationName === "prd_source"
+                  }
+                  onChange={(changeEvent) => {
+                    void handleChangeCreatePrdSourceMode(
+                      changeEvent.target.value as PrdSourceMode
+                    );
+                  }}
+                >
+                  {Object.entries(PRD_SOURCE_MODE_LABEL_MAP).map(
+                    ([sourceModeValue, sourceModeLabel]) => (
+                      <option key={sourceModeValue} value={sourceModeValue}>
+                        {sourceModeLabel}
+                      </option>
+                    )
+                  )}
+                </select>
+
                 <input
                   className="devflow-input devflow-input--title"
                   placeholder="Requirement Title"
@@ -4403,36 +4714,53 @@ function App() {
                 />
 
                 <div className="devflow-create-panel__composer">
-                  <button
-                    type="button"
-                    className="devflow-create-panel__attach"
-                    onClick={() => createRequirementAttachmentInputRef.current?.click()}
-                    disabled={activeMutationName === "create"}
-                    aria-label="Attach image or video to requirement"
-                  >
-                    <PaperclipIcon className="devflow-icon devflow-icon--small" />
-                  </button>
+                  {createPrdSourceMode === "ai_generate" ? (
+                    <button
+                      type="button"
+                      className="devflow-create-panel__attach"
+                      onClick={() => createRequirementAttachmentInputRef.current?.click()}
+                      disabled={activeMutationName === "create"}
+                      aria-label="Attach image or video to requirement"
+                    >
+                      <PaperclipIcon className="devflow-icon devflow-icon--small" />
+                    </button>
+                  ) : null}
 
                   <textarea
-                    className="devflow-input devflow-input--textarea devflow-input--textarea-with-attachment"
-                    placeholder="Describe what you want to build..."
+                    className={joinClassNames(
+                      "devflow-input devflow-input--textarea",
+                      createPrdSourceMode === "ai_generate" &&
+                        "devflow-input--textarea-with-attachment"
+                    )}
+                    placeholder={
+                      createPrdSourceMode === "ai_generate"
+                        ? "Describe what you want to build..."
+                        : "AI will prefill this from the selected PRD. Review or edit before creating."
+                    }
                     value={newRequirementDescription}
                     onChange={(changeEvent) =>
                       setNewRequirementDescription(changeEvent.target.value)
                     }
-                    onPaste={handleCreateRequirementPaste}
+                    onPaste={
+                      createPrdSourceMode === "ai_generate"
+                        ? handleCreateRequirementPaste
+                        : undefined
+                    }
                   />
 
-                  <input
-                    ref={createRequirementAttachmentInputRef}
-                    className="devflow-feedback__file-input"
-                    type="file"
-                    accept="image/*,video/*"
-                    onChange={handleCreateRequirementAttachmentInputChange}
-                  />
+                  {createPrdSourceMode === "ai_generate" ? (
+                    <input
+                      ref={createRequirementAttachmentInputRef}
+                      className="devflow-feedback__file-input"
+                      type="file"
+                      accept="image/*,video/*"
+                      onChange={handleCreateRequirementAttachmentInputChange}
+                    />
+                  ) : null}
                 </div>
 
-                {createRequirementAttachmentDraft ? (
+                {createRequirementAttachmentDraft &&
+                createPrdSourceMode === "ai_generate" ? (
                   <div className="devflow-feedback__attachment">
                     {renderAttachmentPreview(createRequirementAttachmentDraft)}
 
@@ -4455,10 +4783,14 @@ function App() {
                       <XIcon className="devflow-icon devflow-icon--small" />
                     </button>
                   </div>
-                ) : (
+                ) : createPrdSourceMode === "ai_generate" ? (
                   <p className="devflow-create-panel__hint">
                     Tip: Paste an image/video into the description box or attach one
                     from disk.
+                  </p>
+                ) : (
+                  <p className="devflow-create-panel__hint">
+                    先选择或导入 PRD，再生成草稿；确认标题、描述和必填项后才会创建 task。
                   </p>
                 )}
 
@@ -4523,6 +4855,251 @@ function App() {
                   </>
                 ) : null}
 
+                {createPrdSourceMode !== "ai_generate" ? (
+                  <div className="devflow-prd-source-panel devflow-prd-source-panel--create">
+                    <div className="devflow-prd-source-panel__header">
+                      <span className="devflow-detail__fact-label">PRD 来源</span>
+                      <p className="devflow-detail__fact-hint">
+                        先由 AI 根据 PRD 预填标题和描述，再由你确认并创建 task。
+                      </p>
+                    </div>
+
+                    {createPrdSourceMode === "pending" ? (
+                      <div className="devflow-prd-source-panel__controls">
+                        <select
+                          className="devflow-input devflow-input--select"
+                          value={createSelectedPendingPrdRelativePath ?? ""}
+                          disabled={
+                            isCreatePendingPrdListLoading ||
+                            activeMutationName === "prd_source"
+                          }
+                          onChange={(changeEvent) =>
+                            handleChangeCreateSelectedPendingPrdRelativePath(
+                              changeEvent.target.value || null
+                            )
+                          }
+                        >
+                          <option value="">
+                            {isCreatePendingPrdListLoading
+                              ? "Loading pending PRDs..."
+                              : createPendingPrdFileList.length > 0
+                                ? "-- 选择 pending PRD --"
+                                : "tasks/pending 暂无 Markdown PRD"}
+                          </option>
+                          {createPendingPrdFileList.map((pendingPrdFile) => (
+                            <option
+                              key={pendingPrdFile.relative_path}
+                              value={pendingPrdFile.relative_path}
+                            >
+                              {pendingPrdFile.title_preview ||
+                                pendingPrdFile.file_name}
+                              {" · "}
+                              {formatFileSize(pendingPrdFile.size_bytes)}
+                              {" · Updated "}
+                              {formatDateTime(pendingPrdFile.updated_at)}
+                            </option>
+                          ))}
+                        </select>
+                        <ActionButton
+                          variant="secondary"
+                          busy={activeMutationName === "prd_source"}
+                          disabled={
+                            !canSubmitPrdSourceAction(
+                              createPrdSourceMode,
+                              createSelectedPendingPrdRelativePath,
+                              createManualImportPrdFile,
+                              createManualImportEntryMode,
+                              createManualImportPrdMarkdownText
+                            )
+                          }
+                          onClick={() => {
+                            void handleBuildCreatePrdTaskDraft();
+                          }}
+                        >
+                          <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                          <span>生成草稿</span>
+                        </ActionButton>
+                        <ActionButton
+                          variant="ghost"
+                          onClick={() => {
+                            void loadPendingPrdFilesForCreate(newRequirementProjectId);
+                          }}
+                        >
+                          Refresh
+                        </ActionButton>
+                      </div>
+                    ) : null}
+
+                    {createPrdSourceMode === "manual_import" ? (
+                      <div className="devflow-prd-source-panel__manual-stack">
+                        <div
+                          className="devflow-feedback__channel-tabs"
+                          role="tablist"
+                          aria-label="Create task PRD import method"
+                        >
+                          {Object.entries(MANUAL_IMPORT_ENTRY_MODE_LABEL_MAP).map(
+                            ([manualImportEntryModeValue, manualImportEntryModeLabel]) => (
+                              <button
+                                key={manualImportEntryModeValue}
+                                type="button"
+                                className={[
+                                  "devflow-feedback__channel-tab",
+                                  createManualImportEntryMode ===
+                                  manualImportEntryModeValue
+                                    ? "devflow-feedback__channel-tab--active"
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
+                                disabled={activeMutationName === "prd_source"}
+                                onClick={() =>
+                                  handleChangeCreateManualImportEntryMode(
+                                    manualImportEntryModeValue as ManualImportEntryMode
+                                  )
+                                }
+                              >
+                                {manualImportEntryModeLabel}
+                              </button>
+                            )
+                          )}
+                        </div>
+
+                        {createManualImportEntryMode === "upload" ? (
+                          <div className="devflow-prd-source-panel__controls">
+                            <input
+                              ref={createPrdImportInputRef}
+                              className="devflow-feedback__file-input"
+                              type="file"
+                              accept=".md,text/markdown,text/plain"
+                              onChange={handleCreateManualImportPrdFileChange}
+                            />
+                            <ActionButton
+                              variant="ghost"
+                              onClick={() => createPrdImportInputRef.current?.click()}
+                            >
+                              Choose Markdown
+                            </ActionButton>
+                            {createManualImportPrdFile ? (
+                              <span className="devflow-prd-source-panel__file">
+                                {createManualImportPrdFile.name}
+                                {" · "}
+                                {formatFileSize(createManualImportPrdFile.size)}
+                              </span>
+                            ) : (
+                              <span className="devflow-prd-source-panel__file">
+                                未选择文件
+                              </span>
+                            )}
+                            <ActionButton
+                              variant="secondary"
+                              busy={activeMutationName === "prd_source"}
+                              disabled={
+                                !canSubmitPrdSourceAction(
+                                  createPrdSourceMode,
+                                  createSelectedPendingPrdRelativePath,
+                                  createManualImportPrdFile,
+                                  createManualImportEntryMode,
+                                  createManualImportPrdMarkdownText
+                                )
+                              }
+                              onClick={() => {
+                                void handleBuildCreatePrdTaskDraft();
+                              }}
+                            >
+                              <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                              <span>生成草稿</span>
+                            </ActionButton>
+                          </div>
+                        ) : (
+                          <>
+                            <textarea
+                              className="devflow-prd-source-panel__textarea"
+                              value={createManualImportPrdMarkdownText}
+                              placeholder={
+                                "直接粘贴 PRD Markdown 文本，或粘贴一个 .md 文件…\n\n例如：\n# PRD：需求标题\n\n**需求名称（AI 归纳）**：需求标题"
+                              }
+                              disabled={activeMutationName === "prd_source"}
+                              onChange={handleCreateManualImportPrdMarkdownTextChange}
+                              onPaste={handleCreateManualImportPrdPaste}
+                            />
+                            <div className="devflow-prd-source-panel__controls">
+                              <span className="devflow-prd-source-panel__file">
+                                {createManualImportPrdMarkdownText.trim().length > 0
+                                  ? `已粘贴 ${createManualImportPrdMarkdownText.length} 个字符`
+                                  : "未粘贴内容"}
+                              </span>
+                              <ActionButton
+                                variant="ghost"
+                                disabled={
+                                  createManualImportPrdMarkdownText.length === 0
+                                }
+                                onClick={() => {
+                                  setCreateManualImportPrdMarkdownText("");
+                                  setCreatePrdTaskDraftSuggestion(null);
+                                  setIsCreatePrdTaskDraftConfirmed(false);
+                                }}
+                              >
+                                Clear
+                              </ActionButton>
+                              <ActionButton
+                                variant="secondary"
+                                busy={activeMutationName === "prd_source"}
+                                disabled={
+                                  !canSubmitPrdSourceAction(
+                                    createPrdSourceMode,
+                                    createSelectedPendingPrdRelativePath,
+                                    createManualImportPrdFile,
+                                    createManualImportEntryMode,
+                                    createManualImportPrdMarkdownText
+                                  )
+                                }
+                                onClick={() => {
+                                  void handleBuildCreatePrdTaskDraft();
+                                }}
+                              >
+                                <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                                <span>生成草稿</span>
+                              </ActionButton>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {createPrdTaskDraftSuggestion ? (
+                      <div className="devflow-prd-source-panel__draft-confirm">
+                        <span>
+                          草稿来源：
+                          {createPrdTaskDraftSuggestion.source_file_name ||
+                            createPrdTaskDraftSuggestion.source_relative_path ||
+                            "PRD"}
+                        </span>
+                        {createPrdTaskDraftSuggestion.source_updated_at ? (
+                          <span>
+                            Updated{" "}
+                            {formatDateTime(
+                              createPrdTaskDraftSuggestion.source_updated_at
+                            )}
+                          </span>
+                        ) : null}
+                        <label className="devflow-create-panel__auto-execute">
+                          <input
+                            type="checkbox"
+                            checked={isCreatePrdTaskDraftConfirmed}
+                            disabled={activeMutationName === "create"}
+                            onChange={(changeEvent) =>
+                              setIsCreatePrdTaskDraftConfirmed(
+                                changeEvent.target.checked
+                              )
+                            }
+                          />
+                          <span>我已确认 AI 预填的标题和描述，并已完成必填选择</span>
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <label className="devflow-create-panel__auto-execute">
                   <input
                     type="checkbox"
@@ -4561,11 +5138,29 @@ function App() {
                   <ActionButton
                     variant="primary"
                     busy={activeMutationName === "create"}
+                    disabled={
+                      createPrdSourceMode !== "ai_generate" &&
+                      !canSubmitPrdFirstTaskCreate(
+                        createPrdSourceMode,
+                        newRequirementTitle,
+                        newRequirementDescription,
+                        isCreatePrdTaskDraftConfirmed,
+                        createSelectedPendingPrdRelativePath,
+                        createPrdTaskDraftSuggestion?.source_updated_at ?? null,
+                        createManualImportPrdFile,
+                        createManualImportEntryMode,
+                        createManualImportPrdMarkdownText
+                      )
+                    }
                     onClick={() => {
                       void handleCreateRequirement();
                     }}
                   >
-                    {activeMutationName === "create" ? "Creating..." : "Create"}
+                    {activeMutationName === "create"
+                      ? "Creating..."
+                      : createPrdSourceMode === "ai_generate"
+                        ? "Create"
+                        : "Create from PRD"}
                   </ActionButton>
                 </div>
               </CardSurface>

@@ -21,7 +21,7 @@ just dsl-dev
 
 本地默认启动地址：
 
-- 前端：`http://localhost:5173`
+- 前端：`http://localhost:23456`
 - 后端：`http://localhost:8000`
 - 健康检查：`http://localhost:8000/health`
 
@@ -31,7 +31,7 @@ just dsl-dev
 just dsl-dev backend_port=8100 frontend_port=5174
 ```
 
-省略 `backend_port` 时，命令会从 `8000` 开始自动寻找空闲后端端口；`frontend_port` 默认是 `5173`，如被占用则需要显式换端口后重试。
+省略 `backend_port` 时，命令会从 `8000` 开始自动寻找空闲后端端口；`frontend_port` 默认是 `23456`，如被占用则需要显式换端口后重试。
 
 可选开发命令：
 

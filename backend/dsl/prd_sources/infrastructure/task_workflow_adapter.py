@@ -9,13 +9,21 @@ from sqlalchemy.orm import Session
 
 from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.prd_sources.domain.errors import (
+    InvalidTaskDraftError,
     InvalidTaskStageError,
+    ProjectNotFoundError,
     TaskAutomationRunningError,
     TaskNotFoundError,
 )
-from backend.dsl.prd_sources.domain.models import PrdTaskContext, StagedPrdDocument
+from backend.dsl.prd_sources.domain.models import (
+    PrdTaskContext,
+    PrdTasklessSourceContext,
+    StagedPrdDocument,
+)
+from backend.dsl.schemas.task_schema import TaskCreateSchema
 from backend.dsl.services.automation_runner import (
     is_task_automation_running,
     register_task_background_activity,
@@ -78,6 +86,83 @@ class SqlAlchemyTaskWorkflowAdapter:
         task_obj = self._get_task_or_raise(task_id_str)
         workspace_dir_path = self._resolve_pending_source_work_dir_path(task_obj)
         return self._build_context(task_obj, workspace_dir_path)
+
+    def resolve_taskless_pending_source_context(
+        self,
+        project_id_str: str | None,
+    ) -> PrdTasklessSourceContext:
+        """Resolve a pending source workspace before task creation.
+
+        Args:
+            project_id_str: Optional project UUID string.
+
+        Returns:
+            PrdTasklessSourceContext: Taskless pending source context.
+        """
+        run_account_id_str = self._get_current_run_account_id_or_raise()
+        normalized_project_id_str = project_id_str.strip() if project_id_str else None
+        if not normalized_project_id_str:
+            return PrdTasklessSourceContext(
+                run_account_id_str=run_account_id_str,
+                project_id_str=None,
+                workspace_dir_path=config.BASE_DIR,
+            )
+
+        project_obj = (
+            self._db_session.query(Project)
+            .filter(Project.id == normalized_project_id_str)
+            .first()
+        )
+        if project_obj is None:
+            raise ProjectNotFoundError(
+                f"Project with id {normalized_project_id_str} not found."
+            )
+
+        return PrdTasklessSourceContext(
+            run_account_id_str=run_account_id_str,
+            project_id_str=project_obj.id,
+            workspace_dir_path=Path(project_obj.repo_path),
+        )
+
+    def create_task_from_prd_draft(
+        self,
+        *,
+        task_title_str: str,
+        project_id_str: str | None,
+        worktree_base_branch_name_str: str,
+        requirement_brief_str: str,
+        auto_confirm_prd_and_execute_bool: bool,
+    ) -> str:
+        """Create a real task from a confirmed PRD-first draft.
+
+        Args:
+            task_title_str: Confirmed task title.
+            project_id_str: Optional project UUID string.
+            worktree_base_branch_name_str: Selected base branch.
+            requirement_brief_str: Confirmed task description.
+            auto_confirm_prd_and_execute_bool: Whether to execute after PRD ready.
+
+        Returns:
+            str: Created task UUID string.
+        """
+        run_account_id_str = self._get_current_run_account_id_or_raise()
+        try:
+            task_create_schema = TaskCreateSchema(
+                task_title=task_title_str,
+                project_id=project_id_str,
+                worktree_base_branch_name=worktree_base_branch_name_str,
+                requirement_brief=requirement_brief_str,
+                auto_confirm_prd_and_execute=auto_confirm_prd_and_execute_bool,
+            )
+            created_task_obj = TaskService.create_task(
+                self._db_session,
+                task_create_schema,
+                run_account_id_str,
+            )
+        except ValueError as validation_error:
+            raise InvalidTaskDraftError(str(validation_error)) from validation_error
+
+        return created_task_obj.id
 
     def prepare_prd_workspace(self, task_id_str: str) -> PrdTaskContext:
         """Prepare a task workspace without starting PRD generation.
@@ -161,6 +246,17 @@ class SqlAlchemyTaskWorkflowAdapter:
             Task: ORM task object.
         """
         return self._get_task_or_raise(task_id_str)
+
+    def _get_current_run_account_id_or_raise(self) -> str:
+        """Return the active run account ID or raise a task draft error."""
+        active_run_account_obj = (
+            self._db_session.query(RunAccount).filter(RunAccount.is_active).first()
+        )
+        if active_run_account_obj is None:
+            raise InvalidTaskDraftError(
+                "No active run account. Please create a run account first."
+            )
+        return active_run_account_obj.id
 
     def _get_task_or_raise(self, task_id_str: str) -> Task:
         """Return a task or raise a domain error."""

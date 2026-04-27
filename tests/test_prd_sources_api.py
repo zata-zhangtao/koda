@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,13 +19,25 @@ from backend.dsl.models.project import Project
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.prd_sources.api import (
+    build_task_draft_from_pending_prd,
+    create_task_from_pending_prd,
+    create_task_from_pasted_prd,
     import_prd_file,
     import_pasted_prd_markdown,
     list_pending_prd_files,
+    list_taskless_pending_prd_files,
     select_pending_prd_file,
+    taskless_router,
+)
+from backend.dsl.prd_sources.infrastructure import task_workflow_adapter
+from backend.dsl.prd_sources.infrastructure.draft_suggestion_adapter import (
+    CliPrdTaskDraftSuggestionAdapter,
 )
 from backend.dsl.prd_sources.domain.policies import MAX_PRD_MARKDOWN_BYTES
 from backend.dsl.prd_sources.schemas import (
+    BuildPendingPrdTaskDraftRequestSchema,
+    CreateTaskFromPastedPrdRequestSchema,
+    CreateTaskFromPendingPrdRequestSchema,
     ImportPastedPrdRequestSchema,
     SelectPendingPrdRequestSchema,
 )
@@ -33,6 +46,7 @@ from backend.dsl.services import codex_runner
 from backend.dsl.services.automation_runner import run_task_implementation
 from backend.dsl.services.prd_file_service import find_task_prd_file_path
 from utils.database import Base
+from utils.database import get_db
 
 _FIXED_PRD_FILENAME_DATETIME = datetime(2026, 4, 23, 13, 5, 0)
 
@@ -78,10 +92,6 @@ def clear_codex_runtime_state() -> None:
 def _freeze_prd_filename_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force PRD filename generation to use a deterministic timestamp."""
     monkeypatch.setattr(prd_policies, "datetime", _FixedDatetimeModule)
-    yield
-    codex_runner._running_background_task_ids.clear()
-    codex_runner._running_codex_processes.clear()
-    codex_runner._user_cancelled_tasks.clear()
 
 
 def _create_task(
@@ -112,6 +122,21 @@ def _create_task(
     return task_obj
 
 
+def _create_active_run_account(db_session: Session) -> RunAccount:
+    """Create an active run account for taskless API tests."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+    db_session.refresh(run_account_obj)
+    return run_account_obj
+
+
 def test_list_pending_prd_files_returns_empty_when_directory_missing(
     db_session: Session,
     tmp_path: Path,
@@ -122,6 +147,102 @@ def test_list_pending_prd_files_returns_empty_when_directory_missing(
     response_schema = list_pending_prd_files(task_obj.id, db_session)
 
     assert response_schema.files == []
+
+
+def test_list_taskless_pending_prd_files_uses_default_workspace(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create-panel pending list should work before a task exists."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    pending_file_path = pending_directory_path / "draft.md"
+    pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：预创建任务\n",
+        encoding="utf-8",
+    )
+
+    response_schema = list_taskless_pending_prd_files(db_session)
+
+    assert [pending_file.file_name for pending_file in response_schema.files] == [
+        "draft.md"
+    ]
+    assert response_schema.files[0].updated_at is not None
+
+
+def test_build_task_draft_from_pending_prd_returns_prefill_fields(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Draft endpoint should prefill title/description from a pending PRD."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(
+        CliPrdTaskDraftSuggestionAdapter,
+        "suggest_task_draft",
+        lambda self, **kwargs: None,
+    )
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    pending_file_path = pending_directory_path / "draft.md"
+    pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：预创建任务\n\n"
+        "用户选择 PRD 后确认任务草稿。\n",
+        encoding="utf-8",
+    )
+
+    response_schema = build_task_draft_from_pending_prd(
+        BuildPendingPrdTaskDraftRequestSchema(
+            relative_path="tasks/pending/draft.md",
+        ),
+        db_session,
+    )
+
+    assert response_schema.suggested_task_title == "预创建任务"
+    assert "用户选择 PRD 后确认任务草稿" in response_schema.suggested_requirement_brief
+    assert response_schema.source_relative_path == "tasks/pending/draft.md"
+    assert response_schema.source_updated_at is not None
+
+
+def test_taskless_prd_source_routes_accept_http_payload(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Taskless PRD source routes should work through FastAPI request handling."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(
+        CliPrdTaskDraftSuggestionAdapter,
+        "suggest_task_draft",
+        lambda self, **kwargs: None,
+    )
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    (pending_directory_path / "draft.md").write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：HTTP 草稿\n\n"
+        "HTTP route should return a task draft.\n",
+        encoding="utf-8",
+    )
+    test_app = FastAPI()
+    test_app.include_router(taskless_router)
+    test_app.dependency_overrides[get_db] = lambda: db_session
+    test_client = TestClient(test_app)
+
+    pending_response = test_client.get("/api/prd-sources/pending")
+    draft_response = test_client.post(
+        "/api/prd-sources/draft-from-pending",
+        json={"relative_path": "tasks/pending/draft.md"},
+    )
+
+    assert pending_response.status_code == 200
+    assert pending_response.json()["files"][0]["file_name"] == "draft.md"
+    assert draft_response.status_code == 200
+    assert draft_response.json()["suggested_task_title"] == "HTTP 草稿"
 
 
 def test_list_pending_prd_files_prefers_project_repo_when_worktree_exists(
@@ -209,6 +330,109 @@ def test_select_pending_prd_file_moves_to_tasks_root_and_marks_ready(
     assert updated_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
     assert updated_task.lifecycle_status == TaskLifecycleStatus.OPEN
     assert background_tasks.tasks == []
+
+
+def test_create_task_from_pending_prd_creates_task_and_stages_prd(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRD-first pending create should create a task then stage the PRD."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    _freeze_prd_filename_timestamp(monkeypatch)
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    pending_file_path = pending_directory_path / "manual.md"
+    pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：先选 PRD 创建\n",
+        encoding="utf-8",
+    )
+    pending_updated_at = datetime.fromtimestamp(pending_file_path.stat().st_mtime)
+    background_tasks = BackgroundTasks()
+
+    created_task = create_task_from_pending_prd(
+        CreateTaskFromPendingPrdRequestSchema(
+            task_title="先选 PRD 创建",
+            requirement_brief="用户确认 AI 预填字段后创建任务。",
+            relative_path="tasks/pending/manual.md",
+            source_updated_at=pending_updated_at,
+        ),
+        background_tasks,
+        db_session,
+    )
+
+    staged_prd_file_path = find_task_prd_file_path(tmp_path, created_task.id)
+    assert created_task.task_title == "先选 PRD 创建"
+    assert created_task.requirement_brief == "用户确认 AI 预填字段后创建任务。"
+    assert created_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
+    assert staged_prd_file_path is not None
+    assert staged_prd_file_path.name == "20260423-130500-prd-先选-prd-创建.md"
+    assert not pending_file_path.exists()
+    assert background_tasks.tasks == []
+
+
+def test_create_task_from_pending_prd_rejects_stale_timestamp(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stale pending PRDs should return a conflict before task creation."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    pending_file_path = pending_directory_path / "manual.md"
+    pending_file_path.write_text(
+        "# PRD\n\n**需求名称（AI 归纳）**：先选 PRD 创建\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HTTPException) as http_exception_info:
+        create_task_from_pending_prd(
+            CreateTaskFromPendingPrdRequestSchema(
+                task_title="先选 PRD 创建",
+                requirement_brief="用户确认 AI 预填字段后创建任务。",
+                relative_path="tasks/pending/manual.md",
+                source_updated_at=datetime(2026, 1, 1, 0, 0, 0),
+            ),
+            BackgroundTasks(),
+            db_session,
+        )
+
+    assert http_exception_info.value.status_code == 409
+    assert db_session.query(Task).count() == 0
+
+
+def test_create_task_from_pasted_prd_creates_task_and_imports_prd(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRD-first pasted import should create a task then stage imported Markdown."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    _freeze_prd_filename_timestamp(monkeypatch)
+
+    created_task = create_task_from_pasted_prd(
+        CreateTaskFromPastedPrdRequestSchema(
+            task_title="粘贴 PRD 创建",
+            requirement_brief="用户上传或粘贴 PRD 后创建任务。",
+            prd_markdown_text="**需求名称（AI 归纳）**：粘贴 PRD 创建\n",
+        ),
+        BackgroundTasks(),
+        db_session,
+    )
+
+    staged_prd_file_path = find_task_prd_file_path(tmp_path, created_task.id)
+    assert created_task.task_title == "粘贴 PRD 创建"
+    assert created_task.workflow_stage == WorkflowStage.PRD_WAITING_CONFIRMATION
+    assert staged_prd_file_path is not None
+    assert staged_prd_file_path.name == "20260423-130500-prd-粘贴-prd-创建.md"
+    assert (
+        staged_prd_file_path.read_text(encoding="utf-8")
+        == "**需求名称（AI 归纳）**：粘贴 PRD 创建\n"
+    )
 
 
 def test_select_pending_prd_file_moves_project_pending_into_created_worktree(

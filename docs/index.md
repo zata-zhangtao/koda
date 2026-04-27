@@ -30,7 +30,7 @@ just dsl-dev
 
 启动后访问：
 
-- 前端：`http://localhost:5173`
+- 前端：`http://localhost:23456`
 - 后端：`http://localhost:8000`
 - 健康检查：`http://localhost:8000/health`
 

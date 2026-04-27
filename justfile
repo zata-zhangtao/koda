@@ -467,7 +467,7 @@ dsl-dev arg1="" arg2="":
         REQUESTED_FRONTEND_PORT="${POSITIONAL_PORTS[1]}"
     fi
 
-    FRONTEND_PORT="${REQUESTED_FRONTEND_PORT:-5173}"
+    FRONTEND_PORT="${REQUESTED_FRONTEND_PORT:-23456}"
 
     validate_port_number "${FRONTEND_PORT}" "frontend"
 

@@ -13,7 +13,7 @@ just dsl-dev
 
 本地默认地址：
 
-- 前端工作台：`http://localhost:5173`
+- 前端工作台：`http://localhost:23456`
 - 后端 API：`http://localhost:8000`
 - 健康检查：`http://localhost:8000/health`
 
@@ -96,7 +96,7 @@ just dsl-dev
 
 1. 创建 `data/media/original` 与 `data/media/thumbnail`
 2. 若未显式传入 `backend_port`，则从 `8000` 开始为后端寻找空闲端口；若显式传入，则要求该端口必须空闲
-3. 检查 `frontend_port`（默认 `5173`）是否空闲
+3. 检查 `frontend_port`（默认 `23456`）是否空闲
 4. 按选定端口启动 FastAPI 后端
 5. 让 Vite 前端把 `/api` 与 `/media` 代理到当前后端端口
 

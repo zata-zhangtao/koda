@@ -10,6 +10,7 @@ import type {
   EmailSettings,
   EmailSettingsUpdate,
   PendingPrdFileList,
+  PrdTaskDraftSuggestion,
   ProjectTimelineEntry,
   ProjectTimelineSummary,
   ProjectTimelineTaskDetail,
@@ -166,6 +167,128 @@ export const taskApi = {
     fetchApi<Task>("/tasks", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  /** 创建任务前列出 tasks/pending PRD 文件 */
+  listTasklessPendingPrdFiles: (projectId?: string | null) => {
+    const searchParams = new URLSearchParams();
+    if (projectId) {
+      searchParams.set("project_id", projectId);
+    }
+    const queryString = searchParams.toString();
+    return fetchApi<PendingPrdFileList>(
+      `/prd-sources/pending${queryString ? `?${queryString}` : ""}`
+    );
+  },
+
+  /** 从 pending PRD 生成创建任务草稿 */
+  buildPrdTaskDraftFromPending: (data: {
+    project_id?: string | null;
+    relative_path: string;
+  }) =>
+    fetchApi<PrdTaskDraftSuggestion>("/prd-sources/draft-from-pending", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** 从上传的 PRD 文件生成创建任务草稿 */
+  buildPrdTaskDraftFromImportedPrd: async (
+    file: File
+  ): Promise<PrdTaskDraftSuggestion> => {
+    const formData = new FormData();
+    formData.append("uploaded_prd_file", file);
+
+    const response = await fetch(`${API_BASE}/prd-sources/draft-from-import`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+
+    return response.json() as Promise<PrdTaskDraftSuggestion>;
+  },
+
+  /** 从粘贴的 PRD Markdown 生成创建任务草稿 */
+  buildPrdTaskDraftFromPastedPrd: (prdMarkdownText: string) =>
+    fetchApi<PrdTaskDraftSuggestion>("/prd-sources/draft-from-import-text", {
+      method: "POST",
+      body: JSON.stringify({
+        prd_markdown_text: prdMarkdownText,
+        original_file_name: "pasted-prd.md",
+      }),
+    }),
+
+  /** 从 pending PRD 创建任务并进入 PRD ready 链路 */
+  createTaskFromPendingPrd: (data: {
+    task_title: string;
+    project_id?: string | null;
+    worktree_base_branch_name?: string;
+    requirement_brief: string;
+    auto_confirm_prd_and_execute?: boolean;
+    relative_path: string;
+    source_updated_at: string;
+  }) =>
+    fetchApi<Task>("/prd-sources/create-task-from-pending", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** 从上传的 PRD 创建任务并进入 PRD ready 链路 */
+  createTaskFromImportedPrd: async (
+    data: {
+      task_title: string;
+      project_id?: string | null;
+      worktree_base_branch_name?: string;
+      requirement_brief: string;
+      auto_confirm_prd_and_execute?: boolean;
+    },
+    file: File
+  ): Promise<Task> => {
+    const formData = new FormData();
+    formData.append("task_title", data.task_title);
+    formData.append("requirement_brief", data.requirement_brief);
+    formData.append("project_id", data.project_id ?? "");
+    formData.append(
+      "worktree_base_branch_name",
+      data.worktree_base_branch_name ?? "main"
+    );
+    formData.append(
+      "auto_confirm_prd_and_execute",
+      String(Boolean(data.auto_confirm_prd_and_execute))
+    );
+    formData.append("uploaded_prd_file", file);
+
+    const response = await fetch(`${API_BASE}/prd-sources/create-task-from-import`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(extractApiErrorMessage(responseText, response.status));
+    }
+
+    return response.json() as Promise<Task>;
+  },
+
+  /** 从粘贴 PRD Markdown 创建任务并进入 PRD ready 链路 */
+  createTaskFromPastedPrd: (data: {
+    task_title: string;
+    project_id?: string | null;
+    worktree_base_branch_name?: string;
+    requirement_brief: string;
+    auto_confirm_prd_and_execute?: boolean;
+    prd_markdown_text: string;
+  }) =>
+    fetchApi<Task>("/prd-sources/create-task-from-import-text", {
+      method: "POST",
+      body: JSON.stringify({
+        ...data,
+        original_file_name: "pasted-prd.md",
+      }),
     }),
 
   /** 更新任务生命周期状态 */

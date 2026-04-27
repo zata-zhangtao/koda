@@ -21,7 +21,7 @@ Koda 现在有三类关键配置：
 | `.env.example` | 本机 DSL / agent 样例 | 开发安全默认值，保留可选 public 参数与 sidecar Q&A 默认策略 |
 | `deploy/public-forward/.env.example` | 服务器样例 | 域名、Basic Auth、gateway 参数 |
 | `deploy/public-forward/agent.env.example` | 本机公网模式样例 | 便于单独复制到开发机 |
-| `frontend/vite.config.ts` | 前端开发服务器配置 | 默认端口 `5173`、`/api` 与 `/media` 代理 |
+| `frontend/vite.config.ts` | 前端开发服务器配置 | 默认端口 `23456`、`/api` 与 `/media` 代理 |
 | `mkdocs.yml` | 文档站点配置 | 导航、插件、Mermaid 支持 |
 
 ## DSL 运行配置
@@ -150,7 +150,7 @@ Koda 创建 task worktree 后会运行 `scripts/bootstrap_worktree_env.sh`。默
 
 `frontend/vite.config.ts` 依然约定：
 
-- 默认开发端口为 `5173`
+- 默认开发端口为 `23456`
 - 默认把 `/api` 代理到 `http://localhost:8000`
 - 默认把 `/media` 代理到 `http://localhost:8000`
 - 构建产物输出到 `frontend/dist`
