@@ -23,6 +23,11 @@ from backend.dsl.schemas.task_schema import (
     TaskUpdateSchema,
 )
 from backend.dsl.services.task_service import TaskService
+from backend.dsl.worktree_resources import (
+    ProjectWorktreeResourcePolicySchema,
+    WorktreeResourcePolicyConfirmation,
+    build_default_project_worktree_resource_policy,
+)
 from utils.database import Base
 from utils.helpers import utc_now_naive
 from utils.settings import config
@@ -177,6 +182,95 @@ def test_create_task_persists_selected_worktree_base_branch(
 
     assert created_task.project_id == project_obj.id
     assert created_task.worktree_base_branch_name == "develop"
+
+
+def test_ensure_task_worktree_blocks_when_project_policy_is_deferred(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task start should fail before worktree creation when policy is deferred."""
+    repo_root_path = _create_git_repo(tmp_path / "project-with-policy")
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    deferred_policy_obj = ProjectWorktreeResourcePolicySchema(
+        confirmation_status=WorktreeResourcePolicyConfirmation.DEFERRED,
+        rules=[],
+    )
+    project_obj = Project(
+        display_name="project-with-policy",
+        repo_path=str(repo_root_path),
+        worktree_resource_policy_json=deferred_policy_obj.model_dump_json(),
+        description=None,
+    )
+    task_obj = Task(
+        run_account_id="",
+        project_id=None,
+        task_title="Deferred policy",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+    task_obj.run_account_id = run_account_obj.id
+    task_obj.project_id = project_obj.id
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.dsl.services.git_worktree_service.GitWorktreeService.create_task_worktree",
+        lambda *args, **kwargs: pytest.fail("worktree creation should not run"),
+    )
+
+    with pytest.raises(ValueError, match="Confirm Worktree Resources"):
+        TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
+
+
+def test_ensure_task_worktree_blocks_when_legacy_project_policy_is_missing(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task start should fail before worktree creation for legacy null policies."""
+    repo_root_path = _create_git_repo(tmp_path / "legacy-project-without-policy")
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="legacy-project-without-policy",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    task_obj = Task(
+        run_account_id="",
+        project_id=None,
+        task_title="Missing legacy policy",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.BACKLOG,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+    task_obj.run_account_id = run_account_obj.id
+    task_obj.project_id = project_obj.id
+    db_session.add(task_obj)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.dsl.services.git_worktree_service.GitWorktreeService.create_task_worktree",
+        lambda *args, **kwargs: pytest.fail("worktree creation should not run"),
+    )
+
+    with pytest.raises(ValueError, match="confirm Worktree Resources"):
+        TaskService._ensure_task_worktree_if_needed(db_session, task_obj)
 
 
 def test_create_task_rejects_missing_project_id(db_session: Session) -> None:
@@ -1058,6 +1152,11 @@ def test_start_task_persists_created_worktree_path_under_task_root(
     project_obj = Project(
         display_name="demo-repo",
         repo_path=str(repo_root_path),
+        worktree_resource_policy_json=(
+            build_default_project_worktree_resource_policy(
+                repo_root_path
+            ).model_dump_json()
+        ),
         description=None,
     )
     db_session.add_all([run_account_obj, project_obj])
@@ -1126,6 +1225,11 @@ def test_start_task_creates_worktree_from_selected_base_branch(
     project_obj = Project(
         display_name="demo-repo",
         repo_path=str(repo_root_path),
+        worktree_resource_policy_json=(
+            build_default_project_worktree_resource_policy(
+                repo_root_path
+            ).model_dump_json()
+        ),
         description=None,
     )
     db_session.add_all([run_account_obj, project_obj])

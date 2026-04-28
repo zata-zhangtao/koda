@@ -28,7 +28,7 @@
 
 1. 前端点击“开始任务”
 2. 后端将任务推进到 `prd_generating`
-3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，还会软链接 `.env*` 与主项目依赖目录，并准备基础前后端依赖环境
+3. 如果任务绑定了 `Project`，优先创建或复用 Git worktree；在 `worktree_path` 落库前，Koda 会按项目确认的 worktree 本地资源策略把 `.env*`、数据库、上传目录和依赖目录等 runtime 资源 materialize 到 worktree，并在失败时回滚本次 worktree/branch
 4. 新建 worktree 分支默认命名为 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 命名，失败时自动回退到标题规则化 slug，若仍为空则回退到 `task/<task_id[:8]>`
 5. `run_codex_prd` 组装 PRD Prompt
 6. 后端按配置调用目标 runner CLI（`codex` 或 `claude`）
@@ -38,6 +38,18 @@
    - 自动策略（`auto_confirm_prd_and_execute=true`）：跳过人工确认，直接推进到 `implementation_in_progress` 并启动 `run_codex_task`
 9. 仅默认策略会发送“PRD Ready / 等待确认”通知；自动策略不会发送该通知
 10. 默认策略不会自动继续执行代码实现，也不会默认提交代码
+
+### 项目 Worktree 资源策略确认
+
+项目管理面板的 Worktree Resources 控件支持三种确认状态：
+
+- `Use defaults`：后端扫描仓库中的未跟踪 / ignored runtime 资源，并保存默认策略。
+- `Customize`：点击“选择资源”后，前端会调用资源预览接口弹出路径树；用户可以逐级展开目录、直接勾选并配置整个文件夹，或继续展开后配置子文件。选择器只显示需要策略选择的 untracked/ignored 本地资源，不显示 Git 已追踪文件。可选动作包括 `Copy`、`Link` 或 `Skip`，应用后自动生成项目策略。未展开的子目录不会渲染其子节点；当上层文件夹被配置为 `Copy` / `Link` 时，子节点由该文件夹规则覆盖。
+- `Skip for now`：项目策略保持 deferred，绑定该项目的任务在 `Start Task` 时会被拦截，直到用户回到项目管理面板确认策略。
+
+扫描器会直接隐藏纯生成产物，例如 `__pycache__`、`.pytest_cache`、`.mypy_cache`、`.ruff_cache`、coverage / htmlcov、dist / build / site、logs、`.cache`、`.next`、`.vite`、`.turbo`、`.parcel-cache` 以及 `*.pyc`、`*.log`、`*.tmp`。这些文件不会进入候选树，也不会生成 policy rule。
+
+自定义策略仍保留 Advanced JSON 折叠区，主要用于排障或批量编辑；正常使用不需要手写 JSON。
 
 ### 编码执行链路
 
@@ -332,9 +344,9 @@ Codex 的工作目录选择顺序如下：
 
 对任务型 worktree 来说，目录创建成功还不算完成。当前实现会在保存 `worktree_path` 前补做以下准备：
 
-- 默认把源仓库中的 `.env*` 文件软链接到新 worktree（保留相对路径）；`WORKTREE_ENV_FILE_STRATEGY=copy` 可改为复制
-- 若检测到前端项目，默认把源仓库对应的 `node_modules` 软链接到 worktree；`WORKTREE_FRONTEND_STRATEGY=install-per-worktree` 可改为每个 worktree 独立安装
-- 若检测到 `pyproject.toml`，默认把源仓库 `.venv` 软链接到 worktree；源仓库没有 `.venv` 时才尝试执行 `uv sync --all-extras`，也可用 `WORKTREE_PYTHON_ENV_STRATEGY=install-per-worktree` 强制每个 worktree 独立同步
+- Project 必须先确认 worktree 本地资源策略。`Use defaults` 会从 Git untracked / ignored 状态生成默认规则；Git 已追踪文件由 `git worktree add` 自己检出，不进入资源选择器。`Customize` 会在前端路径树中配置整个文件夹或单个资源的 `Copy` / `Link` / `Skip`；`Skip for now` 会让项目保持 deferred，任务启动前被拦截。
+- 策略确认后，Python materializer 在 bootstrap 前执行资源处理：`.env*`、`*.pem`、`*.key` 默认复制；数据库、上传目录、`node_modules`、`.venv` 等共享 runtime 资源可按策略链接；未知 untracked/ignored 文件默认跳过并显示人工检查提示。
+- 当 Project policy active 时，`scripts/bootstrap_worktree_env.sh` 只执行兼容的依赖安装准备，不再独立决定 `.env*`、`.venv` 或 `node_modules` 的复制/链接。旧的 `WORKTREE_ENV_FILE_STRATEGY`、`WORKTREE_FRONTEND_STRATEGY`、`WORKTREE_PYTHON_ENV_STRATEGY` 只作为历史策略草稿输入，不覆盖已确认策略。
 - 分支命名来源会记录到后端日志（`ai` / `title_fallback` / `legacy_fallback`），便于排查命名回退
 
 如果 bootstrap 失败，任务启动会直接报错，而不是把不可直接使用的 worktree 写入任务状态。

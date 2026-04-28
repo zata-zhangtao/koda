@@ -125,7 +125,65 @@ export interface Project {
   is_repo_remote_consistent: boolean | null;
   is_repo_head_consistent: boolean | null;
   repo_consistency_note: string | null;
+  worktree_resource_policy_confirmation:
+    | "accepted_default"
+    | "customized"
+    | "deferred";
+  worktree_resource_policy: ProjectWorktreeResourcePolicy | null;
+  is_worktree_resource_policy_ready: boolean;
+  worktree_resource_policy_note: string | null;
   created_at: string;
+}
+
+export type WorktreeResourceMaterialization =
+  | "git-managed-copy"
+  | "link"
+  | "copy"
+  | "skip";
+
+export type WorktreeResourceGitState = "tracked" | "untracked" | "ignored";
+
+export type WorktreeResourcePolicyConfirmation =
+  | "accepted_default"
+  | "customized"
+  | "deferred";
+
+export interface ProjectWorktreeResourceRule {
+  relative_path: string;
+  include: boolean;
+  materialization: WorktreeResourceMaterialization;
+  resource_kind: string;
+  git_state: WorktreeResourceGitState;
+  required: boolean;
+  is_directory: boolean;
+  note: string | null;
+}
+
+export interface ProjectWorktreeResourcePolicy {
+  confirmation_status: WorktreeResourcePolicyConfirmation;
+  rules: ProjectWorktreeResourceRule[];
+}
+
+export interface WorktreeResourceCandidate {
+  relative_path: string;
+  git_state: WorktreeResourceGitState;
+  resource_kind: string;
+  materialization: WorktreeResourceMaterialization;
+  warning_codes: string[];
+  warning_text: string | null;
+  is_directory: boolean;
+}
+
+export interface WorktreeResourceCandidateList {
+  repo_path: string;
+  is_policy_ready: boolean;
+  policy_note: string | null;
+  candidates: WorktreeResourceCandidate[];
+}
+
+export interface WorktreeResourcePreviewRequest {
+  repo_path: string;
+  draft_policy?: ProjectWorktreeResourcePolicy | null;
 }
 
 /** Project local branches */

@@ -62,6 +62,7 @@ def test_database_session_bootstraps_empty_sqlite_file(tmp_path: Path) -> None:
     assert {"repo_remote_url", "repo_head_commit_hash", "project_category"}.issubset(
         project_column_name_set
     )
+    assert "worktree_resource_policy_json" in project_column_name_set
     assert "requirement_brief" in task_column_name_set
     assert "auto_confirm_prd_and_execute" in task_column_name_set
 

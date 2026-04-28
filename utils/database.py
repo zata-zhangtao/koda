@@ -75,6 +75,10 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added project_category column to projects",
     ),
     (
+        "ALTER TABLE projects ADD COLUMN worktree_resource_policy_json TEXT",
+        "Migration: added worktree_resource_policy_json column to projects",
+    ),
+    (
         "CREATE INDEX IF NOT EXISTS idx_tasks_run_account_created_at "
         "ON tasks (run_account_id, created_at)",
         "Migration: ensured idx_tasks_run_account_created_at",

@@ -7,10 +7,16 @@ consistent source of truth.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from backend.dsl.worktree_resources import (
+    ProjectWorktreeResourcePolicySchema,
+    materialize_project_worktree_resources,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +278,8 @@ class GitWorktreeService:
         task_id: str,
         task_branch_name_str: str | None = None,
         base_branch_name_str: str = "main",
+        project_worktree_resource_policy: ProjectWorktreeResourcePolicySchema
+        | None = None,
     ) -> Path:
         """Create a task worktree using Koda's owned lifecycle.
 
@@ -286,6 +294,7 @@ class GitWorktreeService:
             task_id: Task UUID
             task_branch_name_str: Optional branch name override
             base_branch_name_str: Existing local branch used as the worktree base
+            project_worktree_resource_policy: Confirmed project resource policy
 
         Returns:
             Path: Created worktree path
@@ -297,11 +306,21 @@ class GitWorktreeService:
             repo_root_path
         )
         task_worktree_root_path.mkdir(parents=True, exist_ok=True)
+        resolved_task_branch_name_str = (
+            task_branch_name_str or GitWorktreeService.build_task_branch_name(task_id)
+        )
+        branch_existed_before_create_bool = (
+            GitWorktreeService.check_local_branch_exists(
+                repo_root_path,
+                resolved_task_branch_name_str,
+            )
+            is True
+        )
 
         command_spec_obj = GitWorktreeService._build_worktree_create_command_spec(
             repo_root_path=repo_root_path,
             task_id=task_id,
-            task_branch_name_str=task_branch_name_str,
+            task_branch_name_str=resolved_task_branch_name_str,
             base_branch_name_str=base_branch_name_str,
         )
 
@@ -329,11 +348,35 @@ class GitWorktreeService:
                 f"创建 git worktree 后未找到预期目录：{created_worktree_path}"
             )
 
-        if command_spec_obj.requires_post_create_bootstrap:
-            GitWorktreeService._bootstrap_worktree_environment(
+        try:
+            if project_worktree_resource_policy is not None:
+                materialize_project_worktree_resources(
+                    repo_root_path=repo_root_path,
+                    worktree_root_path=created_worktree_path,
+                    project_policy=project_worktree_resource_policy,
+                )
+
+            if command_spec_obj.requires_post_create_bootstrap:
+                GitWorktreeService._bootstrap_worktree_environment(
+                    repo_root_path=repo_root_path,
+                    created_worktree_path=created_worktree_path,
+                    project_worktree_resource_policy=project_worktree_resource_policy,
+                )
+        except Exception as bootstrap_error:
+            rollback_result_text = GitWorktreeService._rollback_created_task_worktree(
                 repo_root_path=repo_root_path,
                 created_worktree_path=created_worktree_path,
+                created_branch_name_str=resolved_task_branch_name_str,
+                branch_existed_before_create_bool=branch_existed_before_create_bool,
             )
+            if isinstance(bootstrap_error, ValueError):
+                raise ValueError(
+                    f"{bootstrap_error} Rollback result: {rollback_result_text}"
+                ) from bootstrap_error
+            raise ValueError(
+                "创建 git worktree 后环境准备失败："
+                f"{bootstrap_error} Rollback result: {rollback_result_text}"
+            ) from bootstrap_error
 
         return created_worktree_path
 
@@ -1054,6 +1097,8 @@ class GitWorktreeService:
     def _bootstrap_worktree_environment(
         repo_root_path: Path,
         created_worktree_path: Path,
+        project_worktree_resource_policy: ProjectWorktreeResourcePolicySchema
+        | None = None,
     ) -> None:
         """Run the shared worktree environment bootstrap script.
 
@@ -1071,6 +1116,10 @@ class GitWorktreeService:
                 f"未找到环境准备脚本 {bootstrap_script_path}"
             )
 
+        bootstrap_environment = os.environ.copy()
+        if project_worktree_resource_policy is not None:
+            bootstrap_environment["KODA_WORKTREE_RESOURCE_POLICY_ACTIVE"] = "1"
+
         try:
             subprocess.run(
                 [
@@ -1085,6 +1134,7 @@ class GitWorktreeService:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=bootstrap_environment,
             )
         except subprocess.CalledProcessError as bootstrap_error:
             stderr_text = (bootstrap_error.stderr or "").strip()
@@ -1093,6 +1143,85 @@ class GitWorktreeService:
             raise ValueError(
                 f"创建 git worktree 后环境准备失败：{failure_reason_text}"
             ) from bootstrap_error
+
+    @staticmethod
+    def _rollback_created_task_worktree(
+        repo_root_path: Path,
+        created_worktree_path: Path,
+        created_branch_name_str: str,
+        branch_existed_before_create_bool: bool,
+    ) -> str:
+        """Remove a partially created task worktree and its branch.
+
+        Args:
+            repo_root_path: Source repository root path.
+            created_worktree_path: Worktree path created by this attempt.
+            created_branch_name_str: Task branch name used for this attempt.
+            branch_existed_before_create_bool: Whether the branch predated this
+                worktree creation attempt.
+
+        Returns:
+            str: Human-readable cleanup result for error reporting.
+        """
+
+        rollback_failure_list: list[str] = []
+
+        def _format_process_failure(
+            process_name_str: str, process_obj: subprocess.CompletedProcess[str]
+        ) -> str:
+            stderr_text = (process_obj.stderr or "").strip()
+            stdout_text = (process_obj.stdout or "").strip()
+            failure_reason_text = (
+                stderr_text or stdout_text or f"exit code {process_obj.returncode}"
+            )
+            return f"{process_name_str} failed: {failure_reason_text}"
+
+        if created_worktree_path.exists():
+            remove_process = subprocess.run(
+                ["git", "worktree", "remove", "--force", str(created_worktree_path)],
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if remove_process.returncode != 0 and created_worktree_path.exists():
+                shutil.rmtree(created_worktree_path, ignore_errors=True)
+            if created_worktree_path.exists():
+                rollback_failure_list.append(
+                    _format_process_failure("git worktree remove", remove_process)
+                )
+
+        prune_process = subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=str(repo_root_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if prune_process.returncode != 0:
+            rollback_failure_list.append(
+                _format_process_failure("git worktree prune", prune_process)
+            )
+
+        if not branch_existed_before_create_bool:
+            branch_delete_process = subprocess.run(
+                ["git", "branch", "-D", created_branch_name_str],
+                cwd=str(repo_root_path),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if branch_delete_process.returncode != 0:
+                rollback_failure_list.append(
+                    _format_process_failure("git branch -D", branch_delete_process)
+                )
+
+        if rollback_failure_list:
+            return "rollback incomplete: " + "; ".join(rollback_failure_list)
+        return "rollback succeeded"
 
     @staticmethod
     def _resolve_bootstrap_script_path() -> Path:

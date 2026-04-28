@@ -179,6 +179,15 @@ class TaskService:
                 "关联项目当前绑定到错误的代码仓库。"
                 "请先把项目重绑到与已同步指纹一致的 Git remote。"
             )
+        is_policy_ready_bool, policy_note_str, project_policy_obj = (
+            ProjectService.build_project_worktree_resource_policy_snapshot(project_obj)
+        )
+        if not is_policy_ready_bool or project_policy_obj is None:
+            raise ValueError(
+                policy_note_str
+                or "Project worktree resource policy is not confirmed yet. "
+                "Please confirm Worktree Resources in Project settings."
+            )
         base_branch_name_str = TaskService._normalize_worktree_base_branch_name(
             task_obj.worktree_base_branch_name
         )
@@ -217,6 +226,7 @@ class TaskService:
             task_id=task_obj.id,
             task_branch_name_str=branch_naming_result_obj.branch_name_str,
             base_branch_name_str=base_branch_name_str,
+            project_worktree_resource_policy=project_policy_obj,
         )
         task_obj.worktree_path = str(created_worktree_path)
         task_obj.worktree_base_branch_name = base_branch_name_str

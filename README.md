@@ -7,7 +7,7 @@ Koda 是一个围绕需求卡片、开发日志、PRD 和 Codex 自动化执行�
 - 需求卡片与 `DevLog` 时间线：围绕任务沉淀上下文、反馈、附件和 AI 输出。
 - Codex 自动化执行：支持生成 PRD、执行实现、自检 review，以及 `Complete` 阶段的 Git 收尾。
 - 任务调度：支持 `once` / `cron` 自动触发 `start_task`、`resume_task` 和独立 `review_task`。
-- 项目绑定与 worktree：任务可关联本地 Git 仓库，并在独立 worktree 中执行；创建时会同步复制 `.env*` 并准备基础依赖环境。
+- 项目绑定与 worktree：任务可关联本地 Git 仓库，并在独立 worktree 中执行；Project 创建/编辑时需要确认 worktree 本地资源策略，任务启动会按该策略复制或链接 `.env*`、数据库、上传目录和依赖目录等 runtime 资源。
 - 文档站点：`docs/` 承载深度说明，`docs/api/references.md` 继续作为对象级 API 参考入口。
 
 ## Quick Start

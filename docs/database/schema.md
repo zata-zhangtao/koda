@@ -204,7 +204,7 @@ erDiagram
 
 ### Project
 
-`Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。除了路径本身，项目还会记录仓库的 `origin` remote 与 `HEAD` commit 指纹，用于跨机器恢复时校验你绑定的是不是同一个仓库、是不是同一个同步基线。
+`Project` 表示一个可被任务绑定的本地代码仓库。它的核心价值是给任务提供 `repo_path`，便于创建 worktree 和调用 `codex exec`。除了路径本身，项目还会记录仓库的 `origin` remote 与 `HEAD` commit 指纹，以及工作树本地资源策略，用于跨机器恢复时校验你绑定的是不是同一个仓库、是不是同一个同步基线，同时决定哪些本地 runtime 资源可以进入 task worktree。
 
 需要区分两种 WebDAV 恢复模式：
 
@@ -220,15 +220,19 @@ erDiagram
 | `repo_path` | 本地 Git 仓库绝对路径 |
 | `repo_remote_url` | 最近一次保存/同步时记录的归一化 origin remote |
 | `repo_head_commit_hash` | 最近一次保存/同步时记录的 HEAD commit hash |
+| `worktree_resource_policy_json` | 本地 worktree 资源策略的 JSON 编码；业务快照不导出该字段 |
 | `description` | 项目描述 |
 | `is_repo_path_valid` | API 响应中的派生字段，表示当前机器上该路径是否仍可用 |
 | `is_repo_remote_consistent` | API 响应中的派生字段，表示当前 repo 是否仍然指向同一个 remote |
 | `is_repo_head_consistent` | API 响应中的派生字段，表示当前 repo HEAD 是否仍与同步基线一致 |
+| `is_worktree_resource_policy_ready` | API 响应中的派生字段，表示当前项目是否已有可用于 task start 的确认策略 |
+| `worktree_resource_policy_note` | API 响应中的派生字段，解释策略是否已确认或为何需要重新确认 |
 
 补充说明：
 
 - `project_category` 是持久化字段，由项目面板维护；项目时间线页可以基于它跨多个项目聚合同类日志。
 - 若旧数据库是在该字段加入前创建，启动时的增量 schema patch 会自动补列，历史项目默认保持 `NULL`，前端展示为“未分类”。
+- `worktree_resource_policy_json` 由项目面板在创建或编辑时确认；规则包含 `relative_path`、`materialization`、Git 状态和 `is_directory` 等元数据，支持把普通未跟踪/忽略文件夹作为整体配置。如果旧项目没有存储策略，后端只会按当前仓库生成 deferred 草稿用于展示，task start 仍会阻断，直到用户显式确认。
 
 ### Task
 

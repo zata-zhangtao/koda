@@ -16,6 +16,14 @@ from backend.dsl.schemas.project_schema import (
     ProjectResponseSchema,
     ProjectUpdateSchema,
 )
+from backend.dsl.worktree_resources import (
+    ProjectWorktreeResourcePolicySchema,
+    WorktreeResourceCandidateListSchema,
+    WorktreeResourcePolicyConfirmation,
+    WorktreeResourcePreviewRequestSchema,
+    preview_project_worktree_resource_candidates,
+    resolve_project_worktree_resource_policy,
+)
 from backend.dsl.services.path_opener import (
     PathOpenCommandError,
     PathOpenTargetNotFoundError,
@@ -27,17 +35,97 @@ from utils.database import get_db
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-def _to_response(project_obj: Project) -> ProjectResponseSchema:
+def _build_lightweight_consistency_snapshot(
+    project_obj: Project,
+) -> ProjectService.ProjectConsistencySnapshot:
+    """Build a non-blocking consistency snapshot for project list responses.
+
+    The full snapshot executes Git commands for every project. That is useful on
+    detail/update paths, but it makes the project list wait on slow local repos.
+    """
+
+    is_repo_path_valid_bool = ProjectService.is_repo_path_valid(project_obj.repo_path)
+    if not is_repo_path_valid_bool:
+        return ProjectService.ProjectConsistencySnapshot(
+            current_repo_remote_url=None,
+            current_repo_head_commit_hash=None,
+            is_repo_remote_consistent=None,
+            is_repo_head_consistent=None,
+            repo_consistency_note=(
+                "Project repo_path is not valid on this machine. "
+                "Relink it before comparing remote URL or commit hash."
+            ),
+        )
+
+    return ProjectService.ProjectConsistencySnapshot(
+        current_repo_remote_url=None,
+        current_repo_head_commit_hash=None,
+        is_repo_remote_consistent=None,
+        is_repo_head_consistent=None,
+        repo_consistency_note=None,
+    )
+
+
+def _build_lightweight_policy_snapshot(
+    project_obj: Project,
+) -> tuple[bool, str | None, ProjectWorktreeResourcePolicySchema | None]:
+    """Build a non-scanning policy snapshot for project list responses."""
+
+    raw_policy_json_str = project_obj.worktree_resource_policy_json
+    parsed_policy_obj = resolve_project_worktree_resource_policy(project_obj)
+    if parsed_policy_obj is None:
+        if raw_policy_json_str:
+            return (
+                False,
+                "Project worktree resource policy JSON could not be parsed.",
+                None,
+            )
+        if project_obj.repo_path:
+            return (
+                False,
+                "Legacy project without stored worktree resource policy; confirm Worktree Resources before starting a task.",
+                None,
+            )
+        return False, "Project worktree resource policy is not configured yet.", None
+
+    if (
+        parsed_policy_obj.confirmation_status
+        == WorktreeResourcePolicyConfirmation.DEFERRED
+    ):
+        return (
+            False,
+            "Confirm Worktree Resources in Project settings before starting a task.",
+            parsed_policy_obj,
+        )
+
+    return True, None, parsed_policy_obj
+
+
+def _to_response(
+    project_obj: Project,
+    *,
+    include_git_consistency_snapshot: bool = True,
+    include_worktree_resource_policy_snapshot: bool = True,
+) -> ProjectResponseSchema:
     """将 ORM Project 转换为带本机路径状态的响应模型.
 
     Args:
         project_obj: 项目 ORM 实例
+        include_git_consistency_snapshot: 是否执行 Git 命令构建完整一致性快照
+        include_worktree_resource_policy_snapshot: 是否扫描仓库构建 legacy policy 草稿
 
     Returns:
         ProjectResponseSchema: 前端消费的项目响应
     """
-    consistency_snapshot = ProjectService.build_project_consistency_snapshot(
-        project_obj
+    consistency_snapshot = (
+        ProjectService.build_project_consistency_snapshot(project_obj)
+        if include_git_consistency_snapshot
+        else _build_lightweight_consistency_snapshot(project_obj)
+    )
+    is_policy_ready_bool, policy_note_str, parsed_policy_obj = (
+        ProjectService.build_project_worktree_resource_policy_snapshot(project_obj)
+        if include_worktree_resource_policy_snapshot
+        else _build_lightweight_policy_snapshot(project_obj)
     )
     return ProjectResponseSchema(
         id=project_obj.id,
@@ -46,6 +134,12 @@ def _to_response(project_obj: Project) -> ProjectResponseSchema:
         repo_path=project_obj.repo_path,
         repo_remote_url=project_obj.repo_remote_url,
         repo_head_commit_hash=project_obj.repo_head_commit_hash,
+        worktree_resource_policy_confirmation=(
+            parsed_policy_obj.confirmation_status
+            if parsed_policy_obj is not None
+            else WorktreeResourcePolicyConfirmation.DEFERRED
+        ),
+        worktree_resource_policy=parsed_policy_obj,
         current_repo_remote_url=consistency_snapshot.current_repo_remote_url,
         current_repo_head_commit_hash=consistency_snapshot.current_repo_head_commit_hash,
         description=project_obj.description,
@@ -53,6 +147,8 @@ def _to_response(project_obj: Project) -> ProjectResponseSchema:
         is_repo_remote_consistent=consistency_snapshot.is_repo_remote_consistent,
         is_repo_head_consistent=consistency_snapshot.is_repo_head_consistent,
         repo_consistency_note=consistency_snapshot.repo_consistency_note,
+        is_worktree_resource_policy_ready=is_policy_ready_bool,
+        worktree_resource_policy_note=policy_note_str,
         created_at=project_obj.created_at,
     )
 
@@ -70,7 +166,11 @@ def list_projects(
         list[ProjectResponseSchema]: 项目列表
     """
     return [
-        _to_response(project_obj)
+        _to_response(
+            project_obj,
+            include_git_consistency_snapshot=False,
+            include_worktree_resource_policy_snapshot=False,
+        )
         for project_obj in ProjectService.list_projects(db_session)
     ]
 
@@ -94,6 +194,13 @@ def create_project(
     Raises:
         HTTPException: 当 repo_path 无效时返回 422
     """
+    if "worktree_resource_policy_confirmation" not in (
+        project_create_schema.model_fields_set
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="worktree_resource_policy_confirmation is required",
+        )
     try:
         created_project_obj = ProjectService.create_project(
             db_session, project_create_schema
@@ -125,6 +232,13 @@ def update_project(
     Raises:
         HTTPException: 项目不存在时返回 404；路径无效时返回 422
     """
+    if "worktree_resource_policy_confirmation" not in (
+        project_update_schema.model_fields_set
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="worktree_resource_policy_confirmation is required",
+        )
     try:
         updated_project_obj = ProjectService.update_project(
             db_session=db_session,
@@ -170,6 +284,60 @@ def get_project(
             detail=f"Project {project_id} not found",
         )
     return _to_response(project_obj)
+
+
+@router.post(
+    "/worktree-resource-candidates/preview",
+    response_model=WorktreeResourceCandidateListSchema,
+)
+def preview_worktree_resource_candidates(
+    request_schema: WorktreeResourcePreviewRequestSchema,
+) -> WorktreeResourceCandidateListSchema:
+    """Preview local resource candidates for a repo path before project creation."""
+
+    try:
+        repo_path_obj = ProjectService._normalize_repo_path(request_schema.repo_path)
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(validation_error),
+        ) from validation_error
+
+    return preview_project_worktree_resource_candidates(
+        repo_root_path=repo_path_obj,
+        draft_policy=request_schema.draft_policy,
+    )
+
+
+@router.get(
+    "/{project_id}/worktree-resource-candidates",
+    response_model=WorktreeResourceCandidateListSchema,
+)
+def list_project_worktree_resource_candidates(
+    project_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> WorktreeResourceCandidateListSchema:
+    """Preview local resource candidates for an existing project."""
+
+    project_obj = ProjectService.get_project_by_id(db_session, project_id)
+    if not project_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    try:
+        repo_path_obj = ProjectService._normalize_repo_path(project_obj.repo_path)
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(validation_error),
+        ) from validation_error
+
+    return preview_project_worktree_resource_candidates(
+        repo_root_path=repo_path_obj,
+        draft_policy=resolve_project_worktree_resource_policy(project_obj),
+    )
 
 
 @router.get("/{project_id}/branches", response_model=ProjectBranchListSchema)

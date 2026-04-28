@@ -212,6 +212,7 @@ def test_build_business_sync_snapshot_payload_collects_media_and_sidecars(
             repo_path=str(tmp_path / "repo-one"),
             repo_remote_url="https://example.com/demo.git",
             repo_head_commit_hash="abc123",
+            worktree_resource_policy_json='{"confirmation_status":"customized","rules":[]}',
             description="Primary synced project",
         )
         project_two_obj = Project(
@@ -322,6 +323,10 @@ def test_build_business_sync_snapshot_payload_collects_media_and_sidecars(
 
         assert exported_task_id_set == {task_one_obj.id, task_two_obj.id}
         assert len(snapshot_payload_dict["projects"]) == 2
+        assert all(
+            "worktree_resource_policy_json" not in project_snapshot_dict
+            for project_snapshot_dict in snapshot_payload_dict["projects"]
+        )
         assert len(snapshot_payload_dict["dev_logs"]) == 1
         assert len(snapshot_payload_dict["task_artifacts"]) == 1
         assert len(snapshot_payload_dict["task_qa_messages"]) == 1

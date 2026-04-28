@@ -361,11 +361,22 @@ exit 1
         f"{fake_bin_directory_path}:{os.environ.get('PATH', '')}",
     )
 
-    with pytest.raises(ValueError, match="环境准备失败"):
+    expected_worktree_path = repo_root_path.parent / "task" / "demo-repo-wt-12345678"
+
+    with pytest.raises(ValueError, match="Rollback result"):
         GitWorktreeService.create_task_worktree(
             repo_root_path=repo_root_path,
             task_id="12345678-task-id",
         )
+
+    assert expected_worktree_path.exists() is False
+    assert (
+        GitWorktreeService.check_local_branch_exists(
+            repo_root_path,
+            "task/12345678",
+        )
+        is False
+    )
 
 
 def test_create_task_worktree_ignores_branch_only_project_script(

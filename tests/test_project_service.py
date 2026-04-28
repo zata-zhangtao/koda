@@ -16,6 +16,7 @@ from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.schemas.project_schema import ProjectCreateSchema, ProjectUpdateSchema
 from backend.dsl.services.project_service import ProjectService
+from backend.dsl.worktree_resources import WorktreeResourcePolicyConfirmation
 from utils.database import Base
 from utils.helpers import utc_now_naive
 
@@ -127,6 +128,7 @@ def test_create_project_persists_normalized_repo_path_and_git_fingerprint(
     assert ProjectService.is_repo_path_valid(created_project.repo_path) is True
     assert created_project.repo_remote_url == "github.com/example/demo-repo"
     assert created_project.repo_head_commit_hash == expected_head_commit_hash
+    assert created_project.worktree_resource_policy_json is not None
 
 
 def test_update_project_rebinds_repo_path_and_clears_missing_worktrees(
@@ -308,6 +310,34 @@ def test_project_response_marks_invalid_repo_path_for_restored_projects() -> Non
 
     assert project_response.is_repo_path_valid is False
     assert project_response.repo_consistency_note is not None
+
+
+def test_legacy_project_without_policy_requires_resource_confirmation(
+    tmp_path: Path,
+) -> None:
+    """Legacy Projects without stored policy JSON should not be task-start ready."""
+
+    repo_root_path = _create_git_repo(
+        tmp_path / "legacy-policy-repo",
+        remote_url="git@github.com:example/legacy-policy-repo.git",
+    )
+    project_obj = Project(
+        display_name="Legacy Policy Repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+
+    is_policy_ready_bool, policy_note_text, draft_policy_obj = (
+        ProjectService.build_project_worktree_resource_policy_snapshot(project_obj)
+    )
+
+    assert is_policy_ready_bool is False
+    assert policy_note_text is not None
+    assert "confirm Worktree Resources" in policy_note_text
+    assert draft_policy_obj is not None
+    assert draft_policy_obj.confirmation_status == (
+        WorktreeResourcePolicyConfirmation.DEFERRED
+    )
 
 
 def test_project_response_marks_head_mismatch_for_valid_repo(

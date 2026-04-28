@@ -5,17 +5,22 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Generator
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import backend.dsl.models  # noqa: F401
 import backend.dsl.api.projects as projects_api
+from backend.dsl.app import app
 from backend.dsl.api.projects import open_project_in_editor, open_project_in_trae
 from backend.dsl.models.project import Project
-from utils.database import Base
+from backend.dsl.worktree_resources import WorktreeResourcePreviewRequestSchema
+from utils.database import Base, get_db
 
 
 @pytest.fixture
@@ -37,6 +42,35 @@ def db_session() -> Session:
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture
+def test_client() -> Generator[TestClient, None, None]:
+    """Create an isolated FastAPI test client for project route tests."""
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    test_session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine,
+    )
+    Base.metadata.create_all(bind=test_engine)
+
+    def _get_test_db() -> Generator[Session, None, None]:
+        test_db_session = test_session_factory()
+        try:
+            yield test_db_session
+        finally:
+            test_db_session.close()
+
+    app.dependency_overrides[get_db] = _get_test_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
 
 
 def _run_git_command(repo_root_path: Path, git_argument_list: list[str]) -> str:
@@ -145,6 +179,48 @@ def test_list_project_branches_returns_local_branches_and_current_branch(
     assert branch_response.branches == ["develop", "main"]
 
 
+def test_list_projects_does_not_block_on_git_consistency_snapshot(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The project list route should not run Git commands for every project."""
+
+    repo_root_path = tmp_path / "slow-repo"
+    repo_root_path.mkdir()
+    (repo_root_path / ".git").mkdir()
+    project_obj = Project(
+        display_name="Slow Repo",
+        repo_path=str(repo_root_path),
+        description="demo",
+    )
+    db_session.add(project_obj)
+    db_session.commit()
+
+    def _raise_if_full_snapshot_runs(_project_obj: Project) -> object:
+        raise AssertionError("full Git consistency snapshot should not run")
+
+    monkeypatch.setattr(
+        projects_api.ProjectService,
+        "build_project_consistency_snapshot",
+        _raise_if_full_snapshot_runs,
+    )
+    monkeypatch.setattr(
+        projects_api.ProjectService,
+        "build_project_worktree_resource_policy_snapshot",
+        _raise_if_full_snapshot_runs,
+    )
+
+    project_response_list = projects_api.list_projects(db_session)
+
+    assert len(project_response_list) == 1
+    project_response = project_response_list[0]
+    assert project_response.display_name == "Slow Repo"
+    assert project_response.is_repo_path_valid is True
+    assert project_response.current_repo_remote_url is None
+    assert project_response.is_repo_remote_consistent is None
+
+
 def test_open_project_in_editor_surfaces_path_open_command_errors(
     db_session: Session,
     tmp_path: Path,
@@ -202,3 +278,90 @@ def test_open_project_in_trae_alias_reuses_editor_logic(
     open_response = open_project_in_trae("project-123", db_session)
 
     assert open_response == {"opened": "/tmp/project-123"}
+
+
+def test_preview_worktree_resource_candidates_returns_repo_candidates(
+    tmp_path: Path,
+) -> None:
+    """The preview route should surface ignored runtime resources."""
+    repo_root_path = _create_git_repo(tmp_path / "preview-repo")
+    (repo_root_path / ".env").write_text("TOKEN=demo\n", encoding="utf-8")
+    (repo_root_path / "node_modules").mkdir()
+    (repo_root_path / "node_modules" / "pkg.txt").write_text("deps", encoding="utf-8")
+
+    preview_response = projects_api.preview_worktree_resource_candidates(
+        WorktreeResourcePreviewRequestSchema(repo_path=str(repo_root_path))
+    )
+
+    preview_path_list = [
+        candidate.relative_path for candidate in preview_response.candidates
+    ]
+    assert ".env" in preview_path_list
+    assert "node_modules" in preview_path_list
+
+
+def test_project_create_http_requires_resource_policy_confirmation(
+    test_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Project create route should reject missing policy confirmation over HTTP."""
+    repo_root_path = _create_git_repo(tmp_path / "http-create-repo")
+
+    missing_confirmation_response = test_client.post(
+        "/api/projects",
+        json={
+            "display_name": "HTTP Create Repo",
+            "repo_path": str(repo_root_path),
+            "description": None,
+        },
+    )
+    assert missing_confirmation_response.status_code == 422
+    assert "worktree_resource_policy_confirmation is required" in str(
+        missing_confirmation_response.json()["detail"]
+    )
+
+    accepted_default_response = test_client.post(
+        "/api/projects",
+        json={
+            "display_name": "HTTP Create Repo",
+            "repo_path": str(repo_root_path),
+            "description": None,
+            "worktree_resource_policy_confirmation": "accepted_default",
+        },
+    )
+
+    assert accepted_default_response.status_code == 201
+    response_payload = accepted_default_response.json()
+    assert response_payload["is_worktree_resource_policy_ready"] is True
+    assert (
+        response_payload["worktree_resource_policy_confirmation"] == "accepted_default"
+    )
+
+
+def test_preview_worktree_resource_candidates_http_omits_tracked_candidates(
+    test_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Preview route should only expose local resources needing policy choices."""
+    repo_root_path = _create_git_repo(tmp_path / "http-preview-repo")
+    (repo_root_path / ".env").write_text("TOKEN=demo\n", encoding="utf-8")
+
+    preview_response = test_client.post(
+        "/api/projects/worktree-resource-candidates/preview",
+        json={"repo_path": str(repo_root_path)},
+    )
+
+    assert preview_response.status_code == 200
+    candidate_payload_list = preview_response.json()["candidates"]
+    preview_path_list = [
+        candidate_payload["relative_path"]
+        for candidate_payload in candidate_payload_list
+    ]
+    assert "README.md" not in preview_path_list
+    env_candidate_payload = next(
+        candidate_payload
+        for candidate_payload in candidate_payload_list
+        if candidate_payload["relative_path"] == ".env"
+    )
+    assert env_candidate_payload["git_state"] == "untracked"
+    assert env_candidate_payload["materialization"] == "copy"

@@ -9,6 +9,10 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.dsl.schemas.base import DSLResponseSchema
+from backend.dsl.worktree_resources.schemas import (
+    ProjectWorktreeResourcePolicySchema,
+    WorktreeResourcePolicyConfirmation,
+)
 
 
 class ProjectCreateSchema(BaseModel):
@@ -35,6 +39,14 @@ class ProjectCreateSchema(BaseModel):
         ..., min_length=1, max_length=500, description="本地 Git 仓库绝对路径"
     )
     description: str | None = Field(None, description="项目描述")
+    worktree_resource_policy_confirmation: WorktreeResourcePolicyConfirmation = Field(
+        default=WorktreeResourcePolicyConfirmation.ACCEPTED_DEFAULT,
+        description="工作树本地资源策略确认状态",
+    )
+    worktree_resource_policy: ProjectWorktreeResourcePolicySchema | None = Field(
+        None,
+        description="工作树本地资源策略（可选）",
+    )
 
 
 class ProjectUpdateSchema(BaseModel):
@@ -64,6 +76,14 @@ class ProjectUpdateSchema(BaseModel):
         description="当前机器上的本地 Git 仓库绝对路径",
     )
     description: str | None = Field(None, description="项目描述")
+    worktree_resource_policy_confirmation: WorktreeResourcePolicyConfirmation = Field(
+        default=WorktreeResourcePolicyConfirmation.ACCEPTED_DEFAULT,
+        description="工作树本地资源策略确认状态",
+    )
+    worktree_resource_policy: ProjectWorktreeResourcePolicySchema | None = Field(
+        None,
+        description="工作树本地资源策略（可选）",
+    )
 
 
 class ProjectResponseSchema(DSLResponseSchema):
@@ -77,6 +97,8 @@ class ProjectResponseSchema(DSLResponseSchema):
         description: 项目描述
         repo_remote_url: 项目记录中保存的归一化 origin remote URL
         repo_head_commit_hash: 项目记录中保存的 HEAD commit 哈希
+        worktree_resource_policy_confirmation: 工作树本地资源策略确认状态
+        worktree_resource_policy: 解析后的工作树本地资源策略
         current_repo_remote_url: 当前本机仓库解析出的归一化 origin remote URL
         current_repo_head_commit_hash: 当前本机仓库解析出的 HEAD commit 哈希
         is_repo_path_valid: 当前机器上该路径是否仍然有效
@@ -98,6 +120,14 @@ class ProjectResponseSchema(DSLResponseSchema):
     repo_head_commit_hash: str | None = Field(
         None, description="项目记录中保存的 HEAD commit 哈希"
     )
+    worktree_resource_policy_confirmation: WorktreeResourcePolicyConfirmation = Field(
+        default=WorktreeResourcePolicyConfirmation.DEFERRED,
+        description="工作树本地资源策略确认状态",
+    )
+    worktree_resource_policy: ProjectWorktreeResourcePolicySchema | None = Field(
+        None,
+        description="解析后的工作树本地资源策略",
+    )
     current_repo_remote_url: str | None = Field(
         None, description="当前本机仓库解析出的归一化 origin remote URL"
     )
@@ -113,6 +143,14 @@ class ProjectResponseSchema(DSLResponseSchema):
         None, description="当前仓库 HEAD 是否与已保存指纹一致"
     )
     repo_consistency_note: str | None = Field(None, description="当前仓库一致性说明")
+    is_worktree_resource_policy_ready: bool = Field(
+        ...,
+        description="当前项目是否拥有可用于 task start 的已确认资源策略",
+    )
+    worktree_resource_policy_note: str | None = Field(
+        None,
+        description="资源策略状态说明",
+    )
     created_at: datetime = Field(..., description="创建时间")
 
 

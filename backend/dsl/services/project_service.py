@@ -14,6 +14,12 @@ from sqlalchemy.orm import Session
 
 from backend.dsl.models.project import Project
 from backend.dsl.schemas.project_schema import ProjectCreateSchema, ProjectUpdateSchema
+from backend.dsl.worktree_resources import (
+    ProjectWorktreeResourcePolicySchema,
+    WorktreeResourcePolicyConfirmation,
+    build_default_project_worktree_resource_policy,
+    build_project_worktree_resource_policy_note,
+)
 from utils.logger import logger
 
 
@@ -67,6 +73,53 @@ class ProjectService:
             return None
         normalized_project_category_str = raw_project_category_str.strip()
         return normalized_project_category_str or None
+
+    @staticmethod
+    def _build_deferred_worktree_resource_policy() -> (
+        ProjectWorktreeResourcePolicySchema
+    ):
+        """Build a deferred policy placeholder."""
+
+        return ProjectWorktreeResourcePolicySchema(
+            confirmation_status=WorktreeResourcePolicyConfirmation.DEFERRED,
+            rules=[],
+        )
+
+    @staticmethod
+    def _build_project_worktree_resource_policy(
+        *,
+        repo_path_obj: Path,
+        worktree_resource_policy_confirmation: WorktreeResourcePolicyConfirmation,
+        worktree_resource_policy: ProjectWorktreeResourcePolicySchema | None,
+    ) -> ProjectWorktreeResourcePolicySchema:
+        """Resolve the policy to persist on a project."""
+
+        if worktree_resource_policy_confirmation == (
+            WorktreeResourcePolicyConfirmation.DEFERRED
+        ):
+            return ProjectService._build_deferred_worktree_resource_policy()
+
+        if worktree_resource_policy_confirmation == (
+            WorktreeResourcePolicyConfirmation.CUSTOMIZED
+        ):
+            if worktree_resource_policy is None:
+                raise ValueError(
+                    "customized worktree resource policy requires a policy payload"
+                )
+            return worktree_resource_policy.model_copy(
+                update={
+                    "confirmation_status": WorktreeResourcePolicyConfirmation.CUSTOMIZED
+                }
+            )
+
+        if worktree_resource_policy is not None:
+            return worktree_resource_policy.model_copy(
+                update={
+                    "confirmation_status": WorktreeResourcePolicyConfirmation.ACCEPTED_DEFAULT
+                }
+            )
+
+        return build_default_project_worktree_resource_policy(repo_path_obj)
 
     @staticmethod
     def _normalize_repo_path(raw_repo_path_str: str) -> Path:
@@ -343,6 +396,14 @@ class ProjectService:
         )
 
     @staticmethod
+    def build_project_worktree_resource_policy_snapshot(
+        project_obj: Project,
+    ) -> tuple[bool, str | None, ProjectWorktreeResourcePolicySchema | None]:
+        """Build the local resource policy readiness snapshot for one project."""
+
+        return build_project_worktree_resource_policy_note(project_obj)
+
+    @staticmethod
     def refresh_project_repo_fingerprints(
         db_session: Session,
         *,
@@ -421,6 +482,13 @@ class ProjectService:
         repo_fingerprint_obj = ProjectService.get_repo_fingerprint(
             normalized_repo_path_obj
         )
+        resolved_policy_schema = ProjectService._build_project_worktree_resource_policy(
+            repo_path_obj=normalized_repo_path_obj,
+            worktree_resource_policy_confirmation=(
+                project_create_schema.worktree_resource_policy_confirmation
+            ),
+            worktree_resource_policy=project_create_schema.worktree_resource_policy,
+        )
 
         new_project = Project(
             display_name=project_create_schema.display_name,
@@ -430,6 +498,9 @@ class ProjectService:
             repo_path=str(normalized_repo_path_obj),
             repo_remote_url=repo_fingerprint_obj.normalized_remote_url,
             repo_head_commit_hash=repo_fingerprint_obj.head_commit_hash,
+            worktree_resource_policy_json=resolved_policy_schema.model_dump_json(
+                exclude_none=True
+            ),
             description=project_create_schema.description,
         )
 
@@ -471,6 +542,13 @@ class ProjectService:
         current_repo_fingerprint_obj = ProjectService.get_repo_fingerprint(
             normalized_repo_path_obj
         )
+        resolved_policy_schema = ProjectService._build_project_worktree_resource_policy(
+            repo_path_obj=normalized_repo_path_obj,
+            worktree_resource_policy_confirmation=(
+                project_update_schema.worktree_resource_policy_confirmation
+            ),
+            worktree_resource_policy=project_update_schema.worktree_resource_policy,
+        )
         normalized_repo_path_str = str(normalized_repo_path_obj)
         repo_path_changed_bool = (
             existing_project_obj.repo_path != normalized_repo_path_str
@@ -501,6 +579,9 @@ class ProjectService:
             existing_project_obj.repo_head_commit_hash = (
                 current_repo_fingerprint_obj.head_commit_hash
             )
+        existing_project_obj.worktree_resource_policy_json = (
+            resolved_policy_schema.model_dump_json(exclude_none=True)
+        )
         existing_project_obj.description = project_update_schema.description
 
         cleared_worktree_count_int = 0

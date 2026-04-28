@@ -7,6 +7,7 @@ import type {
   ChangeEvent,
   ClipboardEvent,
   CompositionEvent,
+  CSSProperties,
   Dispatch,
   KeyboardEvent,
   ReactNode,
@@ -135,10 +136,15 @@ import {
   WorkflowStage,
   type DevLog,
   type Project,
+  type ProjectWorktreeResourcePolicy,
+  type ProjectWorktreeResourceRule,
   type RunAccount,
   type Task,
   type TaskSchedule,
   type TaskScheduleRun,
+  type WorktreeResourceCandidate,
+  type WorktreeResourceMaterialization,
+  type WorktreeResourcePolicyConfirmation,
 } from "./types";
 
 type RequirementStage = WorkflowStage;
@@ -215,6 +221,27 @@ interface CompletionChecklistModalState {
   isSubmitting: boolean;
 }
 
+type ProjectWorktreeResourceChooserTarget = "create" | "edit";
+
+interface WorktreeResourceChooserState {
+  targetKind: ProjectWorktreeResourceChooserTarget;
+  projectLabel: string;
+  repoPath: string;
+  ruleList: ProjectWorktreeResourceRule[];
+  isLoading: boolean;
+  errorMessage: string | null;
+}
+
+interface WorktreeResourceTreeNode {
+  nodeKey: string;
+  name: string;
+  relativePath: string;
+  rule: ProjectWorktreeResourceRule | null;
+  childNodeList: WorktreeResourceTreeNode[];
+  descendantRulePathList: string[];
+  descendantIncludedRuleCount: number;
+}
+
 type MutationName =
   | "create"
   | "start"
@@ -253,6 +280,15 @@ interface ProjectBranchSelection {
   branches: string[];
   current_branch_name: string | null;
 }
+
+const WORKTREE_RESOURCE_MATERIALIZATION_OPTION_LIST: Array<{
+  value: WorktreeResourceMaterialization;
+  label: string;
+}> = [
+  { value: "copy", label: "Copy" },
+  { value: "link", label: "Link" },
+  { value: "skip", label: "Skip" },
+];
 
 interface TaskPrdSourceDraftSnapshot {
   sourceMode: PrdSourceMode;
@@ -334,6 +370,173 @@ function clearTaskPrdSourceDraftSnapshot(taskId: string): void {
   } catch {
     // Ignore storage cleanup failures; server state remains authoritative.
   }
+}
+
+function parseProjectWorktreeResourcePolicyJsonText(
+  rawPolicyJsonText: string
+): ProjectWorktreeResourcePolicy | null {
+  const trimmedPolicyJsonText = rawPolicyJsonText.trim();
+  if (!trimmedPolicyJsonText) {
+    return null;
+  }
+
+  return JSON.parse(trimmedPolicyJsonText) as ProjectWorktreeResourcePolicy;
+}
+
+function buildProjectWorktreeResourceRuleList(
+  candidateList: WorktreeResourceCandidate[],
+  draftPolicy: ProjectWorktreeResourcePolicy | null
+): ProjectWorktreeResourceRule[] {
+  const draftRuleMap = new Map(
+    (draftPolicy?.rules ?? []).map((policyRule) => [
+      policyRule.relative_path,
+      policyRule,
+    ])
+  );
+
+  return candidateList.map((candidateItem) => {
+    const draftRule = draftRuleMap.get(candidateItem.relative_path);
+    return {
+      relative_path: candidateItem.relative_path,
+      include: draftRule?.include ?? true,
+      materialization: draftRule?.materialization ?? candidateItem.materialization,
+      resource_kind: draftRule?.resource_kind ?? candidateItem.resource_kind,
+      git_state: draftRule?.git_state ?? candidateItem.git_state,
+      required:
+        draftRule?.required ?? candidateItem.warning_codes.includes("secret"),
+      is_directory: draftRule?.is_directory ?? candidateItem.is_directory,
+      note: draftRule?.note ?? candidateItem.warning_text,
+    };
+  });
+}
+
+function buildProjectWorktreeResourcePolicyJsonText(
+  ruleList: ProjectWorktreeResourceRule[]
+): string {
+  const projectWorktreeResourcePolicy: ProjectWorktreeResourcePolicy = {
+    confirmation_status: "customized",
+    rules: ruleList,
+  };
+  return JSON.stringify(projectWorktreeResourcePolicy, null, 2);
+}
+
+function summarizeProjectWorktreeResourcePolicyJsonText(
+  rawPolicyJsonText: string
+): string | null {
+  try {
+    const parsedPolicy = parseProjectWorktreeResourcePolicyJsonText(rawPolicyJsonText);
+    if (parsedPolicy === null) {
+      return null;
+    }
+
+    const includedRuleCount = parsedPolicy.rules.filter(
+      (policyRule) => policyRule.include
+    ).length;
+    return `${includedRuleCount}/${parsedPolicy.rules.length} resources selected`;
+  } catch {
+    return "Policy JSON is invalid";
+  }
+}
+
+function doesWorktreeResourceRuleMaterialize(
+  policyRule: ProjectWorktreeResourceRule | null
+): boolean {
+  return (
+    policyRule !== null &&
+    policyRule.include &&
+    policyRule.materialization !== "skip" &&
+    policyRule.materialization !== "git-managed-copy"
+  );
+}
+
+function buildWorktreeResourceTreeNodeList(
+  ruleList: ProjectWorktreeResourceRule[]
+): WorktreeResourceTreeNode[] {
+  const rootNode: WorktreeResourceTreeNode = {
+    nodeKey: "__root__",
+    name: "",
+    relativePath: "",
+    rule: null,
+    childNodeList: [],
+    descendantRulePathList: [],
+    descendantIncludedRuleCount: 0,
+  };
+
+  const nodeMap = new Map<string, WorktreeResourceTreeNode>([
+    [rootNode.nodeKey, rootNode],
+  ]);
+
+  for (const policyRule of ruleList) {
+    const pathPartList = policyRule.relative_path.split("/").filter(Boolean);
+    let parentNode = rootNode;
+    let currentRelativePath = "";
+
+    for (const [pathPartIndex, pathPartText] of pathPartList.entries()) {
+      currentRelativePath = currentRelativePath
+        ? `${currentRelativePath}/${pathPartText}`
+        : pathPartText;
+      const existingNode = nodeMap.get(currentRelativePath);
+      const currentNode =
+        existingNode ??
+        {
+          nodeKey: currentRelativePath,
+          name: pathPartText,
+          relativePath: currentRelativePath,
+          rule: null,
+          childNodeList: [],
+          descendantRulePathList: [],
+          descendantIncludedRuleCount: 0,
+        };
+
+      if (!existingNode) {
+        nodeMap.set(currentRelativePath, currentNode);
+        parentNode.childNodeList.push(currentNode);
+      }
+
+      if (pathPartIndex === pathPartList.length - 1) {
+        currentNode.rule = policyRule;
+      }
+
+      parentNode = currentNode;
+    }
+  }
+
+  function finalizeTreeNode(
+    treeNode: WorktreeResourceTreeNode
+  ): WorktreeResourceTreeNode {
+    const sortedChildNodeList = treeNode.childNodeList
+      .map(finalizeTreeNode)
+      .sort((leftNode, rightNode) => {
+        const leftIsDirectory = leftNode.childNodeList.length > 0;
+        const rightIsDirectory = rightNode.childNodeList.length > 0;
+        if (leftIsDirectory !== rightIsDirectory) {
+          return leftIsDirectory ? -1 : 1;
+        }
+        return leftNode.name.localeCompare(rightNode.name);
+      });
+    const descendantRulePathList = [
+      ...(treeNode.rule ? [treeNode.rule.relative_path] : []),
+      ...sortedChildNodeList.flatMap(
+        (childNode) => childNode.descendantRulePathList
+      ),
+    ];
+    const descendantIncludedRuleCount =
+      (treeNode.rule?.include ? 1 : 0) +
+      sortedChildNodeList.reduce(
+        (includedCount, childNode) =>
+          includedCount + childNode.descendantIncludedRuleCount,
+        0
+      );
+
+    return {
+      ...treeNode,
+      childNodeList: sortedChildNodeList,
+      descendantRulePathList,
+      descendantIncludedRuleCount,
+    };
+  }
+
+  return finalizeTreeNode(rootNode).childNodeList;
 }
 
 function selectPreferredWorktreeBaseBranchName(
@@ -788,11 +991,25 @@ function App() {
   const [newProjectCategory, setNewProjectCategory] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [newProjectWorktreeResourcePolicyConfirmation, setNewProjectWorktreeResourcePolicyConfirmation] =
+    useState<"accepted_default" | "customized" | "deferred">("accepted_default");
+  const [newProjectWorktreeResourcePolicyJsonText, setNewProjectWorktreeResourcePolicyJsonText] =
+    useState("");
+  const [
+    newProjectWorktreeResourcePreviewedRepoPath,
+    setNewProjectWorktreeResourcePreviewedRepoPath,
+  ] = useState<string | null>(null);
+  const [worktreeResourceChooserState, setWorktreeResourceChooserState] =
+    useState<WorktreeResourceChooserState | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
   const [editingProjectCategory, setEditingProjectCategory] = useState("");
   const [editingProjectPath, setEditingProjectPath] = useState("");
   const [editingProjectDescription, setEditingProjectDescription] = useState("");
+  const [editingProjectWorktreeResourcePolicyConfirmation, setEditingProjectWorktreeResourcePolicyConfirmation] =
+    useState<"accepted_default" | "customized" | "deferred">("accepted_default");
+  const [editingProjectWorktreeResourcePolicyJsonText, setEditingProjectWorktreeResourcePolicyJsonText] =
+    useState("");
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
   const [selectedTaskScheduleList, setSelectedTaskScheduleList] = useState<TaskSchedule[]>(
     []
@@ -903,6 +1120,167 @@ function App() {
     setDestroyModalErrorMessage(null);
     setErrorMessage(null);
     setSuccessMessage(null);
+  }
+
+  function closeWorktreeResourceChooser(): void {
+    setWorktreeResourceChooserState(null);
+  }
+
+  async function openWorktreeResourceChooser(
+    targetKind: ProjectWorktreeResourceChooserTarget
+  ): Promise<void> {
+    const isCreateTarget = targetKind === "create";
+    const rawRepoPathText = isCreateTarget ? newProjectPath : editingProjectPath;
+    const repoPathText = rawRepoPathText.trim();
+    const projectLabel =
+      (isCreateTarget ? newProjectName : editingProjectName).trim() ||
+      (isCreateTarget ? "New project" : "Editing project");
+    const rawPolicyJsonText = isCreateTarget
+      ? newProjectWorktreeResourcePolicyJsonText
+      : editingProjectWorktreeResourcePolicyJsonText;
+    const policyConfirmation = isCreateTarget
+      ? newProjectWorktreeResourcePolicyConfirmation
+      : editingProjectWorktreeResourcePolicyConfirmation;
+
+    if (!repoPathText) {
+      setErrorMessage("请先填写本地 Git 仓库绝对路径，再选择 Worktree 资源。");
+      setSuccessMessage(null);
+      return;
+    }
+
+    let draftPolicy: ProjectWorktreeResourcePolicy | null = null;
+    try {
+      draftPolicy =
+        policyConfirmation === "customized"
+          ? parseProjectWorktreeResourcePolicyJsonText(rawPolicyJsonText)
+          : null;
+    } catch (parseError) {
+      setErrorMessage(
+        parseError instanceof Error
+          ? `当前自定义策略 JSON 无效：${parseError.message}`
+          : "当前自定义策略 JSON 无效。"
+      );
+      setSuccessMessage(null);
+      return;
+    }
+
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setWorktreeResourceChooserState({
+      targetKind,
+      projectLabel,
+      repoPath: repoPathText,
+      ruleList: [],
+      isLoading: true,
+      errorMessage: null,
+    });
+
+    try {
+      const candidateListResponse =
+        await projectApi.previewWorktreeResourceCandidates({
+          repo_path: repoPathText,
+          draft_policy: draftPolicy,
+        });
+      if (isCreateTarget) {
+        setNewProjectWorktreeResourcePreviewedRepoPath(repoPathText);
+      }
+      setWorktreeResourceChooserState({
+        targetKind,
+        projectLabel,
+        repoPath: repoPathText,
+        ruleList: buildProjectWorktreeResourceRuleList(
+          candidateListResponse.candidates,
+          draftPolicy
+        ),
+        isLoading: false,
+        errorMessage: candidateListResponse.policy_note,
+      });
+    } catch (err) {
+      setWorktreeResourceChooserState({
+        targetKind,
+        projectLabel,
+        repoPath: repoPathText,
+        ruleList: [],
+        isLoading: false,
+        errorMessage:
+          err instanceof Error ? err.message : "扫描 Worktree 资源失败。",
+      });
+    }
+  }
+
+  function updateWorktreeResourceChooserRule(
+    relativePathText: string,
+    updater: (policyRule: ProjectWorktreeResourceRule) => ProjectWorktreeResourceRule
+  ): void {
+    setWorktreeResourceChooserState((previousChooserState) => {
+      if (previousChooserState === null) {
+        return previousChooserState;
+      }
+
+      return {
+        ...previousChooserState,
+        ruleList: previousChooserState.ruleList.map((policyRule) =>
+          policyRule.relative_path === relativePathText
+            ? updater(policyRule)
+            : policyRule
+        ),
+      };
+    });
+  }
+
+  function updateWorktreeResourceChooserRuleList(
+    relativePathTextList: string[],
+    updater: (policyRule: ProjectWorktreeResourceRule) => ProjectWorktreeResourceRule
+  ): void {
+    const relativePathSet = new Set(relativePathTextList);
+    setWorktreeResourceChooserState((previousChooserState) => {
+      if (previousChooserState === null) {
+        return previousChooserState;
+      }
+
+      return {
+        ...previousChooserState,
+        ruleList: previousChooserState.ruleList.map((policyRule) =>
+          relativePathSet.has(policyRule.relative_path)
+            ? updater(policyRule)
+            : policyRule
+        ),
+      };
+    });
+  }
+
+  function setAllWorktreeResourceChooserRulesIncluded(includeAll: boolean): void {
+    setWorktreeResourceChooserState((previousChooserState) => {
+      if (previousChooserState === null) {
+        return previousChooserState;
+      }
+
+      return {
+        ...previousChooserState,
+        ruleList: previousChooserState.ruleList.map((policyRule) => ({
+          ...policyRule,
+          include: includeAll,
+        })),
+      };
+    });
+  }
+
+  function applyWorktreeResourceChooserPolicy(): void {
+    if (worktreeResourceChooserState === null) {
+      return;
+    }
+
+    const policyJsonText = buildProjectWorktreeResourcePolicyJsonText(
+      worktreeResourceChooserState.ruleList
+    );
+    if (worktreeResourceChooserState.targetKind === "create") {
+      setNewProjectWorktreeResourcePolicyConfirmation("customized");
+      setNewProjectWorktreeResourcePolicyJsonText(policyJsonText);
+    } else {
+      setEditingProjectWorktreeResourcePolicyConfirmation("customized");
+      setEditingProjectWorktreeResourcePolicyJsonText(policyJsonText);
+    }
+    setWorktreeResourceChooserState(null);
   }
 
   function closeCreateRequirementPanel(): void {
@@ -1982,6 +2360,28 @@ function App() {
       window.removeEventListener("keydown", handleDestroyModalKeydown);
     };
   }, [activeMutationName, isDestroyModalOpen]);
+
+  useEffect(() => {
+    if (worktreeResourceChooserState === null) {
+      return;
+    }
+
+    function handleWorktreeResourceChooserKeydown(
+      keyboardEvent: globalThis.KeyboardEvent
+    ): void {
+      if (keyboardEvent.key !== "Escape") {
+        return;
+      }
+
+      keyboardEvent.preventDefault();
+      closeWorktreeResourceChooser();
+    }
+
+    window.addEventListener("keydown", handleWorktreeResourceChooserKeydown);
+    return () => {
+      window.removeEventListener("keydown", handleWorktreeResourceChooserKeydown);
+    };
+  }, [worktreeResourceChooserState]);
   // 按任务拉取完整日志列表，避免全局 100 条限制导致时间线空白
   useEffect(() => {
     if (!detailTaskId) {
@@ -4313,19 +4713,38 @@ function App() {
       setErrorMessage("项目名称和仓库路径不能为空。");
       return;
     }
+    if (newProjectWorktreeResourcePreviewedRepoPath !== trimmedPath) {
+      setErrorMessage(
+        "请先点击“选择资源”扫描该仓库，再选择 Use defaults、Customize 或 Skip for now。"
+      );
+      setSuccessMessage(null);
+      return;
+    }
     setActiveMutationName("create");
     setErrorMessage(null);
     try {
+      const parsedProjectWorktreeResourcePolicy =
+        newProjectWorktreeResourcePolicyConfirmation === "customized"
+          ? parseProjectWorktreeResourcePolicyJsonText(
+              newProjectWorktreeResourcePolicyJsonText
+            ) ?? { confirmation_status: "customized", rules: [] }
+          : null;
       const createdProject = await projectApi.create({
         display_name: trimmedName,
         project_category: newProjectCategory.trim() || null,
         repo_path: trimmedPath,
         description: newProjectDescription.trim() || null,
+        worktree_resource_policy_confirmation:
+          newProjectWorktreeResourcePolicyConfirmation,
+        worktree_resource_policy: parsedProjectWorktreeResourcePolicy,
       });
       setNewProjectName("");
       setNewProjectCategory("");
       setNewProjectPath("");
       setNewProjectDescription("");
+      setNewProjectWorktreeResourcePolicyConfirmation("accepted_default");
+      setNewProjectWorktreeResourcePolicyJsonText("");
+      setNewProjectWorktreeResourcePreviewedRepoPath(null);
       setSuccessMessage(`项目「${trimmedName}」已创建。`);
       await loadProjectList();
       if (isCreatePanelOpen) {
@@ -4353,6 +4772,8 @@ function App() {
     setEditingProjectCategory("");
     setEditingProjectPath("");
     setEditingProjectDescription("");
+    setEditingProjectWorktreeResourcePolicyConfirmation("accepted_default");
+    setEditingProjectWorktreeResourcePolicyJsonText("");
   }
 
   function openProjectEdit(projectItem: Project): void {
@@ -4361,6 +4782,14 @@ function App() {
     setEditingProjectCategory(projectItem.project_category ?? "");
     setEditingProjectPath(projectItem.repo_path);
     setEditingProjectDescription(projectItem.description ?? "");
+    setEditingProjectWorktreeResourcePolicyConfirmation(
+      projectItem.worktree_resource_policy_confirmation
+    );
+    setEditingProjectWorktreeResourcePolicyJsonText(
+      projectItem.worktree_resource_policy
+        ? JSON.stringify(projectItem.worktree_resource_policy, null, 2)
+        : ""
+    );
     setErrorMessage(null);
     setSuccessMessage(null);
   }
@@ -4382,11 +4811,20 @@ function App() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
+      const parsedProjectWorktreeResourcePolicy =
+        editingProjectWorktreeResourcePolicyConfirmation === "customized"
+          ? parseProjectWorktreeResourcePolicyJsonText(
+              editingProjectWorktreeResourcePolicyJsonText
+            ) ?? { confirmation_status: "customized", rules: [] }
+          : null;
       const updatedProject = await projectApi.update(editingProjectId, {
         display_name: trimmedName,
         project_category: editingProjectCategory.trim() || null,
         repo_path: trimmedPath,
         description: editingProjectDescription.trim() || null,
+        worktree_resource_policy_confirmation:
+          editingProjectWorktreeResourcePolicyConfirmation,
+        worktree_resource_policy: parsedProjectWorktreeResourcePolicy,
       });
       await loadProjectList();
       resetProjectEditDraft();
@@ -4891,6 +5329,21 @@ function App() {
                                 setEditingProjectDescription(changeEvent.target.value)
                               }
                             />
+                            <ProjectWorktreeResourcePolicyControls
+                              policyConfirmation={
+                                editingProjectWorktreeResourcePolicyConfirmation
+                              }
+                              policyJsonText={editingProjectWorktreeResourcePolicyJsonText}
+                              onPolicyConfirmationChange={
+                                setEditingProjectWorktreeResourcePolicyConfirmation
+                              }
+                              onPolicyJsonTextChange={
+                                setEditingProjectWorktreeResourcePolicyJsonText
+                              }
+                              onOpenChooser={() => {
+                                void openWorktreeResourceChooser("edit");
+                              }}
+                            />
                           </div>
 
                           <div className="devflow-project-item__actions">
@@ -4988,7 +5441,10 @@ function App() {
                 className="devflow-input devflow-input--title"
                 placeholder="本地 Git 仓库绝对路径，如 /Users/me/myrepo"
                 value={newProjectPath}
-                onChange={(e) => setNewProjectPath(e.target.value)}
+                onChange={(e) => {
+                  setNewProjectPath(e.target.value);
+                  setNewProjectWorktreeResourcePreviewedRepoPath(null);
+                }}
               />
               <input
                 className="devflow-input devflow-input--title"
@@ -5001,6 +5457,17 @@ function App() {
                 placeholder="描述（可选）"
                 value={newProjectDescription}
                 onChange={(e) => setNewProjectDescription(e.target.value)}
+              />
+              <ProjectWorktreeResourcePolicyControls
+                policyConfirmation={newProjectWorktreeResourcePolicyConfirmation}
+                policyJsonText={newProjectWorktreeResourcePolicyJsonText}
+                onPolicyConfirmationChange={
+                  setNewProjectWorktreeResourcePolicyConfirmation
+                }
+                onPolicyJsonTextChange={setNewProjectWorktreeResourcePolicyJsonText}
+                onOpenChooser={() => {
+                  void openWorktreeResourceChooser("create");
+                }}
               />
               {errorMessage ? (
                 <div className="devflow-inline-message devflow-inline-message--error">
@@ -5017,7 +5484,9 @@ function App() {
               <ActionButton
                 variant="primary"
                 busy={activeMutationName === "create"}
-                onClick={() => { void handleCreateProject(); }}
+                onClick={() => {
+                  void handleCreateProject();
+                }}
               >
                 {activeMutationName === "create" ? "添加中..." : "添加项目"}
               </ActionButton>
@@ -7315,6 +7784,489 @@ function App() {
           minimumReasonLength={DESTROY_REASON_MIN_LENGTH}
         />
       ) : null}
+
+      {worktreeResourceChooserState ? (
+        <WorktreeResourceChooserModal
+          chooserState={worktreeResourceChooserState}
+          onClose={closeWorktreeResourceChooser}
+          onApply={applyWorktreeResourceChooserPolicy}
+          onToggleRule={(relativePathText) =>
+            updateWorktreeResourceChooserRule(relativePathText, (policyRule) => ({
+              ...policyRule,
+              include: !policyRule.include,
+            }))
+          }
+          onMaterializationChange={(relativePathText, materialization) =>
+            updateWorktreeResourceChooserRule(relativePathText, (policyRule) => ({
+              ...policyRule,
+              materialization,
+            }))
+          }
+          onSetRuleListIncluded={(relativePathTextList, include) =>
+            updateWorktreeResourceChooserRuleList(
+              relativePathTextList,
+              (policyRule) => ({
+                ...policyRule,
+                include,
+              })
+            )
+          }
+          onSelectAll={() => setAllWorktreeResourceChooserRulesIncluded(true)}
+          onSkipAll={() => setAllWorktreeResourceChooserRulesIncluded(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface ProjectWorktreeResourcePolicyControlsProps {
+  policyConfirmation: WorktreeResourcePolicyConfirmation;
+  policyJsonText: string;
+  onPolicyConfirmationChange: (
+    nextPolicyConfirmation: WorktreeResourcePolicyConfirmation
+  ) => void;
+  onPolicyJsonTextChange: (nextPolicyJsonText: string) => void;
+  onOpenChooser: () => void;
+}
+
+function ProjectWorktreeResourcePolicyControls({
+  policyConfirmation,
+  policyJsonText,
+  onPolicyConfirmationChange,
+  onPolicyJsonTextChange,
+  onOpenChooser,
+}: ProjectWorktreeResourcePolicyControlsProps) {
+  const policySummaryText =
+    policyConfirmation === "customized"
+      ? summarizeProjectWorktreeResourcePolicyJsonText(policyJsonText) ??
+        "No custom resources selected"
+      : policyConfirmation === "accepted_default"
+        ? "Default resource handling"
+        : "Task start will wait for policy confirmation";
+
+  return (
+    <div className="devflow-worktree-policy-control">
+      <div className="devflow-worktree-policy-control__toolbar">
+        <select
+          className="devflow-input devflow-input--select"
+          value={policyConfirmation}
+          onChange={(changeEvent) =>
+            onPolicyConfirmationChange(
+              changeEvent.target.value as WorktreeResourcePolicyConfirmation
+            )
+          }
+        >
+          <option value="accepted_default">Use defaults</option>
+          <option value="customized">Customize</option>
+          <option value="deferred">Skip for now</option>
+        </select>
+
+        <button
+          type="button"
+          className="devflow-project-item__action devflow-worktree-policy-control__choose"
+          onClick={onOpenChooser}
+        >
+          选择资源
+        </button>
+      </div>
+
+      <span className="devflow-worktree-policy-control__summary">
+        {policySummaryText}
+      </span>
+
+      {policyConfirmation === "customized" ? (
+        <details className="devflow-worktree-policy-control__advanced">
+          <summary>Advanced JSON</summary>
+          <textarea
+            className="devflow-input devflow-input--textarea"
+            placeholder="Worktree resource policy JSON"
+            value={policyJsonText}
+            onChange={(changeEvent) =>
+              onPolicyJsonTextChange(changeEvent.target.value)
+            }
+          />
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+interface WorktreeResourceChooserModalProps {
+  chooserState: WorktreeResourceChooserState;
+  onClose: () => void;
+  onApply: () => void;
+  onToggleRule: (relativePathText: string) => void;
+  onMaterializationChange: (
+    relativePathText: string,
+    materialization: WorktreeResourceMaterialization
+  ) => void;
+  onSetRuleListIncluded: (
+    relativePathTextList: string[],
+    include: boolean
+  ) => void;
+  onSelectAll: () => void;
+  onSkipAll: () => void;
+}
+
+function WorktreeResourceChooserModal({
+  chooserState,
+  onClose,
+  onApply,
+  onToggleRule,
+  onMaterializationChange,
+  onSetRuleListIncluded,
+  onSelectAll,
+  onSkipAll,
+}: WorktreeResourceChooserModalProps) {
+  const [expandedPathSet, setExpandedPathSet] = useState<Set<string>>(new Set());
+  const rootTreeNodeList = useMemo(
+    () => buildWorktreeResourceTreeNodeList(chooserState.ruleList),
+    [chooserState.ruleList]
+  );
+  const includedRuleCount = chooserState.ruleList.filter(
+    (policyRule) => policyRule.include
+  ).length;
+  const hasBlockingError =
+    !chooserState.isLoading &&
+    chooserState.errorMessage !== null &&
+    chooserState.ruleList.length === 0;
+
+  function toggleExpandedPath(relativePathText: string): void {
+    setExpandedPathSet((previousExpandedPathSet) => {
+      const nextExpandedPathSet = new Set(previousExpandedPathSet);
+      if (nextExpandedPathSet.has(relativePathText)) {
+        nextExpandedPathSet.delete(relativePathText);
+      } else {
+        nextExpandedPathSet.add(relativePathText);
+      }
+      return nextExpandedPathSet;
+    });
+  }
+
+  return (
+    <div
+      className="devflow-prd-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${chooserState.projectLabel} worktree resource chooser`}
+      onClick={onClose}
+    >
+      <div
+        className="devflow-worktree-resource-modal"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+        }}
+      >
+        <div className="devflow-destroy-modal__header devflow-worktree-resource-modal__header">
+          <div className="devflow-destroy-modal__copy">
+            <span className="devflow-destroy-modal__eyebrow">Worktree Resources</span>
+            <h4 className="devflow-destroy-modal__title">
+              {chooserState.projectLabel}
+            </h4>
+            <p className="devflow-destroy-modal__hint">
+              {chooserState.repoPath}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="devflow-prd-modal__close"
+            onClick={onClose}
+          >
+            <XIcon className="devflow-icon devflow-icon--small" />
+            <span>关闭</span>
+          </button>
+        </div>
+
+        <div className="devflow-worktree-resource-modal__body">
+          <div className="devflow-worktree-resource-modal__summary">
+            <span>{includedRuleCount}/{chooserState.ruleList.length} selected</span>
+            <div className="devflow-worktree-resource-modal__bulk-actions">
+              <button type="button" onClick={onSelectAll} disabled={chooserState.isLoading}>
+                Select all
+              </button>
+              <button type="button" onClick={onSkipAll} disabled={chooserState.isLoading}>
+                Skip all
+              </button>
+            </div>
+          </div>
+
+          {chooserState.errorMessage ? (
+            <div
+              className="devflow-inline-message devflow-inline-message--error"
+              role={hasBlockingError ? "alert" : "status"}
+              aria-live="polite"
+            >
+              <RobotIcon className="devflow-icon devflow-icon--tiny" />
+              <span>{chooserState.errorMessage}</span>
+            </div>
+          ) : null}
+
+          {chooserState.isLoading ? (
+            <div className="devflow-worktree-resource-modal__loading">
+              <span className="devflow-spinner" aria-hidden="true" />
+              <span>Scanning repository resources...</span>
+            </div>
+          ) : null}
+
+          {!chooserState.isLoading && chooserState.ruleList.length === 0 && !hasBlockingError ? (
+            <p className="devflow-project-panel__empty">
+              No untracked or ignored runtime resources were found.
+            </p>
+          ) : null}
+
+          {rootTreeNodeList.length > 0 ? (
+            <div className="devflow-worktree-resource-tree">
+              {rootTreeNodeList.map((treeNode) => (
+                <WorktreeResourceTreeRow
+                  key={treeNode.nodeKey}
+                  treeNode={treeNode}
+                  depth={0}
+                  expandedPathSet={expandedPathSet}
+                  isLoading={chooserState.isLoading}
+                  disabledByAncestor={false}
+                  onToggleExpandedPath={toggleExpandedPath}
+                  onToggleRule={onToggleRule}
+                  onMaterializationChange={onMaterializationChange}
+                  onSetRuleListIncluded={onSetRuleListIncluded}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          <div className="devflow-destroy-modal__actions">
+            <ActionButton variant="ghost" onClick={onClose}>
+              Cancel
+            </ActionButton>
+            <ActionButton
+              variant="primary"
+              busy={chooserState.isLoading}
+              disabled={hasBlockingError}
+              onClick={onApply}
+              className="devflow-destroy-modal__confirm"
+            >
+              Apply Policy
+            </ActionButton>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface WorktreeResourceTreeRowProps {
+  treeNode: WorktreeResourceTreeNode;
+  depth: number;
+  expandedPathSet: Set<string>;
+  isLoading: boolean;
+  disabledByAncestor: boolean;
+  onToggleExpandedPath: (relativePathText: string) => void;
+  onToggleRule: (relativePathText: string) => void;
+  onMaterializationChange: (
+    relativePathText: string,
+    materialization: WorktreeResourceMaterialization
+  ) => void;
+  onSetRuleListIncluded: (
+    relativePathTextList: string[],
+    include: boolean
+  ) => void;
+}
+
+function WorktreeResourceTreeRow({
+  treeNode,
+  depth,
+  expandedPathSet,
+  isLoading,
+  disabledByAncestor,
+  onToggleExpandedPath,
+  onToggleRule,
+  onMaterializationChange,
+  onSetRuleListIncluded,
+}: WorktreeResourceTreeRowProps) {
+  const hasChildNodes = treeNode.childNodeList.length > 0;
+  const isExpanded = expandedPathSet.has(treeNode.relativePath);
+  const policyRule = treeNode.rule;
+  const selectedDescendantCount = treeNode.descendantIncludedRuleCount;
+  const isDirectoryFullySelected =
+    selectedDescendantCount === treeNode.descendantRulePathList.length &&
+    treeNode.descendantRulePathList.length > 0;
+  const isDirectoryPartiallySelected =
+    selectedDescendantCount > 0 && !isDirectoryFullySelected;
+
+  if (hasChildNodes) {
+    const isFolderRuleActive = doesWorktreeResourceRuleMaterialize(policyRule);
+    const folderCheckboxChecked =
+      policyRule !== null ? policyRule.include : isDirectoryFullySelected;
+    const folderCheckboxDisabled = isLoading || disabledByAncestor;
+    const childNodeDisabledByAncestor =
+      disabledByAncestor || isFolderRuleActive;
+
+    return (
+      <div className="devflow-worktree-resource-tree__item">
+        <div
+          className={joinClassNames(
+            "devflow-worktree-resource-tree__folder",
+            policyRule !== null && "devflow-worktree-resource-tree__folder--resource",
+            policyRule !== null &&
+              !policyRule.include &&
+              "devflow-worktree-resource-tree__folder--excluded",
+            disabledByAncestor && "devflow-worktree-resource-tree__folder--covered"
+          )}
+          style={{ "--tree-depth": depth } as CSSProperties}
+        >
+          <button
+            type="button"
+            className="devflow-worktree-resource-tree__expander"
+            aria-expanded={isExpanded}
+            onClick={() => onToggleExpandedPath(treeNode.relativePath)}
+          >
+            <ChevronRightIcon
+              className={joinClassNames(
+                "devflow-icon devflow-icon--tiny",
+                isExpanded && "devflow-worktree-resource-tree__expander-icon--open"
+              )}
+            />
+          </button>
+
+          <label className="devflow-worktree-resource-row__check">
+            <input
+              type="checkbox"
+              checked={folderCheckboxChecked}
+              disabled={folderCheckboxDisabled}
+              aria-checked={
+                policyRule === null && isDirectoryPartiallySelected
+                  ? "mixed"
+                  : folderCheckboxChecked
+              }
+              onChange={() =>
+                policyRule !== null
+                  ? onToggleRule(policyRule.relative_path)
+                  : onSetRuleListIncluded(
+                      treeNode.descendantRulePathList,
+                      !isDirectoryFullySelected
+                    )
+              }
+            />
+          </label>
+
+          <button
+            type="button"
+            className="devflow-worktree-resource-tree__folder-copy"
+            onClick={() => onToggleExpandedPath(treeNode.relativePath)}
+          >
+            <span className="devflow-worktree-resource-tree__folder-name">
+              {treeNode.name}
+            </span>
+            <span className="devflow-worktree-resource-tree__folder-meta">
+              {policyRule !== null ? (
+                <span className="devflow-worktree-resource-tree__folder-kind">
+                  folder rule
+                </span>
+              ) : null}
+              <span className="devflow-worktree-resource-tree__folder-count">
+                {selectedDescendantCount}/{treeNode.descendantRulePathList.length}
+              </span>
+            </span>
+          </button>
+
+          {policyRule !== null ? (
+            <select
+              className="devflow-input devflow-input--select devflow-worktree-resource-row__select"
+              value={policyRule.materialization}
+              disabled={!policyRule.include || isLoading || disabledByAncestor}
+              onChange={(changeEvent: ChangeEvent<HTMLSelectElement>) =>
+                onMaterializationChange(
+                  policyRule.relative_path,
+                  changeEvent.target.value as WorktreeResourceMaterialization
+                )
+              }
+            >
+              {WORKTREE_RESOURCE_MATERIALIZATION_OPTION_LIST.map((optionItem) => (
+                <option key={optionItem.value} value={optionItem.value}>
+                  {optionItem.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+
+        {isExpanded ? (
+          <div className="devflow-worktree-resource-tree__children">
+            {treeNode.childNodeList.map((childNode) => (
+              <WorktreeResourceTreeRow
+                key={childNode.nodeKey}
+                treeNode={childNode}
+                depth={depth + 1}
+                expandedPathSet={expandedPathSet}
+                isLoading={isLoading}
+                disabledByAncestor={childNodeDisabledByAncestor}
+                onToggleExpandedPath={onToggleExpandedPath}
+                onToggleRule={onToggleRule}
+                onMaterializationChange={onMaterializationChange}
+                onSetRuleListIncluded={onSetRuleListIncluded}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (policyRule === null) {
+    return null;
+  }
+
+  return (
+    <div
+      className={joinClassNames(
+        "devflow-worktree-resource-row",
+        !policyRule.include && "devflow-worktree-resource-row--excluded",
+        disabledByAncestor && "devflow-worktree-resource-row--covered"
+      )}
+      style={{ "--tree-depth": depth } as CSSProperties}
+    >
+      <label className="devflow-worktree-resource-row__check">
+        <input
+          type="checkbox"
+          checked={policyRule.include}
+          disabled={isLoading || disabledByAncestor}
+          onChange={() => onToggleRule(policyRule.relative_path)}
+        />
+      </label>
+
+      <div className="devflow-worktree-resource-row__copy">
+        <div className="devflow-worktree-resource-row__path">{treeNode.name}</div>
+        <div className="devflow-worktree-resource-row__meta">
+          <span>{policyRule.resource_kind}</span>
+          <span>{policyRule.git_state}</span>
+          {policyRule.is_directory ? <span>folder</span> : null}
+          {disabledByAncestor ? <span>covered by folder</span> : null}
+          {policyRule.required ? <span>required</span> : null}
+        </div>
+        {policyRule.note ? (
+          <div className="devflow-worktree-resource-row__note">
+            {policyRule.note}
+          </div>
+        ) : null}
+      </div>
+
+      <select
+        className="devflow-input devflow-input--select devflow-worktree-resource-row__select"
+        value={policyRule.materialization}
+        disabled={!policyRule.include || isLoading || disabledByAncestor}
+        onChange={(changeEvent: ChangeEvent<HTMLSelectElement>) =>
+          onMaterializationChange(
+            policyRule.relative_path,
+            changeEvent.target.value as WorktreeResourceMaterialization
+          )
+        }
+      >
+        {WORKTREE_RESOURCE_MATERIALIZATION_OPTION_LIST.map((optionItem) => (
+          <option key={optionItem.value} value={optionItem.value}>
+            {optionItem.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -10322,6 +11274,21 @@ function getProjectHealthState(projectItem: Project): {
         expectedCommitHash && currentCommitHash
           ? `Expected ${expectedCommitHash} · Current ${currentCommitHash}`
           : null,
+    };
+  }
+
+  if (!projectItem.is_worktree_resource_policy_ready) {
+    return {
+      statusLabel: "Need policy",
+      statusClassName: "devflow-project-item__status--warning",
+      containerClassName: "devflow-project-item--warning",
+      actionLabel: "Edit",
+      note:
+        projectItem.worktree_resource_policy_note ??
+        "Confirm Worktree Resources before starting task worktrees.",
+      fingerprint: projectItem.worktree_resource_policy
+        ? `${projectItem.worktree_resource_policy.rules.length} resource rules`
+        : null,
     };
   }
 

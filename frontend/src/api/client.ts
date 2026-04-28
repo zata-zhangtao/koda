@@ -16,6 +16,9 @@ import type {
   ProjectTimelineTaskDetail,
   Project,
   ProjectBranchList,
+  ProjectWorktreeResourcePolicy,
+  WorktreeResourceCandidateList,
+  WorktreeResourcePreviewRequest,
   RunAccount,
   Task,
   TaskCardMetadata,
@@ -644,6 +647,11 @@ export const projectApi = {
     project_category?: string | null;
     repo_path: string;
     description?: string | null;
+    worktree_resource_policy_confirmation:
+      | "accepted_default"
+      | "customized"
+      | "deferred";
+    worktree_resource_policy?: ProjectWorktreeResourcePolicy | null;
   }) =>
     fetchApi<Project>("/projects", {
       method: "POST",
@@ -658,6 +666,11 @@ export const projectApi = {
       project_category?: string | null;
       repo_path: string;
       description?: string | null;
+      worktree_resource_policy_confirmation:
+        | "accepted_default"
+        | "customized"
+        | "deferred";
+      worktree_resource_policy?: ProjectWorktreeResourcePolicy | null;
     }
   ) =>
     fetchApi<Project>(`/projects/${id}`, {
@@ -680,6 +693,22 @@ export const projectApi = {
       throw new Error(extractApiErrorMessage(responseText, response.status));
     }
   },
+
+  /** 预览项目仓库本地资源候选项 */
+  previewWorktreeResourceCandidates: (data: WorktreeResourcePreviewRequest) =>
+    fetchApi<WorktreeResourceCandidateList>(
+      "/projects/worktree-resource-candidates/preview",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    ),
+
+  /** 获取项目本地资源候选项 */
+  listWorktreeResourceCandidates: (id: string) =>
+    fetchApi<WorktreeResourceCandidateList>(
+      `/projects/${id}/worktree-resource-candidates`
+    ),
 
   /** 使用配置的编辑器命令打开项目根目录 */
   openInEditor: (id: string) =>

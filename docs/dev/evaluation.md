@@ -75,21 +75,26 @@
 ### 项目与 Worktree
 
 1. 创建 `Project`
-2. 将任务绑定到该项目
-3. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
-4. 对未启动的 backlog 任务点击 `Delete`，确认任务和关联日志/附件从列表中直接消失，不进入 `Changes` 归档视图
-5. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
-6. 对 backlog 项目任务使用 `tasks/pending/*.md` PRD 启动，确认 pending 列表来自项目仓库模板池；创建或复用 task worktree 后，系统会把 worktree 中同名 pending 副本移动到 worktree 的 `tasks/` 根目录，项目仓库里的 pending 模板仍保留；如果 worktree 中没有同名副本，则只把项目模板内容写入 worktree 的 `tasks/` 根目录
-7. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
-8. 在绑定项目中临时放置一个不支持 `--base` 的旧式 `scripts/git_worktree.sh`，启动任务仍应走 Koda 内置创建流程并生成上述默认路径；只有 `scripts/new-worktree.sh` / `scripts/create-worktree.sh` 这类显式接收目标路径的脚本才可覆盖创建命令
-9. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
-10. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
-11. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
-12. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
-13. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
-14. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
-15. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
-16. 手动 merge 并删除任务分支，确认详情页进入“缺失分支待确认”；点击“确认 Complete”后同样先展示 `manual_complete` checklist，未全选不能提交，全选后 `/manual-complete` 写入 checklist confirmation 与人工完成审计日志
+2. 在 Project 面板点击“选择资源”，确认候选列表不显示 Git 已追踪文件，也不显示 `__pycache__`、`.pytest_cache`、coverage、logs、dist/build/site 等纯生成产物；只显示需要策略选择的本地 untracked/ignored 资源，包括 `.env*` secret copy 警告、数据库/上传目录 shared mutable link 警告、`node_modules` / `.venv` large dependency 警告，以及未知 untracked/ignored 的 manual review 提示。
+3. 分别验证 `Use defaults`、自定义 `Copy` / `Link` / `Skip`、`Skip for now` 三条路径；`Skip for now` 的 Project 应显示需要 Worktree Resource confirmation，并且不能作为 task start 的有效候选。
+4. 在仓库中准备 `.env.local` 和 `data/app.sqlite`，启动绑定该 Project 的任务，确认 worktree 中 `.env.local` 是真实复制文件，`data/app.sqlite` 或 `data/` 按策略链接，并且 `Task.worktree_path` 只在准备成功后落库。
+5. 人为制造 materialization 失败（例如在目标 worktree 预置冲突文件，或删除 required `.env`），确认任务启动失败、不会写入 `Task.worktree_path`，错误中包含原始失败与 rollback 结果，本地 worktree/branch 被清理或明确提示需要手动清理。
+6. 执行 WebDAV business sync 导出/恢复，确认 `worktree_resource_policy_json` 和本地 runtime 资源内容不会进入业务快照，恢复到已有 Project 时保留本机已有策略。
+7. 将任务绑定到该项目
+8. 在任务仍处于 `backlog` 时打开 `Requirement Revision`，确认可以修改 `project_id`，保存后详情区立即回显新的关联项目，并追加一条项目改绑审计日志
+9. 对未启动的 backlog 任务点击 `Delete`，确认任务和关联日志/附件从列表中直接消失，不进入 `Changes` 归档视图
+10. 启动任务，确认是否生成 `worktree_path`，且新目录位于项目父目录的 `task/` 下
+11. 对 backlog 项目任务使用 `tasks/pending/*.md` PRD 启动，确认 pending 列表来自项目仓库模板池；创建或复用 task worktree 后，系统会把 worktree 中同名 pending 副本移动到 worktree 的 `tasks/` 根目录，项目仓库里的 pending 模板仍保留；如果 worktree 中没有同名副本，则只把项目模板内容写入 worktree 的 `tasks/` 根目录
+12. 用一个明确例子核对路径规则：若项目仓库是 `/Users/zata/code/my-app`，则新 worktree 应落在 `/Users/zata/code/task/my-app-wt-12345678`
+13. 在绑定项目中临时放置一个不支持 `--base` 的旧式 `scripts/git_worktree.sh`，启动任务仍应走 Koda 内置创建流程并生成上述默认路径；只有 `scripts/new-worktree.sh` / `scripts/create-worktree.sh` 这类显式接收目标路径的脚本才可覆盖创建命令
+14. 任务启动后再次打开编辑面板，确认项目选择器变为锁定态，并明确提示“任务开始后项目绑定已锁定”
+15. 验证 `open-in-editor` 是否能打开 `worktree_path` 指向的真实目录，并确认兼容别名 `open-in-trae` 仍可调用
+16. 对已启动任务点击 `Destroy`，确认必须填写至少 5 个字符的销毁原因才能提交
+17. 提交 destroy 后，确认任务进入 deleted history 且在 `Completed` 视图可见，详情区显示 `destroy_reason` / `destroyed_at`，时间线追加一条 `Requirement Destroyed` 系统日志
+18. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
+19. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
+20. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
+21. 手动 merge 并删除任务分支，确认详情页进入“缺失分支待确认”；点击“确认 Complete”后同样先展示 `manual_complete` checklist，未全选不能提交，全选后 `/manual-complete` 写入 checklist confirmation 与人工完成审计日志
 
 ### 媒体与导出
 

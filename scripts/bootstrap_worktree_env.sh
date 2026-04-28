@@ -304,6 +304,10 @@ install_python_dependencies() {
 copy_or_link_env_files_to_worktree() {
     local source_root_path="$1"
     local target_root_path="$2"
+    if [ "${KODA_WORKTREE_RESOURCE_POLICY_ACTIVE:-0}" = "1" ]; then
+        echo "INFO: KODA_WORKTREE_RESOURCE_POLICY_ACTIVE=1; skip env file linking/copying."
+        return 0
+    fi
     local env_file_strategy
     env_file_strategy="$(resolve_env_file_strategy)"
     local processed_env_file_count=0
@@ -374,6 +378,11 @@ bootstrap_worktree_environment() {
     fi
 
     copy_or_link_env_files_to_worktree "$source_root_path" "$target_root_path"
+
+    if [ "${KODA_WORKTREE_RESOURCE_POLICY_ACTIVE:-0}" = "1" ]; then
+        echo "INFO: KODA_WORKTREE_RESOURCE_POLICY_ACTIVE=1; skip dependency bootstrap helpers."
+        return 0
+    fi
 
     local frontend_dependency_strategy
     frontend_dependency_strategy="$(resolve_frontend_dependency_strategy)"

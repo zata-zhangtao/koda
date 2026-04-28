@@ -90,6 +90,14 @@ backend/dsl/<domain>/
 - `frontend/src/components/`：时间线、侧边栏、输入框等局部视图
 - `frontend/src/pages/ProjectTimelinePage.tsx`：项目时间线独立页面，支持按 `project_category` 或单项目查看历史
 
+### Project Worktree 资源策略
+
+Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须先通过 “选择资源” 扫描本地仓库，确认 `Use defaults`、自定义规则或 `Skip for now`。自定义规则使用路径树，普通未跟踪/忽略文件夹也会作为可直接配置的目录规则出现；上层目录配置为 `Copy` 或 `Link` 时会覆盖子项 materialization。`Skip for now` 会保存 deferred 状态，Project 仍可见但不会成为可启动 task worktree 的候选项。
+
+任务启动时，`TaskService._ensure_task_worktree_if_needed(...)` 会在 `git worktree add` 前校验 Project 路径、remote 指纹和资源策略 readiness。只有确认后的策略会传入 `GitWorktreeService.create_task_worktree(...)`；缺失、deferred 或无法解析的策略会阻断启动并提示回到 Project 设置确认 Worktree Resources。
+
+`GitWorktreeService` 是唯一的 worktree 创建与准备边界。它先创建 Git worktree，再按 Project policy materialize 本地 runtime 资源，最后以 policy-active 模式运行 `scripts/bootstrap_worktree_env.sh`。materialization 或 bootstrap 失败时必须尝试移除本次创建的 worktree/branch，并把原始失败和 rollback 结果一起暴露给调用方。
+
 ## 当前工作流实现情况
 
 ### 已落地的阶段推进

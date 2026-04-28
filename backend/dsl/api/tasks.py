@@ -18,7 +18,6 @@ from fastapi import (
     Query,
     status,
 )
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.dsl.models.dev_log import DevLog
