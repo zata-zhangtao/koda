@@ -875,6 +875,7 @@ function App() {
   );
   const latestStartedTaskListRequestTokenRef = useRef(0);
   const latestStartedTaskCardMetadataRequestTokenRef = useRef(0);
+  const requirementZoneBodyId = useId().replace(/:/g, "-");
 
   const [currentRunAccount, setCurrentRunAccount] = useState<RunAccount | null>(null);
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -893,6 +894,8 @@ function App() {
   const [committedTaskProjectFilterValue, setCommittedTaskProjectFilterValue] =
     useState<string>(ALL_TASK_PROJECT_FILTER_VALUE);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("active");
+  const [isRequirementZoneCollapsed, setIsRequirementZoneCollapsed] =
+    useState(false);
   const [lastManualWorkspaceSwitchAt, setLastManualWorkspaceSwitchAt] =
     useState<number | null>(null);
   const [activeComposerMode, setActiveComposerMode] =
@@ -1124,6 +1127,21 @@ function App() {
     if (defaultProjectId) {
       void handleCreateRequirementProjectChange(defaultProjectId);
     }
+  }
+
+  function handleToggleRequirementZoneCollapse(): void {
+    setIsRequirementZoneCollapsed((wasRequirementZoneCollapsed) => {
+      return !wasRequirementZoneCollapsed;
+    });
+  }
+
+  function handleOpenCreateRequirementFromZone(): void {
+    setIsRequirementZoneCollapsed(false);
+    if (isCreatePanelOpen) {
+      return;
+    }
+
+    openCreateRequirementPanel();
   }
 
   function resetEditRequirementDraft(): void {
@@ -1668,6 +1686,10 @@ function App() {
       ),
     [projectMapById, taskCardMetadataMap, taskProjectDisplayLabelMap, visibleTaskList]
   );
+  const visibleRequirementCardCount = requirementViewModelList.length;
+  const requirementZoneToggleLabel = isRequirementZoneCollapsed
+    ? "Expand requirements list"
+    : "Collapse requirements list";
   const selectedTimelineItemList = useMemo(
     () =>
       selectedTask
@@ -5807,9 +5829,21 @@ function App() {
           </div>
         ) : null}
 
-        <div className="devflow-layout">
-          <section className="devflow-column devflow-column--requirements">
-            <div className="devflow-section-heading">
+        <div
+          className={joinClassNames(
+            "devflow-layout",
+            isRequirementZoneCollapsed &&
+              "devflow-layout--requirements-collapsed"
+          )}
+        >
+          <section
+            className={joinClassNames(
+              "devflow-column devflow-column--requirements",
+              isRequirementZoneCollapsed &&
+                "devflow-column--requirements-collapsed"
+            )}
+          >
+            <div className="devflow-section-heading devflow-section-heading--requirements">
               <div className="devflow-section-heading__copy">
                 <h2 className="devflow-section-heading__title">
                   {getWorkspaceHeading(workspaceView)}
@@ -5843,15 +5877,59 @@ function App() {
                 {canCreateRequirements ? (
                   <ActionButton
                     variant="outline"
-                    className="devflow-icon-button"
-                    onClick={openCreateRequirementPanel}
+                    className="devflow-icon-button devflow-requirements-create-button"
+                    ariaLabel="Create requirement"
+                    title="Create requirement"
+                    onClick={handleOpenCreateRequirementFromZone}
                   >
                     <PlusIcon className="devflow-icon devflow-icon--small" />
                   </ActionButton>
                 ) : null}
+                <button
+                  type="button"
+                  className="devflow-button devflow-button--outline devflow-icon-button devflow-requirements-collapse-toggle"
+                  onClick={handleToggleRequirementZoneCollapse}
+                  aria-controls={requirementZoneBodyId}
+                  aria-expanded={!isRequirementZoneCollapsed}
+                  aria-label={requirementZoneToggleLabel}
+                  title={requirementZoneToggleLabel}
+                >
+                  <ChevronRightIcon
+                    className={joinClassNames(
+                      "devflow-icon devflow-icon--small devflow-requirements-collapse-toggle__icon",
+                      !isRequirementZoneCollapsed &&
+                        "devflow-requirements-collapse-toggle__icon--expanded"
+                    )}
+                  />
+                </button>
               </div>
             </div>
 
+            {isRequirementZoneCollapsed ? (
+              <div
+                className="devflow-requirements-restore-rail"
+                aria-label="Collapsed requirements list"
+              >
+                <span className="devflow-requirements-restore-rail__eyebrow">
+                  Requirements
+                </span>
+                <span className="devflow-requirements-restore-rail__count">
+                  {visibleRequirementCardCount}
+                </span>
+                <span
+                  className="devflow-requirements-restore-rail__view"
+                  title={getWorkspaceHeading(workspaceView)}
+                >
+                  {getWorkspaceHeading(workspaceView)}
+                </span>
+              </div>
+            ) : null}
+
+            <div
+              id={requirementZoneBodyId}
+              className="devflow-requirements-zone__body"
+              hidden={isRequirementZoneCollapsed}
+            >
             {isCreatePanelOpen && canCreateRequirements ? (
               <CardSurface className="devflow-create-panel">
                 <select
@@ -6380,6 +6458,7 @@ function App() {
                   requirementViewModel={requirementViewModel}
                 />
               ))}
+            </div>
             </div>
           </section>
 
@@ -9974,6 +10053,8 @@ interface ActionButtonProps {
   onClick?: () => void;
   variant?: "primary" | "secondary" | "execute" | "outline" | "ghost";
   className?: string;
+  ariaLabel?: string;
+  title?: string;
   busy?: boolean;
   disabled?: boolean;
 }
@@ -9983,6 +10064,8 @@ function ActionButton({
   onClick,
   variant = "primary",
   className,
+  ariaLabel,
+  title,
   busy = false,
   disabled = false,
 }: ActionButtonProps) {
@@ -9991,6 +10074,8 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled || busy}
+      aria-label={ariaLabel}
+      title={title}
       className={joinClassNames(
         "devflow-button",
         `devflow-button--${variant}`,

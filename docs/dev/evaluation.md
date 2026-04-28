@@ -58,6 +58,8 @@
 20. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
 21. 修改 PRD acceptance checklist 或用旧 signature 重放 `/complete`，确认后端返回 refresh-required 冲突；漏传任一展示 item id 时返回 422
 22. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
+23. 在桌面宽屏下点击左侧需求卡片区的折叠按钮，确认左列变为窄栏，显示恢复按钮和当前视图卡片数，详情区获得更多横向空间；再次点击恢复后，项目筛选、选中任务和已打开的创建面板草稿保持不变，且不会触发任务列表重新加载
+24. 在移动宽度下重复折叠/恢复，确认页面保持单列，需求列表主体隐藏但顶部恢复按钮可见，没有文本重叠或不可恢复状态
 ### Sidecar Q&A
 
 1. 选择一个处于 `prd_waiting_confirmation` 的任务，切换到底部的“问 AI”通道
