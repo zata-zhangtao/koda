@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from datetime import datetime
 from pathlib import Path
-import uuid
 
 from backend.dsl.prd_sources.domain.errors import (
     InvalidPrdContentError,
@@ -23,6 +24,9 @@ from backend.dsl.prd_sources.domain.policies import (
     validate_pending_prd_relative_path,
     validate_prd_markdown_text,
 )
+
+_PENDING_PRD_LEADING_TIMESTAMP_PATTERN = re.compile(r"^(?P<timestamp>\d{8}-\d{6})")
+_PENDING_PRD_LEADING_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 
 class FilesystemPrdRepository:
@@ -72,14 +76,7 @@ class FilesystemPrdRepository:
                 )
             )
 
-        return sorted(
-            pending_candidate_list,
-            key=lambda pending_candidate: (
-                pending_candidate.updated_at,
-                pending_candidate.file_name_str,
-            ),
-            reverse=True,
-        )
+        return _sort_pending_prd_candidate_list(pending_candidate_list)
 
     def read_pending_prd_markdown(
         self,
@@ -380,3 +377,78 @@ def _is_relative_to(candidate_path: Path, parent_path: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _parse_pending_prd_leading_timestamp(file_name_str: str) -> datetime | None:
+    """Parse a pending PRD filename prefix timestamp for ordering.
+
+    Args:
+        file_name_str: Pending PRD filename.
+
+    Returns:
+        datetime | None: Parsed leading timestamp when the filename starts with
+            ``YYYYMMDD-HHMMSS`` and the token is a valid calendar time.
+    """
+    leading_timestamp_match = _PENDING_PRD_LEADING_TIMESTAMP_PATTERN.match(
+        file_name_str
+    )
+    if leading_timestamp_match is None:
+        return None
+
+    leading_timestamp_token_str = leading_timestamp_match.group("timestamp")
+    try:
+        return datetime.strptime(
+            leading_timestamp_token_str,
+            _PENDING_PRD_LEADING_TIMESTAMP_FORMAT,
+        )
+    except ValueError:
+        return None
+
+
+def _sort_pending_prd_candidate_list(
+    pending_candidate_list: list[PendingPrdCandidate],
+) -> list[PendingPrdCandidate]:
+    """Sort pending PRD candidates by filename timestamp, then legacy fallback.
+
+    Args:
+        pending_candidate_list: Pending Markdown PRD candidates gathered from
+            ``tasks/pending``.
+
+    Returns:
+        list[PendingPrdCandidate]: Candidates sorted with valid leading
+            timestamps first, followed by non-timestamped legacy ordering.
+    """
+    timestamped_candidate_tuple_list: list[tuple[datetime, PendingPrdCandidate]] = []
+    fallback_candidate_list: list[PendingPrdCandidate] = []
+    for pending_candidate in pending_candidate_list:
+        parsed_leading_timestamp = _parse_pending_prd_leading_timestamp(
+            pending_candidate.file_name_str
+        )
+        if parsed_leading_timestamp is None:
+            fallback_candidate_list.append(pending_candidate)
+            continue
+
+        timestamped_candidate_tuple_list.append(
+            (parsed_leading_timestamp, pending_candidate)
+        )
+
+    sorted_timestamped_candidate_list = [
+        pending_candidate
+        for _, pending_candidate in sorted(
+            timestamped_candidate_tuple_list,
+            key=lambda timestamped_candidate_tuple: (
+                timestamped_candidate_tuple[0],
+                timestamped_candidate_tuple[1].file_name_str,
+            ),
+            reverse=True,
+        )
+    ]
+    sorted_fallback_candidate_list = sorted(
+        fallback_candidate_list,
+        key=lambda pending_candidate: (
+            pending_candidate.updated_at,
+            pending_candidate.file_name_str,
+        ),
+        reverse=True,
+    )
+    return sorted_timestamped_candidate_list + sorted_fallback_candidate_list

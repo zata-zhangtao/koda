@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from io import BytesIO
-from datetime import datetime
+import os
 import re
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,35 @@ def _freeze_prd_filename_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prd_policies, "datetime", _FixedDatetimeModule)
 
 
+def _write_pending_prd_file(
+    pending_directory_path: Path,
+    file_name_str: str,
+    *,
+    modified_at: datetime,
+) -> Path:
+    """Write a pending PRD fixture with a deterministic modification time.
+
+    Args:
+        pending_directory_path: Directory receiving the pending PRD file.
+        file_name_str: Pending PRD filename.
+        modified_at: Filesystem mtime to assign after writing.
+
+    Returns:
+        Path: Written pending PRD file path.
+    """
+    pending_file_path = pending_directory_path / file_name_str
+    pending_file_path.write_text(
+        f"# PRD\n\n**需求名称（AI 归纳）**：{file_name_str}\n",
+        encoding="utf-8",
+    )
+    modified_timestamp_float = modified_at.timestamp()
+    os.utime(
+        pending_file_path,
+        (modified_timestamp_float, modified_timestamp_float),
+    )
+    return pending_file_path
+
+
 def _create_task(
     db_session: Session,
     workspace_dir_path: Path,
@@ -171,6 +201,56 @@ def test_list_taskless_pending_prd_files_uses_default_workspace(
         "draft.md"
     ]
     assert response_schema.files[0].updated_at is not None
+
+
+def test_list_taskless_pending_prd_files_orders_by_leading_timestamp(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Taskless pending list should prefer filename timestamps over mtimes."""
+    _create_active_run_account(db_session)
+    monkeypatch.setattr(task_workflow_adapter.config, "BASE_DIR", tmp_path)
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    beta_pending_file_path = _write_pending_prd_file(
+        pending_directory_path,
+        "20260428-150952-prd-beta.md",
+        modified_at=datetime(2026, 4, 20, 9, 0, 0),
+    )
+    _write_pending_prd_file(
+        pending_directory_path,
+        "20260428-150952-prd-alpha.md",
+        modified_at=datetime(2026, 4, 21, 9, 0, 0),
+    )
+    _write_pending_prd_file(
+        pending_directory_path,
+        "20260428-135738-prd-older-by-name.md",
+        modified_at=datetime(2026, 5, 3, 9, 0, 0),
+    )
+    _write_pending_prd_file(
+        pending_directory_path,
+        "20261399-999999-prd-invalid.md",
+        modified_at=datetime(2026, 5, 2, 9, 0, 0),
+    )
+    _write_pending_prd_file(
+        pending_directory_path,
+        "manual.md",
+        modified_at=datetime(2026, 5, 1, 9, 0, 0),
+    )
+
+    response_schema = list_taskless_pending_prd_files(db_session)
+
+    assert [pending_file.file_name for pending_file in response_schema.files] == [
+        "20260428-150952-prd-beta.md",
+        "20260428-150952-prd-alpha.md",
+        "20260428-135738-prd-older-by-name.md",
+        "20261399-999999-prd-invalid.md",
+        "manual.md",
+    ]
+    assert response_schema.files[0].updated_at == datetime.fromtimestamp(
+        beta_pending_file_path.stat().st_mtime
+    )
 
 
 def test_build_task_draft_from_pending_prd_returns_prefill_fields(
@@ -292,6 +372,33 @@ def test_list_pending_prd_files_prefers_project_repo_when_worktree_exists(
 
     assert [pending_file.file_name for pending_file in response_schema.files] == [
         "project.md"
+    ]
+
+
+def test_list_pending_prd_files_uses_same_timestamp_order_for_task_scope(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Task-scoped pending list should use the same filename timestamp order."""
+    task_obj = _create_task(db_session, tmp_path)
+    pending_directory_path = tmp_path / "tasks" / "pending"
+    pending_directory_path.mkdir(parents=True)
+    _write_pending_prd_file(
+        pending_directory_path,
+        "20260428-135738-prd-edited-later.md",
+        modified_at=datetime(2026, 5, 3, 9, 0, 0),
+    )
+    _write_pending_prd_file(
+        pending_directory_path,
+        "20260428-150952-prd-created-later.md",
+        modified_at=datetime(2026, 4, 20, 9, 0, 0),
+    )
+
+    response_schema = list_pending_prd_files(task_obj.id, db_session)
+
+    assert [pending_file.file_name for pending_file in response_schema.files] == [
+        "20260428-150952-prd-created-later.md",
+        "20260428-135738-prd-edited-later.md",
     ]
 
 

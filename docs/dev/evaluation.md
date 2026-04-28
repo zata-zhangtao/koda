@@ -42,7 +42,7 @@
 4. 检查 PRD 顶部是否同时包含 `原始需求标题` 与 `需求名称（AI 归纳）`
 5. 在任务详情选择“从 tasks/pending 选择”，确认详情 action 区仍显示“使用选中的 PRD”；刷新页面后仍恢复 pending 来源草稿与已选文件，再点击后确认 pending Markdown PRD 会被移动到目标 workspace 的 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，原 pending 文件消失，任务进入 `prd_waiting_confirmation`
 6. 在任务详情选择“手动导入 PRD”，分别验证“上传 `.md` 文件”和“粘贴 Markdown 文本 / `.md` 文件”两条路径；确认目标 PRD 都会写入 `tasks/YYYYMMDD-HHMMSS-prd-<slug>.md`，并能通过现有 PRD 面板读取
-7. 在创建面板选择“从 tasks/pending 选择”，确认列表项同时显示标题/文件名、大小和 Updated 时间戳；点击“生成草稿”后 title 与 description 被预填，未勾选确认项时不能创建 task
+7. 在创建面板选择“从 tasks/pending 选择”，确认列表项同时显示标题/文件名、大小和 Updated 时间戳；准备两个 mtime 与文件名前置时间戳相反的 pending PRD，确认下拉默认选择的是 `YYYYMMDD-HHMMSS` 前置时间戳最新的文件，而不是最近修改的文件；点击“生成草稿”后 title 与 description 被预填，未勾选确认项时不能创建 task
 8. 修改 pending PRD 文件后，使用旧草稿点击“Create from PRD”，确认接口返回冲突错误并提示刷新草稿，不应显示创建成功
 9. 在创建面板选择“手动导入 PRD”，分别验证上传 `.md` 与粘贴 Markdown；确认 AI/回退预填 title 与 description，用户勾选确认后创建 task，并进入 `prd_waiting_confirmation`
 10. 对启用“PRD 就绪后自动确认并直接开始执行”的任务重复 pending/import，确认 PRD staging 后直接进入实现链路
