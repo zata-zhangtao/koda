@@ -76,7 +76,7 @@
 5. `/complete` 请求体必须携带 `checklist_mode`、`checklist_signature` 和 `confirmed_checklist_item_ids`；后端会重新生成同一 checklist，签名过期返回 refresh-required 冲突，缺少任一展示项则返回 422
 6. 校验通过后，后端写入一条 checklist confirmation `DevLog`，再将任务推进到 `pr_preparing`
 7. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后已经干净，则跳过 commit，继续 `git rebase <worktree_base_branch_name>`
-8. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
+8. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用当前 runner 自动修复冲突并继续 Git 操作；该冲突修复阶段与编码阶段一样不设置固定秒数上限
 9. 后端会优先解析任务基底分支已配置的 remote；若无显式配置，则先选择实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，并在当前持有该基底分支的工作区完成远程同步与 `git merge <task branch>`
 10. merge 成功后继续清理 task worktree 与本地任务分支；repo-local cleanup script 即使返回非零，后端也会继续核验 worktree / branch 的真实状态，并尝试 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理作为 fallback
 11. 若收尾成功，任务自动推进到 `done`；若在合并到任务基底分支前失败，任务回退到 `changes_requested`

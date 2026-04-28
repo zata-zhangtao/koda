@@ -1099,6 +1099,7 @@ def test_run_logged_runner_conflict_resolution_passes_prompt_via_stdin(
         "-",
     ]
     assert recorded_run_kwargs["input"] is not None
+    assert "timeout" not in recorded_run_kwargs
     assert "ARG_LENGTH_GUARD_TITLE" in recorded_run_kwargs["input"]
     assert "ARG_LENGTH_GUARD_TITLE" not in " ".join(recorded_command_argument_list)
 

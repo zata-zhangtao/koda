@@ -1408,34 +1408,22 @@ def _run_logged_runner_conflict_resolution(
         f"$ (runner-{operation_kind_str}-conflict) {command_display_str}",
     )
 
-    _RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS = 300
     runner_stdin_prompt_text = active_runner_obj.build_stdin_prompt_text(
         runner_prompt_text_str
     )
 
-    try:
-        completed_process = subprocess.run(
-            [
-                runner_executable_path_str,
-                *active_runner_obj.build_exec_argument_list(runner_prompt_text_str),
-            ],
-            cwd=str(repo_path),
-            capture_output=True,
-            input=runner_stdin_prompt_text,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        timeout_text = (
-            f"❌ runner_kind={active_runner_obj.runner_kind} conflict resolution "
-            f"({operation_kind_str}) timed out after "
-            f"{_RUNNER_CONFLICT_RESOLUTION_TIMEOUT_SECONDS}s — aborting {operation_kind_str}."
-        )
-        _append_text_to_task_log(task_log_path, timeout_text)
-        _write_log_to_db(task_id_str, run_account_id_str, timeout_text, "BUG")
-        return None
+    completed_process = subprocess.run(
+        [
+            runner_executable_path_str,
+            *active_runner_obj.build_exec_argument_list(runner_prompt_text_str),
+        ],
+        cwd=str(repo_path),
+        capture_output=True,
+        input=runner_stdin_prompt_text,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
     command_output_parts = [
         text_part.strip()
