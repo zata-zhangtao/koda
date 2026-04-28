@@ -67,11 +67,14 @@
         - create_task
         - update_task_status
         - update_task_stage
+        - get_task_completion_checklist
         - start_task
         - regenerate_task_prd
         - execute_task
         - review_task
         - resume_task
+        - complete_task
+        - manual_complete_task
         - cancel_task
         - force_interrupt_task
         - destroy_task
@@ -128,6 +131,12 @@
         - convert_task_qa_message_to_feedback_draft
 
 ::: backend.dsl.schemas.task_schema.TaskDestroySchema
+    handler: python
+
+::: backend.dsl.schemas.task_schema.TaskCompletionChecklistResponseSchema
+    handler: python
+
+::: backend.dsl.schemas.task_schema.TaskCompletionConfirmationSchema
     handler: python
 
 ::: backend.dsl.schemas.task_schema.TaskReferenceCreateSchema

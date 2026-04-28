@@ -57,16 +57,18 @@
 
 ### 完成收尾链路
 
-1. 前端点击“Complete”
-2. 后端将任务推进到 `pr_preparing`
-3. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后已经干净，则跳过 commit，继续 `git rebase <worktree_base_branch_name>`
-4. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
-5. 后端会优先解析任务基底分支已配置的 remote；若无显式配置，则先选择实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，并在当前持有该基底分支的工作区完成远程同步与 `git merge <task branch>`
-6. merge 成功后继续清理 task worktree 与本地任务分支；repo-local cleanup script 即使返回非零，后端也会继续核验 worktree / branch 的真实状态，并尝试 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理作为 fallback
-7. 日志继续写入 `DevLog`
-8. 若收尾成功，任务自动推进到 `done`
-9. 若在合并到任务基底分支前失败，任务回退到 `changes_requested`
-10. 若这次失败属于 Git 收尾阶段本身（例如承载任务基底分支的工作区不干净），用户修复外部 Git 状态后，可以直接再次点击 `Complete` 重试收尾，而不必重跑整条实现链
+1. 前端只为已有 `worktree_path` 的任务展示普通 `Complete`；无 worktree 的 backlog / pending 任务不能通过 Complete 归档，只能继续 Start、Edit、Delete 或 Abandon
+2. 前端点击“Complete”后，先调用 `GET /api/tasks/{task_id}/completion-checklist?mode=complete`
+3. 后端从任务状态、branch health、可读 PRD 的 `Acceptance Checklist` 和系统安全项生成 canonical checklist，并保证最多展示 5 项
+4. 前端必须让用户逐项勾选全部展示项，才会调用 `POST /api/tasks/{task_id}/complete`
+5. `/complete` 请求体必须携带 `checklist_mode`、`checklist_signature` 和 `confirmed_checklist_item_ids`；后端会重新生成同一 checklist，签名过期返回 refresh-required 冲突，缺少任一展示项则返回 422
+6. 校验通过后，后端写入一条 checklist confirmation `DevLog`，再将任务推进到 `pr_preparing`
+7. `run_codex_completion` 在任务 worktree 中执行固定 Git 命令：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后已经干净，则跳过 commit，继续 `git rebase <worktree_base_branch_name>`
+8. 若 `rebase` 或后续 `merge` 出现冲突，后端会调用 Codex 自动修复冲突并继续 Git 操作
+9. 后端会优先解析任务基底分支已配置的 remote；若无显式配置，则先选择实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，并在当前持有该基底分支的工作区完成远程同步与 `git merge <task branch>`
+10. merge 成功后继续清理 task worktree 与本地任务分支；repo-local cleanup script 即使返回非零，后端也会继续核验 worktree / branch 的真实状态，并尝试 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理作为 fallback
+11. 若收尾成功，任务自动推进到 `done`；若在合并到任务基底分支前失败，任务回退到 `changes_requested`
+12. 若这次失败属于 Git 收尾阶段本身（例如承载任务基底分支的工作区不干净），用户修复外部 Git 状态后，可以再次打开 checklist 并点击 `Complete` 重试收尾，而不必重跑整条实现链
 
 ### 独立代码评审链路
 

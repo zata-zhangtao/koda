@@ -28,6 +28,7 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  ApiClientError,
   appConfigApi,
   logApi,
   mediaApi,
@@ -118,6 +119,8 @@ import {
   TaskScheduleRunStatus,
   TaskScheduleTriggerType,
   type TaskCardMetadata,
+  type TaskCompletionChecklistMode,
+  type TaskCompletionChecklistResponse,
   type TaskDisplayStageKey,
   type PendingPrdFile,
   type PrdTaskDraftSuggestion,
@@ -201,6 +204,15 @@ interface AttachmentDraft {
   file: File;
   kind: AttachmentKind;
   previewUrl: string | null;
+}
+
+interface CompletionChecklistModalState {
+  task: Task;
+  mode: TaskCompletionChecklistMode;
+  checklist: TaskCompletionChecklistResponse;
+  checkedItemIdSet: Set<string>;
+  errorMessage: string | null;
+  isSubmitting: boolean;
 }
 
 type MutationName =
@@ -768,12 +780,8 @@ function App() {
     useState<string | null>(null);
   const [isRequirementSummaryExpanded, setIsRequirementSummaryExpanded] =
     useState(false);
-  const [isManualCompletionChecklistOpen, setIsManualCompletionChecklistOpen] =
-    useState(false);
-  const [
-    viewedManualCompletionChecklistTaskIdSet,
-    setViewedManualCompletionChecklistTaskIdSet,
-  ] = useState<Set<string>>(new Set());
+  const [completionChecklistModalState, setCompletionChecklistModalState] =
+    useState<CompletionChecklistModalState | null>(null);
   const [isLoadingOlderTaskLogs, setIsLoadingOlderTaskLogs] = useState(false);
   const [, setAppTimezoneRevision] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -1564,9 +1572,6 @@ function App() {
   );
   const isSelectedTaskManualCompletionCandidate =
     selectedTaskBranchHealth?.manual_completion_candidate === true;
-  const hasViewedSelectedTaskManualCompletionChecklist = selectedTask
-    ? viewedManualCompletionChecklistTaskIdSet.has(selectedTask.id)
-    : false;
   const canEditSelectedTask = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
@@ -1863,7 +1868,7 @@ function App() {
     resetCreateRequirementDraft();
     setIsEditPanelOpen(false);
     setActiveComposerMode("feedback");
-    setIsManualCompletionChecklistOpen(false);
+    setCompletionChecklistModalState(null);
     setFeedbackInputText("");
     setFeedbackAttachmentDraft(null);
     setTaskQaInputText("");
@@ -1891,7 +1896,7 @@ function App() {
     setVisibleConversationTurnCount(INITIAL_VISIBLE_CONVERSATION_TURN_COUNT);
     setIsLoadingOlderTaskLogs(false);
     setIsRequirementSummaryExpanded(false);
-    setIsManualCompletionChecklistOpen(false);
+    setCompletionChecklistModalState(null);
     setExpandedCompactTimelineGroupIdSet(new Set());
     setExpandedCompactTimelineItemId(null);
     setSelectedTaskQaContextScope(getDefaultTaskQaContextScope(selectedTaskStage));
@@ -1917,13 +1922,6 @@ function App() {
     }
     resetSelectedTaskPrdSourceDraft();
   }, [detailTaskId]);
-
-  useEffect(() => {
-    if (isSelectedTaskManualCompletionCandidate) {
-      return;
-    }
-    setIsManualCompletionChecklistOpen(false);
-  }, [isSelectedTaskManualCompletionCandidate]);
 
   useEffect(() => {
     if (!expandedCompactTimelineItemId) {
@@ -3292,25 +3290,16 @@ function App() {
   }
 
   async function handleAcceptTask(taskItem: Task): Promise<void> {
-    setActiveMutationName("accept");
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    try {
-      const acceptedTask = await taskApi.updateStage(
-        taskItem.id,
-        WorkflowStage.DONE
-      );
-      reconcileLocalTaskSnapshot(acceptedTask);
-      setSelectedTaskId(acceptedTask.id);
-      setWorkspaceView("completed");
-      await loadDashboardData(true);
-    } catch (acceptError) {
-      console.error(acceptError);
-      setErrorMessage("Failed to accept task.");
-    } finally {
-      setActiveMutationName(null);
+    const resolvedTaskBranchHealth = resolveTaskBranchHealth(
+      taskItem,
+      taskCardMetadataMap
+    );
+    if (resolvedTaskBranchHealth?.manual_completion_candidate) {
+      await handleManualCompleteRequirement(taskItem);
+      return;
     }
+
+    await handleCompleteRequirement(taskItem);
   }
 
   async function handleRequestChanges(taskItem: Task): Promise<void> {
@@ -3632,15 +3621,191 @@ function App() {
     }
   }
 
-  function handleOpenManualCompletionChecklist(taskItem: Task): void {
-    setViewedManualCompletionChecklistTaskIdSet((previousTaskIdSet) => {
-      const nextTaskIdSet = new Set(previousTaskIdSet);
-      nextTaskIdSet.add(taskItem.id);
-      return nextTaskIdSet;
-    });
-    setIsManualCompletionChecklistOpen(true);
+  async function openCompletionChecklist(
+    taskItem: Task,
+    checklistMode: TaskCompletionChecklistMode
+  ): Promise<void> {
+    const mutationName =
+      checklistMode === "manual_complete" ? "manual_complete" : "complete";
+    setActiveMutationName(mutationName);
     setErrorMessage(null);
     setSuccessMessage(null);
+
+    try {
+      const checklistResponse = await taskApi.getCompletionChecklist(
+        taskItem.id,
+        checklistMode
+      );
+      setCompletionChecklistModalState({
+        task: taskItem,
+        mode: checklistMode,
+        checklist: checklistResponse,
+        checkedItemIdSet: new Set(),
+        errorMessage: null,
+        isSubmitting: false,
+      });
+    } catch (completionChecklistError) {
+      console.error(completionChecklistError);
+      setErrorMessage(
+        completionChecklistError instanceof Error
+          ? completionChecklistError.message
+          : "无法加载完成检查单，请刷新后重试。"
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  function handleCloseCompletionChecklistModal(): void {
+    if (completionChecklistModalState?.isSubmitting) {
+      return;
+    }
+    setCompletionChecklistModalState(null);
+  }
+
+  function handleToggleCompletionChecklistItem(itemIdText: string): void {
+    setCompletionChecklistModalState((previousModalState) => {
+      if (previousModalState === null || previousModalState.isSubmitting) {
+        return previousModalState;
+      }
+      const nextCheckedItemIdSet = new Set(previousModalState.checkedItemIdSet);
+      if (nextCheckedItemIdSet.has(itemIdText)) {
+        nextCheckedItemIdSet.delete(itemIdText);
+      } else {
+        nextCheckedItemIdSet.add(itemIdText);
+      }
+      return {
+        ...previousModalState,
+        checkedItemIdSet: nextCheckedItemIdSet,
+        errorMessage: null,
+      };
+    });
+  }
+
+  async function handleSubmitCompletionChecklist(): Promise<void> {
+    if (completionChecklistModalState === null) {
+      return;
+    }
+
+    const modalStateSnapshot = completionChecklistModalState;
+    const allDisplayedItemIdList = modalStateSnapshot.checklist.items.map(
+      (checklistItem) => checklistItem.item_id
+    );
+    const allDisplayedItemsChecked = allDisplayedItemIdList.every((itemIdText) =>
+      modalStateSnapshot.checkedItemIdSet.has(itemIdText)
+    );
+    if (!allDisplayedItemsChecked) {
+      setCompletionChecklistModalState({
+        ...modalStateSnapshot,
+        errorMessage: "请先勾选全部展示项，再执行 Complete。",
+      });
+      return;
+    }
+
+    const completionConfirmation = {
+      checklist_mode: modalStateSnapshot.mode,
+      checklist_signature: modalStateSnapshot.checklist.checklist_signature,
+      confirmed_checklist_item_ids: allDisplayedItemIdList,
+    };
+    const targetTask = modalStateSnapshot.task;
+    const mutationName =
+      modalStateSnapshot.mode === "manual_complete" ? "manual_complete" : "complete";
+    setActiveMutationName(mutationName);
+    setCompletionChecklistModalState({
+      ...modalStateSnapshot,
+      errorMessage: null,
+      isSubmitting: true,
+    });
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      if (modalStateSnapshot.mode === "manual_complete") {
+        const manuallyCompletedTask = await taskApi.manualComplete(
+          targetTask.id,
+          completionConfirmation
+        );
+        reconcileLocalTaskSnapshot(manuallyCompletedTask);
+        setSelectedTaskId(manuallyCompletedTask.id);
+        setWorkspaceView("completed");
+        setCompletionChecklistModalState(null);
+        setSuccessMessage(
+          "已写入完成检查单确认日志，任务已收敛到 Completed 归档。"
+        );
+        void loadDashboardData(true);
+        return;
+      }
+
+      const isManualSelfReviewOverride =
+        targetTask.workflow_stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
+        !hasLatestSelfReviewCyclePassed(devLogsByTaskId[targetTask.id] ?? []);
+      const completionBaseBranchName =
+        targetTask.worktree_base_branch_name || DEFAULT_WORKTREE_BASE_BRANCH_NAME;
+      const completionTask = await taskApi.complete(
+        targetTask.id,
+        completionConfirmation
+      );
+      reconcileLocalTaskSnapshot(completionTask);
+      setSelectedTaskId(completionTask.id);
+      setCompletionChecklistModalState(null);
+      setSuccessMessage(
+        isManualSelfReviewOverride
+          ? `已记录完成检查单确认与人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase ${completionBaseBranchName}、必要时自动修复冲突、合并到 ${completionBaseBranchName}，并清理 worktree。`
+          : `已记录完成检查单确认。Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase ${completionBaseBranchName}, auto-fix conflicts if needed, merge into ${completionBaseBranchName}, and clean up the worktree.`
+      );
+      await loadDashboardData(true);
+    } catch (completionError) {
+      if (
+        completionError instanceof ApiClientError &&
+        completionError.refreshRequired
+      ) {
+        try {
+          const refreshedChecklistResponse = await taskApi.getCompletionChecklist(
+            targetTask.id,
+            modalStateSnapshot.mode
+          );
+          setCompletionChecklistModalState({
+            task: targetTask,
+            mode: modalStateSnapshot.mode,
+            checklist: refreshedChecklistResponse,
+            checkedItemIdSet: new Set(),
+            errorMessage: "检查单已更新，请重新勾选全部展示项后再提交。",
+            isSubmitting: false,
+          });
+        } catch (refreshError) {
+          console.error(refreshError);
+          setCompletionChecklistModalState({
+            ...modalStateSnapshot,
+            errorMessage:
+              refreshError instanceof Error
+                ? refreshError.message
+                : "检查单已过期，且刷新失败。请关闭后重试。",
+            isSubmitting: false,
+          });
+        }
+        return;
+      }
+
+      console.error(completionError);
+      const fallbackErrorMessage =
+        modalStateSnapshot.mode === "manual_complete"
+          ? "人工完成失败，请刷新后重试。"
+          : "Failed to complete requirement.";
+      setCompletionChecklistModalState((previousModalState) =>
+        previousModalState === null
+          ? previousModalState
+          : {
+              ...previousModalState,
+              errorMessage:
+                completionError instanceof Error
+                  ? completionError.message
+                  : fallbackErrorMessage,
+              isSubmitting: false,
+            }
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
   }
 
   async function handleManualCompleteRequirement(taskItem: Task): Promise<void> {
@@ -3654,38 +3819,7 @@ function App() {
       return;
     }
 
-    if (!viewedManualCompletionChecklistTaskIdSet.has(taskItem.id)) {
-      setErrorMessage("请先查看完成检查单，再确认 Complete。");
-      setSuccessMessage(null);
-      return;
-    }
-
-    setActiveMutationName("manual_complete");
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    try {
-      const manuallyCompletedTask = await taskApi.manualComplete(taskItem.id);
-      reconcileLocalTaskSnapshot(manuallyCompletedTask);
-      setSelectedTaskId(manuallyCompletedTask.id);
-      setWorkspaceView("completed");
-      setIsManualCompletionChecklistOpen(false);
-      setSuccessMessage(
-        "已写入人工确认日志，任务已收敛到 Completed 归档。"
-      );
-      // Keep the success path bound to the API response itself; the full
-      // dashboard refresh only backfills logs and global consistency.
-      void loadDashboardData(true);
-    } catch (manualCompletionError) {
-      console.error(manualCompletionError);
-      setErrorMessage(
-        manualCompletionError instanceof Error
-          ? manualCompletionError.message
-          : "人工完成失败，请刷新后重试。"
-      );
-    } finally {
-      setActiveMutationName(null);
-    }
+    await openCompletionChecklist(taskItem, "manual_complete");
   }
 
   async function handleCompleteRequirement(taskItem: Task): Promise<void> {
@@ -3698,44 +3832,13 @@ function App() {
       return;
     }
 
-    setActiveMutationName("complete");
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    try {
-      if (taskItem.worktree_path) {
-        const isManualSelfReviewOverride =
-          taskItem.workflow_stage === WorkflowStage.SELF_REVIEW_IN_PROGRESS &&
-          !hasLatestSelfReviewCyclePassed(devLogsByTaskId[taskItem.id] ?? []);
-        const completionBaseBranchName =
-          taskItem.worktree_base_branch_name || DEFAULT_WORKTREE_BASE_BRANCH_NAME;
-        const completionTask = await taskApi.complete(taskItem.id);
-        reconcileLocalTaskSnapshot(completionTask);
-        setSelectedTaskId(completionTask.id);
-        setSuccessMessage(
-          isManualSelfReviewOverride
-            ? `已记录人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase ${completionBaseBranchName}、必要时自动修复冲突、合并到 ${completionBaseBranchName}，并清理 worktree。`
-            : `Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase ${completionBaseBranchName}, auto-fix conflicts if needed, merge into ${completionBaseBranchName}, and clean up the worktree.`
-        );
-        await loadDashboardData(true);
-        return;
-      }
-
-      const completedTask = await taskApi.updateStatus(
-        taskItem.id,
-        TaskLifecycleStatus.CLOSED
-      );
-      reconcileLocalTaskSnapshot(completedTask);
-      setSelectedTaskId(completedTask.id);
-      setWorkspaceView("completed");
-      setSuccessMessage("Requirement moved to completed.");
-      await loadDashboardData(true);
-    } catch (completionError) {
-      console.error(completionError);
-      setErrorMessage("Failed to complete requirement.");
-    } finally {
-      setActiveMutationName(null);
+    if (!taskItem.worktree_path) {
+      setErrorMessage("Complete 只适用于已有 worktree 的任务。");
+      setSuccessMessage(null);
+      return;
     }
+
+    await openCompletionChecklist(taskItem, "complete");
   }
 
   async function handleDeleteRequirement(taskItem: Task): Promise<void> {
@@ -6052,16 +6155,21 @@ function App() {
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
                       selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED ? (
                         <>
-                          <ActionButton
-                            variant="secondary"
-                            busy={activeMutationName === "accept"}
-                            onClick={() => {
-                              void handleAcceptTask(selectedTask);
-                            }}
-                          >
-                            <CheckCircleIcon className="devflow-icon devflow-icon--small" />
-                            <span>验收通过</span>
-                          </ActionButton>
+                          {canCompleteSelectedTask ? (
+                            <ActionButton
+                              variant="secondary"
+                              busy={
+                                activeMutationName === "complete" ||
+                                activeMutationName === "manual_complete"
+                              }
+                              onClick={() => {
+                                void handleAcceptTask(selectedTask);
+                              }}
+                            >
+                              <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                              <span>验收通过</span>
+                            </ActionButton>
+                          ) : null}
                           <ActionButton
                             variant="outline"
                             busy={activeMutationName === "request_changes"}
@@ -6160,23 +6268,7 @@ function App() {
                             <>
                               <ActionButton
                                 variant="outline"
-                                onClick={() => {
-                                  handleOpenManualCompletionChecklist(selectedTask);
-                                }}
-                              >
-                                <FileTextIcon className="devflow-icon devflow-icon--small" />
-                                <span>
-                                  {hasViewedSelectedTaskManualCompletionChecklist
-                                    ? "重新查看完成检查单"
-                                    : "查看完成检查单"}
-                                </span>
-                              </ActionButton>
-                              <ActionButton
-                                variant="outline"
                                 busy={activeMutationName === "manual_complete"}
-                                disabled={
-                                  !hasViewedSelectedTaskManualCompletionChecklist
-                                }
                                 onClick={() => {
                                   void handleManualCompleteRequirement(selectedTask);
                                 }}
@@ -6320,29 +6412,17 @@ function App() {
                               type="button"
                               className="devflow-branch-health-banner__toggle"
                               onClick={() => {
-                                handleOpenManualCompletionChecklist(selectedTask);
+                                void openCompletionChecklist(
+                                  selectedTask,
+                                  "manual_complete"
+                                );
                               }}
                             >
-                              {isManualCompletionChecklistOpen
-                                ? "已展开"
-                                : "查看检查单"}
+                              打开检查单
                             </button>
                           </div>
-                          {isManualCompletionChecklistOpen ? (
-                            <ol className="devflow-branch-health-banner__checklist-list">
-                              <li>先看 Timeline，确认这条需求的实现与验收记录已经完整。</li>
-                              <li>如有需要，打开项目或 Worktree，再核对最终代码状态。</li>
-                              <li>
-                                确认 `{selectedTaskBranchHealth.expected_branch_name}` 的缺失是人工
-                                merge/清理后的结果，而不是误删。
-                              </li>
-                              <li>确认无误后，再点击“确认 Complete”把任务收敛到归档区。</li>
-                            </ol>
-                          ) : null}
                           <p className="devflow-branch-health-banner__hint">
-                            {hasViewedSelectedTaskManualCompletionChecklist
-                              ? "检查单已查看，可以执行人工完成。"
-                              : "请先点击“查看完成检查单”，再解锁人工完成按钮。"}
+                            打开后需要逐项勾选所有展示项，才能提交人工 Complete。
                           </p>
                         </div>
                       ) : null}
@@ -7208,6 +7288,17 @@ function App() {
         </div>
       </footer>
 
+      {completionChecklistModalState ? (
+        <CompletionChecklistModal
+          modalState={completionChecklistModalState}
+          onToggleItem={handleToggleCompletionChecklistItem}
+          onClose={handleCloseCompletionChecklistModal}
+          onConfirm={() => {
+            void handleSubmitCompletionChecklist();
+          }}
+        />
+      ) : null}
+
       {isDestroyModalOpen && selectedTask ? (
         <DestroyTaskModal
           taskTitle={selectedTask.task_title}
@@ -7833,6 +7924,134 @@ interface DestroyTaskModalProps {
   onConfirm: () => void;
   isSubmitting: boolean;
   minimumReasonLength: number;
+}
+
+interface CompletionChecklistModalProps {
+  modalState: CompletionChecklistModalState;
+  onToggleItem: (itemIdText: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+function CompletionChecklistModal({
+  modalState,
+  onToggleItem,
+  onClose,
+  onConfirm,
+}: CompletionChecklistModalProps) {
+  const allDisplayedItemsChecked = modalState.checklist.items.every(
+    (checklistItem) => modalState.checkedItemIdSet.has(checklistItem.item_id)
+  );
+  const modeLabel =
+    modalState.mode === "manual_complete" ? "Manual Complete" : "Complete";
+  const checkedItemCount = modalState.checklist.items.filter((checklistItem) =>
+    modalState.checkedItemIdSet.has(checklistItem.item_id)
+  ).length;
+
+  return (
+    <div
+      className="devflow-prd-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${modalState.task.task_title} completion checklist dialog`}
+      onClick={onClose}
+    >
+      <div
+        className="devflow-completion-modal"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+        }}
+      >
+        <div className="devflow-destroy-modal__header">
+          <div className="devflow-destroy-modal__copy">
+            <span className="devflow-destroy-modal__eyebrow">{modeLabel}</span>
+            <h4 className="devflow-destroy-modal__title">
+              {modalState.task.task_title}
+            </h4>
+            <p className="devflow-destroy-modal__hint">
+              需要确认全部展示项后，才能提交完成动作。
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="devflow-prd-modal__close"
+            onClick={onClose}
+            disabled={modalState.isSubmitting}
+          >
+            <XIcon className="devflow-icon devflow-icon--small" />
+            <span>关闭</span>
+          </button>
+        </div>
+
+        <div className="devflow-completion-modal__body">
+          <div className="devflow-completion-modal__summary">
+            <span>{checkedItemCount}/{modalState.checklist.items.length}</span>
+            <span>{modalState.checklist.items.length} items max</span>
+          </div>
+
+          <div className="devflow-completion-modal__list">
+            {modalState.checklist.items.map((checklistItem) => (
+              <label
+                className="devflow-completion-modal__item"
+                key={checklistItem.item_id}
+              >
+                <input
+                  type="checkbox"
+                  checked={modalState.checkedItemIdSet.has(checklistItem.item_id)}
+                  disabled={modalState.isSubmitting}
+                  onChange={(changeEvent: ChangeEvent<HTMLInputElement>) => {
+                    changeEvent.stopPropagation();
+                    onToggleItem(checklistItem.item_id);
+                  }}
+                />
+                <span className="devflow-completion-modal__item-copy">
+                  <span className="devflow-completion-modal__item-group">
+                    {checklistItem.group}
+                  </span>
+                  <span className="devflow-completion-modal__item-label">
+                    {checklistItem.label}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {modalState.errorMessage ? (
+            <div
+              className="devflow-inline-message devflow-inline-message--error"
+              role="alert"
+              aria-live="polite"
+            >
+              <RobotIcon className="devflow-icon devflow-icon--tiny" />
+              <span>{modalState.errorMessage}</span>
+            </div>
+          ) : null}
+
+          <div className="devflow-destroy-modal__actions">
+            <ActionButton
+              variant="ghost"
+              onClick={onClose}
+              disabled={modalState.isSubmitting}
+            >
+              Cancel
+            </ActionButton>
+            <ActionButton
+              variant="primary"
+              busy={modalState.isSubmitting}
+              disabled={!allDisplayedItemsChecked}
+              onClick={onConfirm}
+              className="devflow-destroy-modal__confirm"
+            >
+              {modalState.mode === "manual_complete"
+                ? "Confirm Complete"
+                : "Complete"}
+            </ActionButton>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DestroyTaskModal({

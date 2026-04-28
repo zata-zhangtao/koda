@@ -292,9 +292,50 @@
       }
 
       .checklist {
+        display: grid;
+        gap: 10px;
         margin: 0;
-        padding-left: 18px;
-        line-height: 1.68;
+        line-height: 1.6;
+      }
+
+      .checklist-item {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .checklist-item input {
+        width: 18px;
+        height: 18px;
+        margin: 1px 0 0;
+        accent-color: var(--ok);
+      }
+
+      .checklist-item__group {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .checklist-payload {
+        margin: 12px 0 0;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(32, 25, 18, 0.05);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
 
       .state-strip,
@@ -429,7 +470,7 @@
         <aside class="summary-card">
           <strong>阅读重点</strong>
           <ul>
-            <li>先点击“查看完成检查单”，再点击“确认 Complete”。</li>
+            <li>先加载后端 canonical checklist，并逐项勾选全部展示项。</li>
             <li>在“当前问题态”里，后端已成功收口，但按钮仍被 dashboard 刷新卡住。</li>
             <li>在“目标修复态”里，按钮忙碌态会在 API 成功后立即释放，页面同步切到 Completed。</li>
           </ul>
@@ -469,7 +510,7 @@
           </div>
 
           <div class="detail-actions">
-            <button id="checklistButton" class="button-outline" type="button">查看完成检查单</button>
+            <button id="checklistButton" class="button-outline" type="button">加载完成检查单</button>
             <button id="confirmButton" class="button-warning" type="button">确认 Complete</button>
             <button id="resetButton" class="button-primary" type="button">重置</button>
           </div>
@@ -480,11 +521,8 @@
               后端已为这个任务开放 `manual-complete` 路径。这里的关键缺陷不是业务校验，
               而是提交成功后前端如何及时消化返回结果。
             </p>
-            <ol id="checklist" class="checklist" hidden>
-              <li>先确认 Timeline 里已经有实现与验收记录。</li>
-              <li>必要时打开项目目录或 Worktree 核对最终代码。</li>
-              <li>确认分支缺失是人工 merge / cleanup 的结果，而不是误删。</li>
-            </ol>
+            <div id="checklist" class="checklist" hidden></div>
+            <pre id="checklistPayload" class="checklist-payload" hidden></pre>
           </section>
 
           <section class="state-strip">
@@ -512,12 +550,12 @@
             <span id="traceBadge" class="badge badge--danger">等待触发</span>
           </div>
           <p id="traceCopy" class="status-copy">
-            先点击“查看完成检查单”，再执行“确认 Complete”。
+            先加载 canonical checklist，逐项勾选后再执行“确认 Complete”。
           </p>
           <ul id="traceList" class="trace-list">
             <li class="trace">
               <strong>1. Checklist Gate</strong><br />
-              <small>检查单尚未查看，按钮逻辑应先做前端拦截。</small>
+              <small>检查单尚未加载，按钮逻辑应先做前端拦截。</small>
             </li>
           </ul>
           <div class="control-row">
@@ -560,21 +598,84 @@
       const traceListElement = document.getElementById("traceList");
       const bannerTitleElement = document.getElementById("bannerTitle");
       const bannerCopyElement = document.getElementById("bannerCopy");
+      const checklistPayloadElement = document.getElementById("checklistPayload");
 
       let runningTimerId = null;
       let prototypeState = null;
+      const canonicalManualChecklist = {
+        mode: "manual_complete",
+        checklist_signature: "sha256:manual-complete-refresh-demo-signature",
+        items: [
+          {
+            item_id: "system-manual-timeline-reviewed",
+            group: "Completion Safety",
+            label: "Review latest Timeline and result evidence before manual completion.",
+          },
+          {
+            item_id: "system-manual-missing-branch-intentional",
+            group: "Completion Safety",
+            label: "Confirm the missing task branch is intentional after manual merge or cleanup.",
+          },
+          {
+            item_id: "system-manual-archive-understood",
+            group: "Completion Safety",
+            label: "Understand this will close the task into the completed archive without rerunning Git finalization.",
+          },
+        ],
+      };
 
       function getInitialState(mode = "buggy") {
         return {
           mode,
-          checklistOpened: false,
+          checklistLoaded: false,
+          checkedItemIds: [],
           busy: false,
           stage: "branch_missing",
           refreshState: "idle",
           workspace: "active",
           traceMode: "waiting",
-          traceMessage: "先点击“查看完成检查单”，再执行“确认 Complete”。",
+          traceMessage: "先加载 canonical checklist，逐项勾选后再执行“确认 Complete”。",
         };
+      }
+
+      function isChecklistFullyConfirmed() {
+        return (
+          prototypeState.checklistLoaded &&
+          canonicalManualChecklist.items.every((checklistItem) =>
+            prototypeState.checkedItemIds.includes(checklistItem.item_id)
+          )
+        );
+      }
+
+      function renderChecklist() {
+        checklistElement.innerHTML = canonicalManualChecklist.items
+          .map(
+            (checklistItem) => `
+              <label class="checklist-item">
+                <input
+                  type="checkbox"
+                  data-item-id="${checklistItem.item_id}"
+                  ${prototypeState.checkedItemIds.includes(checklistItem.item_id) ? "checked" : ""}
+                  ${prototypeState.busy || prototypeState.stage === "done" ? "disabled" : ""}
+                />
+                <span>
+                  <span class="checklist-item__group">${checklistItem.group}</span>
+                  ${checklistItem.label}
+                </span>
+              </label>
+            `
+          )
+          .join("");
+
+        checklistPayloadElement.textContent = JSON.stringify(
+          {
+            checklist_mode: canonicalManualChecklist.mode,
+            checklist_signature: canonicalManualChecklist.checklist_signature,
+            confirmed_checklist_item_ids: prototypeState.checkedItemIds,
+          },
+          null,
+          2
+        );
       }
 
       function clearTimer() {
@@ -586,27 +687,42 @@
 
       function renderTrace() {
         const traceList = [];
+        const checkedCount = prototypeState.checkedItemIds.length;
+        const totalCount = canonicalManualChecklist.items.length;
         traceList.push(`
           <li class="trace">
             <strong>1. Checklist Gate</strong><br />
-            <small>${prototypeState.checklistOpened ? "检查单已查看，可以发送 API 请求。" : "检查单尚未查看，按钮逻辑应先做前端拦截。"}</small>
+            <small>${
+              prototypeState.checklistLoaded
+                ? `后端 canonical checklist 已加载，已勾选 ${checkedCount}/${totalCount} 项。`
+                : "检查单尚未加载，按钮逻辑应先做前端拦截。"
+            }</small>
           </li>
         `);
+
+        if (prototypeState.checklistLoaded) {
+          traceList.push(`
+            <li class="trace ${isChecklistFullyConfirmed() ? "trace--success" : "trace--pending"}">
+              <strong>2. Confirmation Payload</strong><br />
+              <small>${isChecklistFullyConfirmed() ? "将提交 checklist_signature 与全部 confirmed_checklist_item_ids。" : "未全选时不能提交 /manual-complete。"}</small>
+            </li>
+          `);
+        }
 
         if (prototypeState.busy) {
           traceList.push(`
             <li class="trace trace--pending">
-              <strong>2. POST /api/tasks/:id/manual-complete</strong><br />
-              <small>请求已发出，前端正在等待结果。</small>
+              <strong>3. POST /api/tasks/:id/manual-complete</strong><br />
+              <small>请求已携带 checklist confirmation，前端正在等待结果。</small>
             </li>
-          `);
+        `);
         }
 
         if (prototypeState.traceMode === "buggy_stalled") {
           traceList.push(`
             <li class="trace trace--success">
               <strong>3. Backend</strong><br />
-              <small>后端已经返回 200，并把任务收敛到 done / CLOSED。</small>
+              <small>后端已校验 checklist confirmation，返回 200，并把任务收敛到 done / CLOSED。</small>
             </li>
           `);
           traceList.push(`
@@ -621,7 +737,7 @@
           traceList.push(`
             <li class="trace trace--success">
               <strong>3. Backend</strong><br />
-              <small>后端返回 200，并附带最新 Task 快照。</small>
+              <small>后端已校验 checklist confirmation，返回 200，并附带最新 Task 快照。</small>
             </li>
           `);
           traceList.push(`
@@ -648,9 +764,15 @@
         modeBuggyButton.classList.toggle("is-active", prototypeState.mode === "buggy");
         modeFixedButton.classList.toggle("is-active", prototypeState.mode === "fixed");
 
-        checklistElement.hidden = !prototypeState.checklistOpened;
-        confirmButton.disabled = !prototypeState.checklistOpened || prototypeState.busy;
-        checklistButton.disabled = prototypeState.busy;
+        checklistElement.hidden = !prototypeState.checklistLoaded;
+        checklistPayloadElement.hidden = !prototypeState.checklistLoaded;
+        renderChecklist();
+
+        confirmButton.disabled =
+          !isChecklistFullyConfirmed() ||
+          prototypeState.busy ||
+          prototypeState.stage === "done";
+        checklistButton.disabled = prototypeState.busy || prototypeState.stage === "done";
 
         if (prototypeState.busy) {
           confirmButton.innerHTML = '<span class="spinner" aria-hidden="true"></span> 提交中';
@@ -721,7 +843,7 @@
           : "检测到任务分支缺失，等待人工确认";
         bannerCopyElement.textContent = isCompleted
           ? "前端已基于 `manual-complete` 返回的 Task 快照完成本地收口；后续 dashboard 刷新只负责补齐全局一致性。"
-          : "后端已为这个任务开放 `manual-complete` 路径。这里的关键缺陷不是业务校验，而是提交成功后前端如何及时消化返回结果。";
+          : "后端已为这个任务开放 `manual-complete` 路径，但仍会要求 checklist_signature 与全部 confirmed_checklist_item_ids。这里的关键缺陷不是业务校验，而是提交成功后前端如何及时消化返回结果。";
 
         renderTrace();
       }
@@ -733,13 +855,13 @@
       }
 
       function openChecklist() {
-        prototypeState.checklistOpened = true;
-        prototypeState.traceMessage = "检查单已查看，现在可以发送 manual-complete 请求。";
+        prototypeState.checklistLoaded = true;
+        prototypeState.traceMessage = "canonical checklist 已加载；全项勾选后才可以发送 manual-complete 请求。";
         render();
       }
 
       function confirmComplete() {
-        if (!prototypeState.checklistOpened || prototypeState.busy) {
+        if (!isChecklistFullyConfirmed() || prototypeState.busy) {
           return;
         }
 
@@ -785,6 +907,20 @@
       modeBuggyButton.addEventListener("click", () => setMode("buggy"));
       modeFixedButton.addEventListener("click", () => setMode("fixed"));
       checklistButton.addEventListener("click", openChecklist);
+      checklistElement.addEventListener("change", (event) => {
+        const checkboxElement = event.target;
+        if (!(checkboxElement instanceof HTMLInputElement)) {
+          return;
+        }
+        const itemId = checkboxElement.dataset.itemId;
+        if (!itemId) {
+          return;
+        }
+        prototypeState.checkedItemIds = checkboxElement.checked
+          ? [...new Set([...prototypeState.checkedItemIds, itemId])]
+          : prototypeState.checkedItemIds.filter((checkedItemId) => checkedItemId !== itemId);
+        render();
+      });
       confirmButton.addEventListener("click", confirmComplete);
       resetButton.addEventListener("click", () => setMode(prototypeState.mode));
       finishRefreshButton.addEventListener("click", finishRefresh);

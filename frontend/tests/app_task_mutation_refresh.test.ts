@@ -19,6 +19,7 @@ type TaskSnapshot = {
   last_ai_activity_at: string | null;
   stage_updated_at: string;
   worktree_path: string | null;
+  worktree_base_branch_name: string;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
   business_sync_original_workflow_stage: string | null;
@@ -31,13 +32,20 @@ type TaskSnapshot = {
   closed_at: string | null;
   log_count: number;
   is_codex_task_running: boolean;
-  branch_health: null;
+  branch_health: {
+    expected_branch_name: string;
+    branch_exists: boolean | null;
+    worktree_exists: boolean;
+    manual_completion_candidate: boolean;
+    status_message: string | null;
+  } | null;
 };
 
 type FetchCall = {
   method: string;
   pathname: string;
   search: string;
+  bodyText: string | null;
 };
 
 type FetchHarness = {
@@ -45,6 +53,11 @@ type FetchHarness = {
   readonly stalledDashboardRefreshCount: number;
   fetch: typeof fetch;
 };
+
+type FetchResponseOverride = (
+  fetchCall: FetchCall,
+  requestUrl: URL
+) => Response | Promise<Response>;
 
 const TEST_TIMESTAMP_TEXT = "2026-04-24T17:54:00+08:00";
 const RUN_ACCOUNT_ID_TEXT = "run-account-1";
@@ -63,6 +76,7 @@ function buildTaskSnapshot(
     last_ai_activity_at: null,
     stage_updated_at: TEST_TIMESTAMP_TEXT,
     worktree_path: `/tmp/${taskIdText}`,
+    worktree_base_branch_name: "main",
     requirement_brief: `Requirement brief for ${taskIdText}`,
     auto_confirm_prd_and_execute: false,
     business_sync_original_workflow_stage: null,
@@ -117,7 +131,8 @@ function buildDevLogResponse(taskSnapshot: TaskSnapshot): Record<string, unknown
 
 function createFetchHarness(
   initialTaskList: TaskSnapshot[],
-  mutationResponseByRequestKey: Record<string, TaskSnapshot>
+  mutationResponseByRequestKey: Record<string, TaskSnapshot>,
+  responseOverrideByRequestKey: Record<string, FetchResponseOverride> = {}
 ): FetchHarness {
   let currentTaskList = initialTaskList;
   let taskListFetchCount = 0;
@@ -140,7 +155,9 @@ function createFetchHarness(
         method: requestMethod,
         pathname: requestUrl.pathname,
         search: requestUrl.search,
+        bodyText: typeof init?.body === "string" ? init.body : null,
       });
+      const fetchCall = observedCallList[observedCallList.length - 1];
 
       if (requestMethod === "GET" && requestUrl.pathname === "/api/app-config") {
         return buildJsonResponse({
@@ -213,6 +230,37 @@ function createFetchHarness(
         return buildJsonResponse({ content: null, path: null });
       }
 
+      if (
+        requestMethod === "GET" &&
+        requestUrl.pathname.endsWith("/completion-checklist")
+      ) {
+        const requestedModeText =
+          requestUrl.searchParams.get("mode") ?? "complete";
+        return buildJsonResponse({
+          task_id: requestUrl.pathname.split("/")[3],
+          mode: requestedModeText,
+          checklist_signature: `sha256:${requestedModeText}-signature`,
+          items: [
+            {
+              item_id: `${requestedModeText}-timeline-reviewed`,
+              label: "Review latest Timeline and result evidence.",
+              group: "Completion Safety",
+              required: true,
+              source: "system_safety",
+              covered_source_item_count: null,
+            },
+            {
+              item_id: `${requestedModeText}-worktree-ready`,
+              label: "Confirm worktree/code state is ready.",
+              group: "Completion Safety",
+              required: true,
+              source: "system_safety",
+              covered_source_item_count: null,
+            },
+          ],
+        });
+      }
+
       if (requestMethod === "DELETE" && requestUrl.pathname.startsWith("/api/tasks/")) {
         hasObservedMutation = true;
         const removedTaskIdText = requestUrl.pathname.split("/")[3];
@@ -220,6 +268,11 @@ function createFetchHarness(
           (taskSnapshot) => taskSnapshot.id !== removedTaskIdText
         );
         return new Response(null, { status: 204 });
+      }
+
+      const responseOverride = responseOverrideByRequestKey[requestKey];
+      if (responseOverride) {
+        return responseOverride(fetchCall, requestUrl);
       }
 
       const mutationResponse = mutationResponseByRequestKey[requestKey];
@@ -304,11 +357,51 @@ function findButtonByText(
   documentRoot: Document,
   buttonText: string
 ): HTMLButtonElement {
-  const matchingButton = Array.from(documentRoot.querySelectorAll("button")).find(
-    (buttonElement) => buttonElement.textContent?.trim() === buttonText
-  );
+  const matchingButton = getButtonByText(documentRoot, buttonText);
   assert.ok(matchingButton, `Expected button with text "${buttonText}" to exist.`);
   return matchingButton;
+}
+
+function getButtonByText(
+  documentRoot: Document,
+  buttonText: string
+): HTMLButtonElement | null {
+  return (
+    Array.from(documentRoot.querySelectorAll("button")).find(
+      (buttonElement) => buttonElement.textContent?.trim() === buttonText
+    ) ?? null
+  );
+}
+
+function findDialogButtonByText(
+  documentRoot: Document,
+  buttonText: string
+): HTMLButtonElement {
+  const dialogElement = documentRoot.querySelector("[role='dialog']");
+  assert.ok(dialogElement, "Expected dialog to exist.");
+  const matchingButton = Array.from(dialogElement.querySelectorAll("button")).find(
+    (buttonElement) => buttonElement.textContent?.trim() === buttonText
+  );
+  assert.ok(
+    matchingButton,
+    `Expected dialog button with text "${buttonText}" to exist.`
+  );
+  return matchingButton;
+}
+
+function getDialogButtonByText(
+  documentRoot: Document,
+  buttonText: string
+): HTMLButtonElement | null {
+  const dialogElement = documentRoot.querySelector("[role='dialog']");
+  if (!dialogElement) {
+    return null;
+  }
+  return (
+    Array.from(dialogElement.querySelectorAll("button")).find(
+      (buttonElement) => buttonElement.textContent?.trim() === buttonText
+    ) ?? null
+  );
 }
 
 async function clickButton(
@@ -324,6 +417,26 @@ async function clickButton(
     );
     await flushMicrotasks();
   });
+}
+
+async function checkAllCheckboxes(jsdomWindow: Window): Promise<void> {
+  const checkboxElementList = Array.from(
+    jsdomWindow.document.querySelectorAll<HTMLInputElement>(
+      "input[type='checkbox']"
+    )
+  );
+  assert.ok(checkboxElementList.length > 0, "Expected checklist checkboxes.");
+  for (const checkboxElement of checkboxElementList) {
+    await act(async () => {
+      checkboxElement.dispatchEvent(
+        new jsdomWindow.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      await flushMicrotasks();
+    });
+  }
 }
 
 async function updateTextareaValue(
@@ -375,7 +488,8 @@ async function compileAppBundle(): Promise<string> {
 async function renderDashboardScenario(
   AppComponent: React.ComponentType,
   initialTaskList: TaskSnapshot[],
-  mutationResponseByRequestKey: Record<string, TaskSnapshot>
+  mutationResponseByRequestKey: Record<string, TaskSnapshot>,
+  responseOverrideByRequestKey: Record<string, FetchResponseOverride> = {}
 ): Promise<{
   containerElement: HTMLElement;
   fetchHarness: FetchHarness;
@@ -393,7 +507,8 @@ async function renderDashboardScenario(
 
   const fetchHarness = createFetchHarness(
     initialTaskList,
-    mutationResponseByRequestKey
+    mutationResponseByRequestKey,
+    responseOverrideByRequestKey
   );
   setGlobalProperty("fetch", fetchHarness.fetch);
 
@@ -450,10 +565,304 @@ try {
     findButtonByText(completeScenario.jsdomWindow.document, "Complete")
   );
   await waitForAssertion(() => {
+    assert.match(
+      completeScenario.containerElement.textContent ?? "",
+      /Review latest Timeline/
+    );
+    assert.equal(
+      completeScenario.fetchHarness.observedCallList.some(
+        (fetchCall) =>
+          fetchCall.method === "POST" &&
+          fetchCall.pathname === "/api/tasks/task-complete/complete"
+      ),
+      false
+    );
+    assert.equal(
+      getDialogButtonByText(completeScenario.jsdomWindow.document, "Complete")
+        ?.disabled,
+      true
+    );
+  }, "complete checklist opens before mutation");
+  await checkAllCheckboxes(completeScenario.jsdomWindow);
+  await clickButton(
+    completeScenario.jsdomWindow,
+    findDialogButtonByText(completeScenario.jsdomWindow.document, "Complete")
+  );
+  await waitForAssertion(() => {
     assert.match(completeScenario.containerElement.textContent ?? "", /PR Prep/);
     assert.equal(completeScenario.fetchHarness.stalledDashboardRefreshCount, 1);
+    const completionFetchCall = completeScenario.fetchHarness.observedCallList.find(
+      (fetchCall) =>
+        fetchCall.method === "POST" &&
+        fetchCall.pathname === "/api/tasks/task-complete/complete"
+    );
+    assert.ok(completionFetchCall);
+    assert.deepEqual(JSON.parse(completionFetchCall.bodyText ?? "{}"), {
+      checklist_mode: "complete",
+      checklist_signature: "sha256:complete-signature",
+      confirmed_checklist_item_ids: [
+        "complete-timeline-reviewed",
+        "complete-worktree-ready",
+      ],
+    });
   }, "complete handler local refresh");
   await cleanupDashboardScenario(completeScenario.root);
+
+  const initialAcceptanceTask = buildTaskSnapshot("task-accept", {
+    task_title: "Acceptance checklist task",
+    workflow_stage: "acceptance_in_progress",
+    worktree_path: "/tmp/task-accept",
+  });
+  const acceptedCompletionTaskSnapshot = {
+    ...initialAcceptanceTask,
+    workflow_stage: "pr_preparing",
+    is_codex_task_running: true,
+    stage_updated_at: "2026-04-24T17:55:00+08:00",
+  };
+  const acceptanceScenario = await renderDashboardScenario(
+    App,
+    [initialAcceptanceTask],
+    {
+      "POST /api/tasks/task-accept/complete": acceptedCompletionTaskSnapshot,
+    }
+  );
+  await clickButton(
+    acceptanceScenario.jsdomWindow,
+    findButtonByText(acceptanceScenario.jsdomWindow.document, "验收通过")
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      acceptanceScenario.containerElement.textContent ?? "",
+      /Review latest Timeline/
+    );
+    assert.equal(
+      acceptanceScenario.fetchHarness.observedCallList.some(
+        (fetchCall) =>
+          fetchCall.method === "PUT" &&
+          fetchCall.pathname === "/api/tasks/task-accept/stage"
+      ),
+      false
+    );
+    assert.equal(
+      getDialogButtonByText(acceptanceScenario.jsdomWindow.document, "Complete")
+        ?.disabled,
+      true
+    );
+  }, "acceptance checklist opens before mutation");
+  await checkAllCheckboxes(acceptanceScenario.jsdomWindow);
+  await clickButton(
+    acceptanceScenario.jsdomWindow,
+    findDialogButtonByText(acceptanceScenario.jsdomWindow.document, "Complete")
+  );
+  await waitForAssertion(() => {
+    assert.match(acceptanceScenario.containerElement.textContent ?? "", /PR Prep/);
+    const acceptanceCompletionFetchCall =
+      acceptanceScenario.fetchHarness.observedCallList.find(
+        (fetchCall) =>
+          fetchCall.method === "POST" &&
+          fetchCall.pathname === "/api/tasks/task-accept/complete"
+      );
+    assert.ok(acceptanceCompletionFetchCall);
+    assert.deepEqual(
+      JSON.parse(acceptanceCompletionFetchCall.bodyText ?? "{}"),
+      {
+        checklist_mode: "complete",
+        checklist_signature: "sha256:complete-signature",
+        confirmed_checklist_item_ids: [
+          "complete-timeline-reviewed",
+          "complete-worktree-ready",
+        ],
+      }
+    );
+  }, "acceptance checklist payload");
+  await cleanupDashboardScenario(acceptanceScenario.root);
+
+  const noWorktreeAcceptanceTask = buildTaskSnapshot(
+    "task-accept-no-worktree",
+    {
+      task_title: "No worktree acceptance task",
+      workflow_stage: "acceptance_in_progress",
+      worktree_path: null,
+    }
+  );
+  const noWorktreeAcceptanceScenario = await renderDashboardScenario(
+    App,
+    [noWorktreeAcceptanceTask],
+    {}
+  );
+  await waitForAssertion(() => {
+    assert.equal(
+      getButtonByText(
+        noWorktreeAcceptanceScenario.jsdomWindow.document,
+        "验收通过"
+      ),
+      null
+    );
+    assert.equal(
+      getButtonByText(
+        noWorktreeAcceptanceScenario.jsdomWindow.document,
+        "Complete"
+      ),
+      null
+    );
+    assert.ok(
+      getButtonByText(
+        noWorktreeAcceptanceScenario.jsdomWindow.document,
+        "请求修改"
+      )
+    );
+    assert.equal(
+      noWorktreeAcceptanceScenario.fetchHarness.observedCallList.some(
+        (fetchCall) => fetchCall.pathname.endsWith("/completion-checklist")
+      ),
+      false
+    );
+  }, "no-worktree acceptance hides completion actions");
+  await cleanupDashboardScenario(noWorktreeAcceptanceScenario.root);
+
+  const initialStaleChecklistTask = buildTaskSnapshot("task-stale-checklist", {
+    task_title: "Stale checklist refresh task",
+    workflow_stage: "test_in_progress",
+    worktree_path: "/tmp/task-stale-checklist",
+  });
+  const staleChecklistScenario = await renderDashboardScenario(
+    App,
+    [initialStaleChecklistTask],
+    {},
+    {
+      "POST /api/tasks/task-stale-checklist/complete": () =>
+        buildJsonResponse(
+          {
+            detail: {
+              message:
+                "Completion checklist is stale. Refresh the checklist and confirm it again.",
+              refresh_required: true,
+            },
+          },
+          409
+        ),
+    }
+  );
+  await clickButton(
+    staleChecklistScenario.jsdomWindow,
+    findButtonByText(staleChecklistScenario.jsdomWindow.document, "Complete")
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      staleChecklistScenario.containerElement.textContent ?? "",
+      /Review latest Timeline/
+    );
+  }, "stale checklist initial modal");
+  await checkAllCheckboxes(staleChecklistScenario.jsdomWindow);
+  await clickButton(
+    staleChecklistScenario.jsdomWindow,
+    findDialogButtonByText(
+      staleChecklistScenario.jsdomWindow.document,
+      "Complete"
+    )
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      staleChecklistScenario.containerElement.textContent ?? "",
+      /检查单已更新/
+    );
+    assert.equal(
+      getDialogButtonByText(
+        staleChecklistScenario.jsdomWindow.document,
+        "Complete"
+      )?.disabled,
+      true
+    );
+    assert.equal(
+      staleChecklistScenario.fetchHarness.observedCallList.filter(
+        (fetchCall) =>
+          fetchCall.method === "GET" &&
+          fetchCall.pathname ===
+            "/api/tasks/task-stale-checklist/completion-checklist"
+      ).length,
+      2
+    );
+    assert.equal(
+      staleChecklistScenario.fetchHarness.observedCallList.filter(
+        (fetchCall) =>
+          fetchCall.method === "POST" &&
+          fetchCall.pathname === "/api/tasks/task-stale-checklist/complete"
+      ).length,
+      1
+    );
+  }, "stale checklist refreshes modal");
+  await cleanupDashboardScenario(staleChecklistScenario.root);
+
+  const initialManualCompleteTask = buildTaskSnapshot("task-manual-complete", {
+    task_title: "Manual Complete refresh task",
+    workflow_stage: "implementation_in_progress",
+    worktree_path: "/tmp/task-manual-complete",
+    branch_health: {
+      expected_branch_name: "task/manual-complete",
+      branch_exists: false,
+      worktree_exists: false,
+      manual_completion_candidate: true,
+      status_message: "Branch missing.",
+    },
+  });
+  const manuallyCompletedTaskSnapshot = {
+    ...initialManualCompleteTask,
+    workflow_stage: "done",
+    lifecycle_status: "CLOSED",
+    closed_at: "2026-04-24T17:55:00+08:00",
+  };
+  const manualCompleteScenario = await renderDashboardScenario(
+    App,
+    [initialManualCompleteTask],
+    {
+      "POST /api/tasks/task-manual-complete/manual-complete":
+        manuallyCompletedTaskSnapshot,
+    }
+  );
+  await clickButton(
+    manualCompleteScenario.jsdomWindow,
+    findButtonByText(manualCompleteScenario.jsdomWindow.document, "确认 Complete")
+  );
+  await waitForAssertion(() => {
+    assert.equal(
+      getDialogButtonByText(
+        manualCompleteScenario.jsdomWindow.document,
+        "Confirm Complete"
+      )?.disabled,
+      true
+    );
+  }, "manual complete checklist submit disabled");
+  await checkAllCheckboxes(manualCompleteScenario.jsdomWindow);
+  await clickButton(
+    manualCompleteScenario.jsdomWindow,
+    findDialogButtonByText(
+      manualCompleteScenario.jsdomWindow.document,
+      "Confirm Complete"
+    )
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      manualCompleteScenario.containerElement.textContent ?? "",
+      /Completed/
+    );
+    const manualCompletionFetchCall =
+      manualCompleteScenario.fetchHarness.observedCallList.find(
+        (fetchCall) =>
+          fetchCall.method === "POST" &&
+          fetchCall.pathname ===
+            "/api/tasks/task-manual-complete/manual-complete"
+      );
+    assert.ok(manualCompletionFetchCall);
+    assert.deepEqual(JSON.parse(manualCompletionFetchCall.bodyText ?? "{}"), {
+      checklist_mode: "manual_complete",
+      checklist_signature: "sha256:manual_complete-signature",
+      confirmed_checklist_item_ids: [
+        "manual_complete-timeline-reviewed",
+        "manual_complete-worktree-ready",
+      ],
+    });
+  }, "manual complete checklist payload");
+  await cleanupDashboardScenario(manualCompleteScenario.root);
 
   const initialRequestChangesTask = buildTaskSnapshot("task-request-changes", {
     task_title: "Request changes refresh task",

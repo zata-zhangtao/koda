@@ -110,13 +110,13 @@ backend/dsl/<domain>/
 10. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
 11. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
 12. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
-13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`
+13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`；普通 `Complete` 只对已有 `worktree_path` 的任务展示，点击后会先拉取最多 5 项的 canonical completion checklist，用户逐项勾选全部展示项后才会提交 `/complete`
 14. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
 15. 若任务仍停留在 `prd_generating` / `implementation_in_progress` / `self_review_in_progress` / `test_in_progress` / `pr_preparing`，但实时 runner 标记已经丢失，详情页会额外暴露 `Force Interrupt`；后端会清理运行态、回退到 `changes_requested`，并写入一条“人工强制接管”的 `DevLog` 审计日志
-16. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，人工也可以直接点击 `Complete`；后端会先写入一条 `DevLog` 记录人工接管
+16. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，人工也可以点击 `Complete`；该动作同样必须先完成 checklist 确认，后端随后写入 checklist confirmation 与人工接管 `DevLog`
 17. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
-18. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户先查看完成检查单，再允许点击人工确认完成
-19. 用户点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端写入一条“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
+18. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户打开 `mode=manual_complete` 的同一类 canonical checklist
+19. 用户勾选所有展示项并点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端验证 checklist 签名与全部 item id，写入 checklist confirmation 与“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
 20. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
 21. `pr_preparing` 会先执行 `git add .`；如果 staging 后没有变更，Koda 会把它视为“用户已经提交过”，跳过 `git commit` 并继续 rebase/merge；如果 staging 后仍有变更，则先由当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message，再执行 `git commit`
 22. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
@@ -163,6 +163,7 @@ backend/dsl/<domain>/
 - 当前任务日志轮询是否拿到了正确的 `created_after` 时间戳
 - API 是否同时返回了预期的 `workflow_stage` 与 `is_codex_task_running`
 - 普通 `Complete` 成功后，前端是否已经把 `/complete` 返回的 `pr_preparing` 任务快照写回本地任务列表；即使运行标记短暂丢失，open 的 `pr_preparing` 仍应继续 dashboard 轮询，直到拉到 `done / CLOSED`
+- `PUT /api/tasks/{task_id}/status` 不再允许直接提交 `lifecycle_status=CLOSED`，`PUT /api/tasks/{task_id}/stage` 也不再允许直接提交 `workflow_stage=done`；完成必须走 `/complete` 或 `/manual-complete`，并携带后端生成的 checklist confirmation payload
 - `destroy`、`restore`、`updateStatus`、`updateStage`、`execute`、`cancel`、`forceInterrupt` 等任务突变接口是否把返回的 `TaskResponse` 立即写回本地任务列表；硬删除未启动草稿因为返回 204，需要前端先本地移除该任务
 - `DevLog` 是否真正写入了当前任务
 
@@ -173,6 +174,7 @@ backend/dsl/<domain>/
 - 把 `workflow_stage` 视为业务阶段事实来源，但不要再把它等同为“后台自动化仍在运行”
 - 后端和前端要同时更新 `WorkflowStage` 相关逻辑
 - 若前端需要判断是否显示轮询 banner、取消按钮或 `Complete`，优先使用 `TaskResponse.is_codex_task_running`；dashboard 任务列表轮询有一个明确例外：open 的 `pr_preparing` 会继续刷新，以便 Git 收尾完成后自动切到 `done / CLOSED`
+- 若前端需要实现完成动作，必须先调用 `/completion-checklist` 获取 canonical item 和 signature，只渲染后端返回项并回传全部已勾选 item id；不要在前端自行解析 PRD acceptance checklist
 - 会改变任务列表归属的前端动作（例如 Destroy、Delete、Abandon、Restore、Request Changes、Accept、Complete）必须先消费突变接口返回的任务快照或本地移除 hard-delete 项，再把全量 dashboard refresh 当作后台一致性补偿
 - 若前端需要处理“分支已被人工 merge/删除”的异常收口，优先使用 `TaskResponse.branch_health` / `TaskCardMetadata.branch_health`，不要再把 worktree 是否存在当成唯一依据
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位

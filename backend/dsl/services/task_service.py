@@ -402,6 +402,7 @@ class TaskService:
             not in {
                 TaskLifecycleStatus.CLOSED,
                 TaskLifecycleStatus.DELETED,
+                TaskLifecycleStatus.ABANDONED,
             }
             and branch_exists_bool is False
         )
@@ -459,6 +460,7 @@ class TaskService:
         if task_obj.lifecycle_status in {
             TaskLifecycleStatus.CLOSED,
             TaskLifecycleStatus.DELETED,
+            TaskLifecycleStatus.ABANDONED,
         }:
             raise ValueError(
                 f"Task {task_obj.id[:8]}... cannot manual-complete from lifecycle "
@@ -699,11 +701,18 @@ class TaskService:
             Task | None: 更新后的任务对象或 None
 
         Raises:
-            ValueError: 当 started task 试图通过旧状态接口直接删除时抛出
+            ValueError: 当旧状态接口试图绕过受控完成/销毁流程时抛出
         """
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:
             return None
+
+        if status_update.lifecycle_status == TaskLifecycleStatus.CLOSED:
+            raise ValueError(
+                "Direct lifecycle CLOSED updates are no longer allowed. Use "
+                "/complete or /manual-complete so worktree-backed completion "
+                "and checklist confirmation are enforced."
+            )
 
         if (
             status_update.lifecycle_status == TaskLifecycleStatus.DELETED
@@ -716,11 +725,7 @@ class TaskService:
 
         task_obj.lifecycle_status = status_update.lifecycle_status
 
-        # 如果关闭任务，记录关闭时间并同步 workflow_stage
-        if status_update.lifecycle_status == TaskLifecycleStatus.CLOSED:
-            task_obj.closed_at = utc_now_naive()
-            TaskService._apply_workflow_stage_transition(task_obj, WorkflowStage.DONE)
-        elif status_update.lifecycle_status == TaskLifecycleStatus.DELETED:
+        if status_update.lifecycle_status == TaskLifecycleStatus.DELETED:
             task_obj.closed_at = None
             task_obj.destroy_reason = None
             if task_obj.destroyed_at is None:
@@ -809,8 +814,6 @@ class TaskService:
     ) -> Task | None:
         """更新任务工作流阶段.
 
-        当阶段变更为 DONE 时，同步将 lifecycle_status 更新为 CLOSED.
-
         Args:
             db_session: 数据库会话
             task_id: 任务 ID
@@ -818,10 +821,20 @@ class TaskService:
 
         Returns:
             Task | None: 更新后的任务对象或 None
+
+        Raises:
+            ValueError: 当旧阶段接口试图绕过受控完成流程时抛出
         """
         task_obj = TaskService.get_task_by_id(db_session, task_id)
         if not task_obj:
             return None
+
+        if stage_update.workflow_stage == WorkflowStage.DONE:
+            raise ValueError(
+                "Direct workflow DONE updates are no longer allowed. Use "
+                "/complete or /manual-complete so worktree-backed completion "
+                "and checklist confirmation are enforced."
+            )
 
         previous_stage_value: str = task_obj.workflow_stage.value
         TaskService._apply_workflow_stage_transition(
@@ -829,12 +842,8 @@ class TaskService:
             stage_update.workflow_stage,
         )
 
-        # 阶段为 DONE 时同步关闭任务
-        if stage_update.workflow_stage == WorkflowStage.DONE:
-            task_obj.lifecycle_status = TaskLifecycleStatus.CLOSED
-            task_obj.closed_at = utc_now_naive()
         # 阶段非终态且任务处于 PENDING，推进为 OPEN
-        elif task_obj.lifecycle_status == TaskLifecycleStatus.PENDING:
+        if task_obj.lifecycle_status == TaskLifecycleStatus.PENDING:
             task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
 
         db_session.commit()

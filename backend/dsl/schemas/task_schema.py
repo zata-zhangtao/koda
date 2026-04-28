@@ -4,12 +4,14 @@
 """
 
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.schemas.base import DSLResponseSchema
+
+TaskCompletionChecklistMode = Literal["complete", "manual_complete"]
 
 
 class TaskCreateSchema(BaseModel):
@@ -69,6 +71,112 @@ class TaskStatusUpdateSchema(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     lifecycle_status: TaskLifecycleStatus = Field(..., description="任务生命周期状态")
+
+
+class TaskCompletionChecklistItemSchema(DSLResponseSchema):
+    """Completion checklist item shown before a task can be completed.
+
+    Attributes:
+        item_id: Stable identifier that the frontend must return on submit.
+        label: User-facing checklist item label.
+        group: Display group such as PRD acceptance or completion safety.
+        required: Whether this displayed item must be checked before submit.
+        source: Canonical source for audit and signature generation.
+        covered_source_item_count: Number of source PRD items represented by
+            this item when it is a summary item.
+    """
+
+    item_id: str = Field(..., description="Stable checklist item ID")
+    label: str = Field(..., description="User-facing checklist label")
+    group: str = Field(..., description="Display group")
+    required: bool = Field(default=True, description="Whether the item is required")
+    source: str = Field(..., description="Canonical checklist item source")
+    covered_source_item_count: int | None = Field(
+        default=None,
+        description="Number of source items covered when this item summarizes PRD checks",
+    )
+
+
+class TaskCompletionChecklistResponseSchema(DSLResponseSchema):
+    """Canonical checklist response for one completion attempt.
+
+    Attributes:
+        task_id: Task ID the checklist belongs to.
+        mode: Completion mode the checklist was generated for.
+        checklist_signature: Signature over the ordered displayed checklist.
+        items: Displayed checklist items; always capped at five.
+    """
+
+    task_id: str = Field(..., description="Task ID")
+    mode: TaskCompletionChecklistMode = Field(..., description="Completion mode")
+    checklist_signature: str = Field(
+        ...,
+        description="Signature over the ordered canonical checklist",
+    )
+    items: list[TaskCompletionChecklistItemSchema] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Displayed checklist items",
+    )
+
+
+class TaskCompletionConfirmationSchema(BaseModel):
+    """Request body proving the user confirmed every displayed checklist item.
+
+    Attributes:
+        checklist_mode: Completion mode the frontend is submitting for.
+        checklist_signature: Signature returned by the preview endpoint.
+        confirmed_checklist_item_ids: Item IDs the user explicitly checked.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
+
+    checklist_mode: TaskCompletionChecklistMode = Field(
+        ...,
+        validation_alias=AliasChoices("checklist_mode", "mode"),
+        description="Completion mode being submitted",
+    )
+    checklist_signature: str = Field(
+        ...,
+        min_length=1,
+        description="Checklist signature returned by the preview endpoint",
+    )
+    confirmed_checklist_item_ids: list[str] = Field(
+        ...,
+        description="IDs of all displayed checklist items checked by the user",
+    )
+
+    @field_validator("confirmed_checklist_item_ids")
+    @classmethod
+    def validate_confirmed_checklist_item_ids(
+        cls,
+        confirmed_checklist_item_id_list: list[str],
+    ) -> list[str]:
+        """Normalize and validate confirmed checklist item IDs.
+
+        Args:
+            confirmed_checklist_item_id_list: Raw item IDs from the request.
+
+        Returns:
+            list[str]: Trimmed, de-duplicated item IDs preserving first-seen order.
+
+        Raises:
+            ValueError: Raised when an item ID is blank.
+        """
+        normalized_item_id_list: list[str] = []
+        seen_item_id_set: set[str] = set()
+        for raw_item_id_text in confirmed_checklist_item_id_list:
+            normalized_item_id_text = raw_item_id_text.strip()
+            if not normalized_item_id_text:
+                raise ValueError("confirmed_checklist_item_ids cannot contain blanks")
+            if normalized_item_id_text in seen_item_id_set:
+                continue
+            normalized_item_id_list.append(normalized_item_id_text)
+            seen_item_id_set.add(normalized_item_id_text)
+        return normalized_item_id_list
 
 
 class TaskStageUpdateSchema(BaseModel):

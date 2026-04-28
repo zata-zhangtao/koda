@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import backend.dsl.models  # noqa: F401
 import backend.dsl.api.tasks as tasks_api
@@ -44,10 +45,14 @@ from backend.dsl.models.project import Project
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
 from backend.dsl.schemas.task_schema import (
+    TaskCompletionConfirmationSchema,
     TaskDestroySchema,
     TaskStageUpdateSchema,
     TaskStatusUpdateSchema,
     TaskUpdateSchema,
+)
+from backend.dsl.services.task_completion_checklist_service import (
+    TaskCompletionChecklistService,
 )
 from backend.dsl.services.git_worktree_service import (
     GitWorktreeService,
@@ -75,6 +80,7 @@ def db_session() -> Session:
     test_engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     test_session_factory = sessionmaker(
         autocommit=False,
@@ -163,6 +169,54 @@ def _create_git_repo(repo_root_path: Path) -> Path:
     _run_git_command(repo_root_path, ["add", "README.md"])
     _run_git_command(repo_root_path, ["commit", "-m", "init"])
     return repo_root_path
+
+
+def _build_completion_confirmation(
+    db_session: Session,
+    task_id_str: str,
+    checklist_mode: str = "complete",
+) -> TaskCompletionConfirmationSchema:
+    """Build a complete checklist confirmation payload for direct route tests.
+
+    Args:
+        db_session: Test database session.
+        task_id_str: Task ID.
+        checklist_mode: Completion checklist mode.
+
+    Returns:
+        TaskCompletionConfirmationSchema: Valid confirmation payload.
+    """
+    checklist_response = TaskCompletionChecklistService.build_completion_checklist(
+        db_session=db_session,
+        task_id_str=task_id_str,
+        checklist_mode=checklist_mode,  # type: ignore[arg-type]
+    )
+    assert checklist_response is not None
+    return TaskCompletionConfirmationSchema(
+        checklist_mode=checklist_response.mode,
+        checklist_signature=checklist_response.checklist_signature,
+        confirmed_checklist_item_ids=[
+            checklist_item.item_id for checklist_item in checklist_response.items
+        ],
+    )
+
+
+def _build_placeholder_completion_confirmation(
+    checklist_mode: str = "complete",
+) -> TaskCompletionConfirmationSchema:
+    """Build a syntactically valid but intentionally stale confirmation payload.
+
+    Args:
+        checklist_mode: Completion checklist mode.
+
+    Returns:
+        TaskCompletionConfirmationSchema: Stale confirmation payload.
+    """
+    return TaskCompletionConfirmationSchema(
+        checklist_mode=checklist_mode,  # type: ignore[arg-type]
+        checklist_signature="sha256:stale",
+        confirmed_checklist_item_ids=["placeholder"],
+    )
 
 
 def test_get_task_prd_file_prefers_semantic_filename_over_legacy_and_random_suffix(
@@ -449,8 +503,10 @@ def test_create_task_exposes_auto_confirm_prd_and_execute_flag(
     assert created_task.auto_confirm_prd_and_execute is True
 
 
-def test_update_task_stage_records_acceptance_audit_log(db_session: Session) -> None:
-    """Accepting a task should leave an internal audit log after archiving."""
+def test_update_task_stage_rejects_done_archive_bypass(
+    db_session: Session,
+) -> None:
+    """Legacy stage route should not bypass the completion checklist gate."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -470,11 +526,12 @@ def test_update_task_stage_records_acceptance_audit_log(db_session: Session) -> 
     db_session.add(task_obj)
     db_session.commit()
 
-    updated_task = update_task_stage(
-        task_obj.id,
-        TaskStageUpdateSchema(workflow_stage=WorkflowStage.DONE),
-        db_session,
-    )
+    with pytest.raises(HTTPException) as raised_error:
+        update_task_stage(
+            task_obj.id,
+            TaskStageUpdateSchema(workflow_stage=WorkflowStage.DONE),
+            db_session,
+        )
 
     recorded_log_list = (
         db_session.query(DevLog)
@@ -482,17 +539,19 @@ def test_update_task_stage_records_acceptance_audit_log(db_session: Session) -> 
         .order_by(DevLog.created_at.asc(), DevLog.id.asc())
         .all()
     )
+    db_session.refresh(task_obj)
 
-    assert updated_task.workflow_stage == WorkflowStage.DONE
-    assert updated_task.lifecycle_status == TaskLifecycleStatus.CLOSED
-    assert recorded_log_list[-1].text_content == "需求验收通过，已标记为完成。"
-    assert recorded_log_list[-1].state_tag == DevLogStateTag.FIXED
+    assert raised_error.value.status_code == 422
+    assert "/complete" in str(raised_error.value.detail)
+    assert task_obj.workflow_stage == WorkflowStage.ACCEPTANCE_IN_PROGRESS
+    assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert recorded_log_list == []
 
 
-def test_update_task_status_records_completed_archive_audit_log(
+def test_update_task_status_rejects_closed_archive_bypass(
     db_session: Session,
 ) -> None:
-    """Closing a non-worktree task should keep its archive audit log."""
+    """Legacy status route should not bypass the completion checklist gate."""
     run_account_obj = RunAccount(
         account_display_name="Tester",
         user_name="tester",
@@ -512,26 +571,16 @@ def test_update_task_status_records_completed_archive_audit_log(
     db_session.add(task_obj)
     db_session.commit()
 
-    updated_task = update_task_status(
-        task_obj.id,
-        TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.CLOSED),
-        db_session,
-    )
+    with pytest.raises(HTTPException) as raised_error:
+        update_task_status(
+            task_obj.id,
+            TaskStatusUpdateSchema(lifecycle_status=TaskLifecycleStatus.CLOSED),
+            db_session,
+        )
 
-    recorded_log_list = (
-        db_session.query(DevLog)
-        .filter(DevLog.task_id == task_obj.id)
-        .order_by(DevLog.created_at.asc(), DevLog.id.asc())
-        .all()
-    )
-
-    assert updated_task.lifecycle_status == TaskLifecycleStatus.CLOSED
-    assert updated_task.workflow_stage == WorkflowStage.DONE
-    assert (
-        recorded_log_list[-1].text_content
-        == "Requirement completed and moved into the completed archive."
-    )
-    assert recorded_log_list[-1].state_tag == DevLogStateTag.FIXED
+    assert raised_error.value.status_code == 422
+    assert "/complete" in str(raised_error.value.detail)
+    assert db_session.query(DevLog).filter(DevLog.task_id == task_obj.id).all() == []
 
 
 def test_update_task_status_records_deleted_archive_audit_log(
@@ -1409,7 +1458,13 @@ def test_complete_task_records_manual_override_for_unsettled_self_review(
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
     background_tasks = BackgroundTasks()
-    updated_task = complete_task(task_obj.id, background_tasks, db_session)
+    completion_confirmation = _build_completion_confirmation(db_session, task_obj.id)
+    updated_task = complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        completion_confirmation,
+    )
 
     recorded_log_list = (
         db_session.query(DevLog)
@@ -1422,8 +1477,132 @@ def test_complete_task_records_manual_override_for_unsettled_self_review(
     assert updated_task.is_codex_task_running is True
     assert len(background_tasks.tasks) == 1
     assert any(
+        "Completion checklist confirmed" in log_item.text_content
+        and "complete" in log_item.text_content
+        for log_item in recorded_log_list
+    )
+    assert any(
         "已记录人工接管" in log_item.text_content for log_item in recorded_log_list
     )
+
+
+def test_complete_task_rejects_missing_checklist_confirmation(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete should reject callers that skip the checklist payload."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-missing-confirmation"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Missing completion checklist payload",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    with pytest.raises(HTTPException) as raised_error:
+        complete_task(task_obj.id, BackgroundTasks(), db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "confirmation payload is required" in str(raised_error.value.detail)
+
+
+def test_completion_checklist_http_contract_rejects_missing_and_stale_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTP routes should expose checklist preview and enforcement semantics."""
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    test_session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine,
+    )
+    Base.metadata.create_all(bind=test_engine)
+
+    seed_session = test_session_factory()
+    try:
+        run_account_obj = RunAccount(
+            account_display_name="Tester",
+            user_name="tester",
+            environment_os="Linux",
+            git_branch_name=None,
+            is_active=True,
+        )
+        seed_session.add(run_account_obj)
+        seed_session.commit()
+        worktree_path = tmp_path / "http-contract-worktree"
+        worktree_path.mkdir()
+        task_obj = Task(
+            run_account_id=run_account_obj.id,
+            task_title="HTTP checklist contract",
+            lifecycle_status=TaskLifecycleStatus.OPEN,
+            workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+            worktree_path=str(worktree_path),
+        )
+        seed_session.add(task_obj)
+        seed_session.commit()
+        task_id_str = task_obj.id
+    finally:
+        seed_session.close()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    def _get_test_db() -> Generator[Session, None, None]:
+        yield from _override_get_db(test_session_factory)
+
+    app.dependency_overrides[get_db] = _get_test_db
+    test_client = TestClient(app)
+    try:
+        checklist_response = test_client.get(
+            f"/api/tasks/{task_id_str}/completion-checklist?mode=complete"
+        )
+        missing_payload_response = test_client.post(
+            f"/api/tasks/{task_id_str}/complete"
+        )
+        stale_signature_response = test_client.post(
+            f"/api/tasks/{task_id_str}/complete",
+            json={
+                "checklist_mode": "complete",
+                "checklist_signature": "sha256:stale",
+                "confirmed_checklist_item_ids": [
+                    checklist_item["item_id"]
+                    for checklist_item in checklist_response.json()["items"]
+                ],
+            },
+        )
+    finally:
+        test_client.close()
+        app.dependency_overrides.clear()
+
+    assert checklist_response.status_code == 200
+    assert checklist_response.json()["mode"] == "complete"
+    assert len(checklist_response.json()["items"]) <= 5
+    assert missing_payload_response.status_code == 422
+    assert "confirmation payload is required" in str(
+        missing_payload_response.json()["detail"]
+    )
+    assert stale_signature_response.status_code == 409
+    assert stale_signature_response.json()["detail"]["refresh_required"] is True
 
 
 def test_complete_task_skips_manual_override_log_after_self_review_passed(
@@ -1480,7 +1659,13 @@ def test_complete_task_skips_manual_override_log_after_self_review_passed(
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
     background_tasks = BackgroundTasks()
-    complete_task(task_obj.id, background_tasks, db_session)
+    completion_confirmation = _build_completion_confirmation(db_session, task_obj.id)
+    complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        completion_confirmation,
+    )
 
     recorded_log_list = (
         db_session.query(DevLog)
@@ -1608,7 +1793,12 @@ def test_complete_task_rejects_missing_branch_manual_completion_candidate(
 
     background_tasks = BackgroundTasks()
     with pytest.raises(HTTPException) as raised_error:
-        complete_task(task_obj.id, background_tasks, db_session)
+        complete_task(
+            task_obj.id,
+            background_tasks,
+            db_session,
+            _build_placeholder_completion_confirmation("complete"),
+        )
 
     assert raised_error.value.status_code == 422
     assert "/manual-complete" in str(raised_error.value.detail)
@@ -1660,7 +1850,13 @@ def test_complete_task_allows_retry_from_changes_requested_after_completion_fail
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
     background_tasks = BackgroundTasks()
-    returned_task = complete_task(task_obj.id, background_tasks, db_session)
+    completion_confirmation = _build_completion_confirmation(db_session, task_obj.id)
+    returned_task = complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        completion_confirmation,
+    )
 
     assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
     assert returned_task.is_codex_task_running is True
@@ -1723,7 +1919,13 @@ def test_complete_task_allows_manual_takeover_from_changes_requested_after_workt
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
     background_tasks = BackgroundTasks()
-    returned_task = complete_task(task_obj.id, background_tasks, db_session)
+    completion_confirmation = _build_completion_confirmation(db_session, task_obj.id)
+    returned_task = complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        completion_confirmation,
+    )
 
     assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
     assert returned_task.is_codex_task_running is True
@@ -1789,7 +1991,13 @@ def test_complete_task_accepts_semantic_task_branch_names(
     monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
 
     background_tasks = BackgroundTasks()
-    returned_task = complete_task(task_obj.id, background_tasks, db_session)
+    completion_confirmation = _build_completion_confirmation(db_session, task_obj.id)
+    returned_task = complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        completion_confirmation,
+    )
 
     assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
     assert returned_task.branch_health is not None
@@ -2202,7 +2410,11 @@ def test_manual_complete_task_rejects_tasks_with_existing_branch(
     _run_git_command(repo_root_path, ["branch", f"task/{task_obj.id[:8]}"])
 
     with pytest.raises(HTTPException) as raised_error:
-        manual_complete_task(task_obj.id, db_session)
+        manual_complete_task(
+            task_obj.id,
+            db_session,
+            _build_placeholder_completion_confirmation("manual_complete"),
+        )
 
     assert raised_error.value.status_code == 422
     assert "Task branch still exists" in str(raised_error.value.detail)
@@ -2248,7 +2460,11 @@ def test_manual_complete_task_rejects_tasks_with_existing_semantic_branch(
     )
 
     with pytest.raises(HTTPException) as raised_error:
-        manual_complete_task(task_obj.id, db_session)
+        manual_complete_task(
+            task_obj.id,
+            db_session,
+            _build_placeholder_completion_confirmation("manual_complete"),
+        )
 
     assert raised_error.value.status_code == 422
     assert "Task branch still exists" in str(raised_error.value.detail)
@@ -2286,10 +2502,55 @@ def test_manual_complete_task_rejects_tasks_without_worktree_backed_git_flow(
     db_session.commit()
 
     with pytest.raises(HTTPException) as raised_error:
-        manual_complete_task(task_obj.id, db_session)
+        manual_complete_task(
+            task_obj.id,
+            db_session,
+            _build_placeholder_completion_confirmation("manual_complete"),
+        )
 
     assert raised_error.value.status_code == 422
     assert "worktree-backed Git flow" in str(raised_error.value.detail)
+
+
+def test_manual_complete_task_rejects_missing_checklist_confirmation(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Manual complete should reject callers that skip the checklist payload."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    repo_root_path = _create_git_repo(tmp_path / "manual-missing-confirmation-repo")
+    project_obj = Project(
+        display_name="Demo repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    worktree_path = tmp_path / "manual-missing-confirmation-worktree"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Manual complete missing confirmation",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as raised_error:
+        manual_complete_task(task_obj.id, db_session)
+
+    assert raised_error.value.status_code == 422
+    assert "confirmation payload is required" in str(raised_error.value.detail)
 
 
 def test_manual_complete_task_closes_task_and_records_audit_log(
@@ -2326,7 +2587,14 @@ def test_manual_complete_task_closes_task_and_records_audit_log(
     db_session.add(task_obj)
     db_session.commit()
 
-    updated_task = manual_complete_task(task_obj.id, db_session)
+    completion_confirmation = _build_completion_confirmation(
+        db_session,
+        task_obj.id,
+        "manual_complete",
+    )
+    updated_task = manual_complete_task(
+        task_obj.id, db_session, completion_confirmation
+    )
     recorded_log_list = (
         db_session.query(DevLog)
         .filter(DevLog.task_id == task_obj.id)
@@ -2340,6 +2608,11 @@ def test_manual_complete_task_closes_task_and_records_audit_log(
     assert updated_task.branch_health is not None
     assert updated_task.branch_health.branch_exists is False
     assert updated_task.branch_health.manual_completion_candidate is False
+    assert any(
+        "Completion checklist confirmed" in log_item.text_content
+        and "manual_complete" in log_item.text_content
+        for log_item in recorded_log_list
+    )
     assert any(
         "已记录人工确认完成" in log_item.text_content for log_item in recorded_log_list
     )

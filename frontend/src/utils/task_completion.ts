@@ -44,7 +44,7 @@ export function canCompleteTask(params: CanCompleteTaskParams): boolean {
   }
 
   if (!taskItem.worktree_path) {
-    return true;
+    return false;
   }
 
   if (taskStage === CHANGES_REQUESTED_WORKFLOW_STAGE) {

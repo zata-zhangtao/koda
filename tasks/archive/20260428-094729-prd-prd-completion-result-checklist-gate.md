@@ -3,7 +3,7 @@
 **Original Need:** complete 的时候列出结果 checklist，让用户点击选择；checklist 最多展示 5 条；没有 worktree 的需求不允许 Complete；确认所有展示项都已完成后，才可以 Complete。
 **AI-Normalized Name:** Require worktree-backed completion plus a fully checked, at-most-five-item result checklist.
 **Date:** 2026-04-27
-**Status:** Pending
+**Status:** Implemented
 
 ## 1. Introduction & Goals
 
@@ -328,63 +328,63 @@ Not used. This is repository-local workflow behavior.
 
 ### Architecture Acceptance
 
-- [ ] `TaskService.prepare_task_completion(...)` remains responsible for normal completion stage transition.
-- [ ] `TaskService.close_task_after_manual_completion(...)` remains responsible for missing-branch manual closure.
-- [ ] `TaskService.update_task_status(...)` or its route wrapper rejects `TaskLifecycleStatus.CLOSED` so legacy status updates cannot bypass completion semantics.
-- [ ] Checklist generation and validation live in a service-layer module, not directly inside React render code or route handler branches.
-- [ ] No new database table, migration, or persisted task field is introduced for transient checkbox state.
-- [ ] PRD Markdown reads use `encoding="utf-8"`.
+- [x] `TaskService.prepare_task_completion(...)` remains responsible for normal completion stage transition.
+- [x] `TaskService.close_task_after_manual_completion(...)` remains responsible for missing-branch manual closure.
+- [x] `TaskService.update_task_status(...)` or its route wrapper rejects `TaskLifecycleStatus.CLOSED` so legacy status updates cannot bypass completion semantics.
+- [x] Checklist generation and validation live in a service-layer module, not directly inside React render code or route handler branches.
+- [x] No new database table, migration, or persisted task field is introduced for transient checkbox state.
+- [x] PRD Markdown reads use `encoding="utf-8"`.
 
 ### Dependency Acceptance
 
-- [ ] No new frontend or backend third-party dependency is added for Markdown parsing unless existing repository tooling cannot handle checklist extraction.
-- [ ] The implementation reuses `find_task_prd_file_path(...)` / `find_task_readable_prd_file_path(...)` instead of adding another PRD file locator.
+- [x] No new frontend or backend third-party dependency is added for Markdown parsing unless existing repository tooling cannot handle checklist extraction.
+- [x] The implementation reuses `find_task_prd_file_path(...)` / `find_task_readable_prd_file_path(...)` instead of adding another PRD file locator.
 
 ### Behavior Acceptance
 
-- [ ] No-worktree tasks do not show `Complete` in the task detail action area.
-- [ ] No-worktree tasks still support the existing `Start`, `Edit`, `Delete`, and `Abandon` paths where those actions are otherwise allowed.
-- [ ] Clicking ordinary `Complete` opens the completion checklist instead of immediately calling `POST /api/tasks/{task_id}/complete`.
-- [ ] The final ordinary Complete submit button is disabled until every displayed checklist item is checked.
-- [ ] Clicking missing-branch `确认 Complete` opens or focuses the same checklist flow for `mode=manual_complete`.
-- [ ] The final manual Complete submit button is disabled until every displayed checklist item is checked.
-- [ ] The checklist displays no more than 5 items for every task and mode.
-- [ ] The checklist includes or summarizes PRD `Acceptance Checklist` items using the fixed heading priority when a readable PRD contains that section.
-- [ ] The checklist includes system safety items even when the PRD is missing.
-- [ ] Changing selected task clears or re-scopes checkbox state so one task's confirmation cannot unlock another task.
-- [ ] A stale checklist signature triggers a refresh-specific error before POST retry.
+- [x] No-worktree tasks do not show `Complete` in the task detail action area.
+- [x] No-worktree tasks still support the existing `Start`, `Edit`, `Delete`, and `Abandon` paths where those actions are otherwise allowed.
+- [x] Clicking ordinary `Complete` opens the completion checklist instead of immediately calling `POST /api/tasks/{task_id}/complete`.
+- [x] The final ordinary Complete submit button is disabled until every displayed checklist item is checked.
+- [x] Clicking missing-branch `确认 Complete` opens or focuses the same checklist flow for `mode=manual_complete`.
+- [x] The final manual Complete submit button is disabled until every displayed checklist item is checked.
+- [x] The checklist displays no more than 5 items for every task and mode.
+- [x] The checklist includes or summarizes PRD `Acceptance Checklist` items using the fixed heading priority when a readable PRD contains that section.
+- [x] The checklist includes system safety items even when the PRD is missing.
+- [x] Changing selected task clears or re-scopes checkbox state so one task's confirmation cannot unlock another task.
+- [x] A stale checklist signature triggers a refresh-specific error before POST retry.
 
 ### API Acceptance
 
-- [ ] `PUT /api/tasks/{task_id}/status` returns `422` when called with `{"lifecycle_status":"CLOSED"}`.
-- [ ] `PUT /api/tasks/{task_id}/status` still supports existing non-completion lifecycle transitions that remain valid, such as `ABANDONED`.
-- [ ] `GET /api/tasks/{task_id}/completion-checklist?mode=complete` returns canonical checklist items for a normal completion candidate.
-- [ ] `GET /api/tasks/{task_id}/completion-checklist?mode=manual_complete` returns canonical checklist items for a missing-branch manual completion candidate.
-- [ ] Both checklist preview endpoints return `items.length <= 5`.
-- [ ] `POST /api/tasks/{task_id}/complete` returns `422` when confirmation payload is absent.
-- [ ] `POST /api/tasks/{task_id}/complete` returns `422` when any displayed checklist item id is missing.
-- [ ] `POST /api/tasks/{task_id}/complete` returns `409` with `refresh_required=true` when `checklist_signature` is stale.
-- [ ] `POST /api/tasks/{task_id}/manual-complete` returns `422` when confirmation payload is absent.
-- [ ] `POST /api/tasks/{task_id}/manual-complete` returns `422` when `mode` is not `manual_complete`.
-- [ ] `POST /api/tasks/{task_id}/manual-complete` returns `409` with `refresh_required=true` when `checklist_signature` is stale.
-- [ ] Successful completion writes a `DevLog` mentioning checklist confirmation mode and confirmed item count.
+- [x] `PUT /api/tasks/{task_id}/status` returns `422` when called with `{"lifecycle_status":"CLOSED"}`.
+- [x] `PUT /api/tasks/{task_id}/status` still supports existing non-completion lifecycle transitions that remain valid, such as `ABANDONED`.
+- [x] `GET /api/tasks/{task_id}/completion-checklist?mode=complete` returns canonical checklist items for a normal completion candidate.
+- [x] `GET /api/tasks/{task_id}/completion-checklist?mode=manual_complete` returns canonical checklist items for a missing-branch manual completion candidate.
+- [x] Both checklist preview endpoints return `items.length <= 5`.
+- [x] `POST /api/tasks/{task_id}/complete` returns `422` when confirmation payload is absent.
+- [x] `POST /api/tasks/{task_id}/complete` returns `422` when any displayed checklist item id is missing.
+- [x] `POST /api/tasks/{task_id}/complete` returns `409` with `refresh_required=true` when `checklist_signature` is stale.
+- [x] `POST /api/tasks/{task_id}/manual-complete` returns `422` when confirmation payload is absent.
+- [x] `POST /api/tasks/{task_id}/manual-complete` returns `422` when `mode` is not `manual_complete`.
+- [x] `POST /api/tasks/{task_id}/manual-complete` returns `409` with `refresh_required=true` when `checklist_signature` is stale.
+- [x] Successful completion writes a `DevLog` mentioning checklist confirmation mode and confirmed item count.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/dsl-development.md` describes that Complete is worktree-backed and requires all displayed checklist items, capped at 5, to be confirmed.
-- [ ] `docs/guides/codex-cli-automation.md` describes the confirmation gate before Git finalization.
-- [ ] `docs/architecture/system-design.md` reflects backend enforcement, not just frontend button gating.
-- [ ] `docs/index.md` updates the high-level task workflow summary.
-- [ ] `docs/dev/evaluation.md` includes manual QA steps for no-worktree tasks, normal Complete, stale checklist refresh, and missing-branch manual Complete.
+- [x] `docs/guides/dsl-development.md` describes that Complete is worktree-backed and requires all displayed checklist items, capped at 5, to be confirmed.
+- [x] `docs/guides/codex-cli-automation.md` describes the confirmation gate before Git finalization.
+- [x] `docs/architecture/system-design.md` reflects backend enforcement, not just frontend button gating.
+- [x] `docs/index.md` updates the high-level task workflow summary.
+- [x] `docs/dev/evaluation.md` includes manual QA steps for no-worktree tasks, normal Complete, stale checklist refresh, and missing-branch manual Complete.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_tasks_api.py -q`
-- [ ] `uv run pytest tests/test_task_service.py -q` or equivalent new checklist service tests.
-- [ ] `cd frontend && npm test`
-- [ ] `cd frontend && npm run build`
-- [ ] `just docs-build`
-- [ ] `git diff --check`
+- [x] `uv run pytest tests/test_tasks_api.py -q`
+- [x] `uv run pytest tests/test_task_service.py -q` or equivalent new checklist service tests.
+- [x] `cd frontend && npm test`
+- [x] `cd frontend && npm run build`
+- [x] `just docs-build`
+- [x] `git diff --check`
 
 ## 8. User Stories
 
@@ -455,3 +455,85 @@ As a maintainer, I want the timeline to show that the completion checklist was c
 | Keep system safety items inside the same cap | Some tasks have missing or non-standard PRDs; Complete still needs a minimum explicit confirmation gate without exceeding 5 items. |
 | Reject stale signatures with `409 refresh_required=true` | Signature mismatch is not just a missing checkbox; the frontend must refresh the canonical checklist before allowing another submit. |
 | Use existing DevLog audit trail | Completion confirmation is timeline evidence, not a new domain entity. |
+
+## 13. Implementation Sync
+
+**Status:** Implemented on 2026-04-28.
+
+### Delivered Files
+
+- Backend schema/API/service changes:
+  - `backend/dsl/schemas/task_schema.py`
+  - `backend/dsl/services/task_completion_checklist_service.py`
+  - `backend/dsl/services/task_service.py`
+  - `backend/dsl/api/tasks.py`
+- Frontend API/types/UI changes:
+  - `frontend/src/types/index.ts`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/utils/task_completion.ts`
+  - `frontend/src/App.tsx`
+  - `frontend/src/index.css`
+- Regression tests:
+  - `tests/test_task_completion_checklist_service.py`
+  - `tests/test_tasks_api.py`
+  - `frontend/tests/api_client.test.ts`
+  - `frontend/tests/task_completion.test.ts`
+  - `frontend/tests/app_task_mutation_refresh.test.ts`
+- Documentation:
+  - `docs/guides/dsl-development.md`
+  - `docs/guides/codex-cli-automation.md`
+  - `docs/architecture/system-design.md`
+  - `docs/index.md`
+  - `docs/dev/evaluation.md`
+  - `docs/api/references.md`
+
+### Delivered Behavior
+
+- Added `GET /api/tasks/{task_id}/completion-checklist?mode=complete|manual_complete`.
+- Added backend canonical checklist generation from readable PRD `Acceptance Checklist` plus mode-specific system safety items.
+- Enforced a hard maximum of 5 displayed checklist items and deterministic PRD overflow summarization.
+- Required `/complete` and `/manual-complete` to submit `checklist_mode`, `checklist_signature`, and all displayed `confirmed_checklist_item_ids`.
+- Rejected missing payloads and incomplete confirmations with `422`.
+- Rejected stale checklist signatures with `409` and `refresh_required=true` in the response detail.
+- Refreshed the frontend checklist modal automatically after a stale-signature response and required the user to re-check all displayed items.
+- Wrote checklist confirmation audit `DevLog` entries before normal and manual completion flow continuation.
+- Removed frontend no-worktree Complete eligibility and removed the `updateStatus(CLOSED)` fallback.
+- Rejected legacy `PUT /api/tasks/{task_id}/status` requests that try to set `lifecycle_status=CLOSED`.
+- Rejected legacy `PUT /api/tasks/{task_id}/stage` requests that try to set `workflow_stage=done`.
+- Routed the acceptance-stage "验收通过" button through the same checklist modal and `/complete` payload flow instead of `updateStage(done)`.
+- Replaced the manual-complete viewed-only gate with the same checkbox-confirmation modal used by ordinary Complete.
+- Kept abandoned-history tasks out of the missing-branch manual completion candidate path so archived "will not do" decisions cannot be reopened through `/manual-complete`.
+
+### Verification Evidence
+
+- `uv run python -m py_compile backend/dsl/schemas/task_schema.py backend/dsl/services/task_completion_checklist_service.py backend/dsl/services/task_service.py backend/dsl/api/tasks.py tests/test_task_completion_checklist_service.py tests/test_tasks_api.py` passed.
+- `uv run pytest tests/test_task_service.py tests/test_task_completion_checklist_service.py tests/test_tasks_api.py -q` passed (`94 passed` after the abandoned manual-complete guard was added).
+- Auto-review fix round 1: `uv run pytest tests/test_task_service.py::test_update_workflow_stage_rejects_done_archive_bypass tests/test_tasks_api.py::test_update_task_stage_rejects_done_archive_bypass tests/test_tasks_api.py::test_update_task_status_rejects_closed_archive_bypass -q` passed (`3 passed`).
+- Auto-review fix round 1: `uv run pytest tests/test_task_service.py tests/test_task_completion_checklist_service.py tests/test_tasks_api.py -q` passed (`95 passed`).
+- `uv run ruff check backend/dsl/services/task_service.py tests/test_task_service.py` passed.
+- Auto-review fix round 1: `uv run ruff check backend/dsl/services/task_service.py backend/dsl/api/tasks.py tests/test_task_service.py tests/test_tasks_api.py` passed.
+- Auto-review fix round 1: `cd frontend && node --experimental-strip-types --experimental-specifier-resolution=node tests/app_task_mutation_refresh.test.ts` passed.
+- Auto-review fix round 1: `just lint` passed.
+- `just lint` passed after the first run applied `ruff-format` changes and the command was rerun.
+- `cd frontend && node --experimental-strip-types --experimental-specifier-resolution=node tests/task_completion.test.ts` passed.
+- `cd frontend && node --experimental-strip-types --experimental-specifier-resolution=node tests/app_task_mutation_refresh.test.ts` passed.
+- `cd frontend && npm test` passed.
+- `cd frontend && npm run build` passed.
+- `just docs-build` passed.
+- `git diff --check` passed.
+
+### Checklist Reconciliation
+
+**Rechecked on 2026-04-28:** All 42 Acceptance Checklist items were verified against the current code, tests, and documentation, then marked complete.
+
+- `uv run pytest tests/test_tasks_api.py -q` passed (`65 passed`).
+- `uv run pytest tests/test_task_service.py tests/test_task_completion_checklist_service.py -q` passed (`30 passed`).
+- `cd frontend && npm test` passed.
+- `cd frontend && npm run build` passed.
+- `just docs-build` passed.
+- `git diff --check` passed.
+
+### Deviations And Follow-Ups
+
+- The stale-signature response is exposed in FastAPI's standard `detail` object as `{"message": "...", "refresh_required": true}` rather than a custom top-level response envelope.
+- The Markdown parser intentionally supports the repository's conventional `## Acceptance Checklist`, `### <Heading> Acceptance`, `Heading Acceptance:`, and checkbox-list shapes without adding a Markdown parsing dependency.

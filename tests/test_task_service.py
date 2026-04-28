@@ -552,6 +552,52 @@ def test_restore_task_reactivates_abandoned_started_task_as_open(
     assert restored_task.closed_at is None
 
 
+def test_abandoned_task_is_not_manual_completion_candidate(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    """Abandoned history should not be reopened through manual Complete."""
+    repo_root_path = _create_git_repo(tmp_path / "abandoned-manual-complete-repo")
+    worktree_path = tmp_path / "abandoned-manual-complete-worktree"
+    worktree_path.mkdir()
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    project_obj = Project(
+        display_name="Abandoned manual complete repo",
+        repo_path=str(repo_root_path),
+        description=None,
+    )
+    db_session.add_all([run_account_obj, project_obj])
+    db_session.commit()
+
+    abandoned_task = Task(
+        run_account_id=run_account_obj.id,
+        project_id=project_obj.id,
+        task_title="Abandoned manual complete task",
+        lifecycle_status=TaskLifecycleStatus.ABANDONED,
+        workflow_stage=WorkflowStage.IMPLEMENTATION_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+        closed_at=utc_now_naive(),
+    )
+    db_session.add(abandoned_task)
+    db_session.commit()
+
+    task_branch_health = TaskService.build_task_branch_health(abandoned_task)
+
+    assert task_branch_health.branch_exists is False
+    assert task_branch_health.manual_completion_candidate is False
+    with pytest.raises(ValueError, match="ABANDONED"):
+        TaskService.validate_manual_completion_candidate(
+            abandoned_task,
+            task_branch_health,
+        )
+
+
 def test_update_task_status_rejects_started_task_deletion_via_legacy_status_route(
     db_session: Session,
 ) -> None:
@@ -763,6 +809,43 @@ def test_update_workflow_stage_refreshes_stage_updated_at_only_on_stage_change(
     assert updated_task is not None
     assert updated_task.stage_updated_at >= original_stage_updated_at
     assert updated_task.workflow_stage == WorkflowStage.PRD_GENERATING
+
+
+def test_update_workflow_stage_rejects_done_archive_bypass(
+    db_session: Session,
+) -> None:
+    """Generic stage updates should not close tasks without checklist proof."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Stage done bypass guard",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.ACCEPTANCE_IN_PROGRESS,
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="/complete"):
+        TaskService.update_workflow_stage(
+            db_session,
+            task_obj.id,
+            TaskStageUpdateSchema(workflow_stage=WorkflowStage.DONE),
+        )
+
+    db_session.refresh(task_obj)
+
+    assert task_obj.workflow_stage == WorkflowStage.ACCEPTANCE_IN_PROGRESS
+    assert task_obj.lifecycle_status == TaskLifecycleStatus.OPEN
+    assert task_obj.closed_at is None
 
 
 def test_get_task_log_count_map_returns_grouped_counts(db_session: Session) -> None:

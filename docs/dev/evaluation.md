@@ -54,9 +54,10 @@
 16. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
 17. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
 18. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
-19. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
-20. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
-
+19. 点击 `Complete` 后，确认前端先展示最多 5 项 completion checklist；未勾选全部展示项时最终提交按钮禁用，勾选后才会发送 `/complete` 且请求体包含 `checklist_mode`、`checklist_signature`、`confirmed_checklist_item_ids`
+20. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
+21. 修改 PRD acceptance checklist 或用旧 signature 重放 `/complete`，确认后端返回 refresh-required 冲突；漏传任一展示 item id 时返回 422
+22. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 ### Sidecar Q&A
 
 1. 选择一个处于 `prd_waiting_confirmation` 的任务，切换到底部的“问 AI”通道
@@ -67,7 +68,7 @@
 6. 在“问 AI”通道点击“整理最近一次结论为反馈草稿”，确认只是把文本带入反馈 composer，而不是自动写入 `DevLog`
 7. 手动发送该反馈草稿后，再确认只有这一步才会影响主执行链路
 8. 把任务推进到 `CLOSED` 后重新打开详情，确认历史 sidecar Q&A 仍可查看，且“整理最近一次结论为反馈草稿”仍可用；新提问与正式反馈发送在前端被禁用，若直接调后端日志/附件入口也会被拒绝
-9. 分别走“验收通过”“无 worktree 的完成”“放弃需求”三条归档动作，确认操作本身不会因额外写反馈而报错，且时间线里仍能看到对应的内部留痕日志；归档后的任务 Markdown 文件应以 `YYYYMMDD-HHMMSS-` 开头并保留原文件名后缀
+9. 分别走“验收通过”“无 worktree 的 Complete 尝试”“放弃需求”三条归档相关动作，确认“验收通过”会打开 completion checklist 而不是直接调用 `PUT /stage` 关单；无 worktree 任务不会显示或执行 Complete，直接调用 `PUT /api/tasks/{id}/status` 提交 `CLOSED` 或调用 `PUT /api/tasks/{id}/stage` 提交 `done` 都会返回 422；Abandon 仍可用，且时间线里仍能看到对应的内部留痕日志
 10. 对已归档任务尝试上传图片或附件，确认接口被拒绝后 `data/media/` 不会留下孤立文件
 11. 模拟 sidecar 回复超时或后台中断后刷新详情，确认旧 `pending` 回复会转为 `failed`，随后允许再次提问；并发提交提问时仍只能保留 1 条 `pending` 回复
 
@@ -88,6 +89,7 @@
 13. 若任务启动前已有后台自动化或 worktree，确认 destroy 完成后不会再显示“打开 Worktree”入口，后台运行态已清除，且本地不会残留孤立的 task 目录或语义 task 分支
 14. 对 `Abandoned` 任务确认详情区可见 `Restore`；恢复后任务回到 `Active` 视图，backlog 任务回到 `PENDING`，已启动任务回到 `OPEN`
 15. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
+16. 手动 merge 并删除任务分支，确认详情页进入“缺失分支待确认”；点击“确认 Complete”后同样先展示 `manual_complete` checklist，未全选不能提交，全选后 `/manual-complete` 写入 checklist confirmation 与人工完成审计日志
 
 ### 媒体与导出
 

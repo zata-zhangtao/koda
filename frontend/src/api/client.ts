@@ -19,6 +19,9 @@ import type {
   RunAccount,
   Task,
   TaskCardMetadata,
+  TaskCompletionChecklistMode,
+  TaskCompletionChecklistResponse,
+  TaskCompletionConfirmation,
   TaskQaContextScope,
   TaskQaCreateResponse,
   TaskQaFeedbackDraftResponse,
@@ -38,8 +41,41 @@ import type { TaskLifecycleStatus, WorkflowStage } from "../types/index.ts";
 const API_BASE = "/api";
 
 type ApiErrorPayload = {
-  detail?: string;
+  detail?:
+    | string
+    | {
+        message?: string;
+        refresh_required?: boolean;
+        missing_checklist_item_ids?: string[];
+      };
 };
+
+type ApiErrorDetails = {
+  message: string;
+  refreshRequired: boolean;
+  missingChecklistItemIds: string[];
+};
+
+export class ApiClientError extends Error {
+  readonly statusCode: number;
+  readonly refreshRequired: boolean;
+  readonly missingChecklistItemIds: string[];
+
+  constructor(
+    message: string,
+    options: {
+      statusCode: number;
+      refreshRequired?: boolean;
+      missingChecklistItemIds?: string[];
+    }
+  ) {
+    super(message);
+    this.name = "ApiClientError";
+    this.statusCode = options.statusCode;
+    this.refreshRequired = options.refreshRequired ?? false;
+    this.missingChecklistItemIds = options.missingChecklistItemIds ?? [];
+  }
+}
 
 type LogListOptions = {
   createdAfter?: string | null;
@@ -55,23 +91,52 @@ function extractApiErrorMessage(
   responseText: string,
   statusCode: number
 ): string {
+  return extractApiErrorDetails(responseText, statusCode).message;
+}
+
+function extractApiErrorDetails(
+  responseText: string,
+  statusCode: number
+): ApiErrorDetails {
   if (!responseText) {
-    return `HTTP ${statusCode}`;
+    return {
+      message: `HTTP ${statusCode}`,
+      refreshRequired: false,
+      missingChecklistItemIds: [],
+    };
   }
 
   try {
     const parsedErrorPayload = JSON.parse(responseText) as ApiErrorPayload;
+    const parsedDetail = parsedErrorPayload.detail;
+    if (typeof parsedDetail === "string" && parsedDetail.trim().length > 0) {
+      return {
+        message: parsedDetail,
+        refreshRequired: false,
+        missingChecklistItemIds: [],
+      };
+    }
     if (
-      typeof parsedErrorPayload.detail === "string" &&
-      parsedErrorPayload.detail.trim().length > 0
+      parsedDetail &&
+      typeof parsedDetail === "object" &&
+      typeof parsedDetail.message === "string" &&
+      parsedDetail.message.trim().length > 0
     ) {
-      return parsedErrorPayload.detail;
+      return {
+        message: parsedDetail.message,
+        refreshRequired: parsedDetail.refresh_required === true,
+        missingChecklistItemIds: parsedDetail.missing_checklist_item_ids ?? [],
+      };
     }
   } catch {
     // Ignore JSON parse errors and fall back to the raw response text.
   }
 
-  return responseText;
+  return {
+    message: responseText,
+    refreshRequired: false,
+    missingChecklistItemIds: [],
+  };
 }
 
 /** 通用请求封装 */
@@ -88,7 +153,12 @@ async function fetchApi<T>(
 
   if (!response.ok) {
     const responseText = await response.text();
-    throw new Error(extractApiErrorMessage(responseText, response.status));
+    const errorDetails = extractApiErrorDetails(responseText, response.status);
+    throw new ApiClientError(errorDetails.message, {
+      statusCode: response.status,
+      refreshRequired: errorDetails.refreshRequired,
+      missingChecklistItemIds: errorDetails.missingChecklistItemIds,
+    });
   }
 
   return response.json() as Promise<T>;
@@ -381,16 +451,24 @@ export const taskApi = {
     }),
 
   /** 触发任务进入完成收尾阶段（AI-summary-first commit + rebase + Codex conflict fix + merge + cleanup） */
-  complete: (id: string) =>
+  complete: (id: string, confirmation: TaskCompletionConfirmation) =>
     fetchApi<Task>(`/tasks/${id}/complete`, {
       method: "POST",
+      body: JSON.stringify(confirmation),
     }),
 
   /** 在检测到任务分支缺失后人工确认完成 */
-  manualComplete: (id: string) =>
+  manualComplete: (id: string, confirmation: TaskCompletionConfirmation) =>
     fetchApi<Task>(`/tasks/${id}/manual-complete`, {
       method: "POST",
+      body: JSON.stringify(confirmation),
     }),
+
+  /** 获取任务完成前的 canonical checklist */
+  getCompletionChecklist: (id: string, mode: TaskCompletionChecklistMode) =>
+    fetchApi<TaskCompletionChecklistResponse>(
+      `/tasks/${id}/completion-checklist?mode=${encodeURIComponent(mode)}`
+    ),
 
   /** 更新任务内容 */
   update: (

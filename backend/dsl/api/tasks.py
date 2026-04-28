@@ -9,7 +9,16 @@ import re
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    status,
+)
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.dsl.models.dev_log import DevLog
@@ -21,6 +30,9 @@ from backend.dsl.schemas.task_schema import (
     TaskBranchHealthSchema,
     TaskCreateSchema,
     TaskCardMetadataSchema,
+    TaskCompletionChecklistMode,
+    TaskCompletionChecklistResponseSchema,
+    TaskCompletionConfirmationSchema,
     TaskDestroySchema,
     TaskReferenceCreateSchema,
     TaskReferenceResponseSchema,
@@ -53,6 +65,10 @@ from backend.dsl.services.prd_file_service import (
     find_task_prd_file_path,
     find_task_readable_prd_file_path,
     repair_invalid_task_prd_file_for_read,
+)
+from backend.dsl.services.task_completion_checklist_service import (
+    TaskCompletionChecklistService,
+    TaskCompletionChecklistValidationError,
 )
 from backend.dsl.services.terminal_launcher import (
     TerminalLaunchError,
@@ -135,6 +151,41 @@ _FORCE_INTERRUPTIBLE_STAGE_SET = {
     WorkflowStage.PR_PREPARING,
 }
 _REQUIREMENT_DELETE_MARKER = "<!-- requirement-change:delete -->"
+
+
+def _raise_completion_checklist_http_exception(
+    validation_error: TaskCompletionChecklistValidationError,
+) -> None:
+    """Convert a checklist validation error into an API exception.
+
+    Args:
+        validation_error: Service-layer validation error.
+
+    Raises:
+        HTTPException: Always raised with the service-provided status code.
+    """
+    if validation_error.refresh_required_bool:
+        raise HTTPException(
+            status_code=validation_error.status_code_int,
+            detail={
+                "message": str(validation_error),
+                "refresh_required": True,
+            },
+        ) from validation_error
+    if validation_error.missing_checklist_item_id_list:
+        raise HTTPException(
+            status_code=validation_error.status_code_int,
+            detail={
+                "message": str(validation_error),
+                "missing_checklist_item_ids": (
+                    validation_error.missing_checklist_item_id_list
+                ),
+            },
+        ) from validation_error
+    raise HTTPException(
+        status_code=validation_error.status_code_int,
+        detail=str(validation_error),
+    ) from validation_error
 
 
 @dataclass(frozen=True)
@@ -2104,7 +2155,8 @@ def update_task_stage(
     """更新任务工作流阶段.
 
     通用阶段更新接口，供各阶段按钮（如「确认 PRD」、「验收通过」等）使用.
-    当阶段更新为 done 时，自动将 lifecycle_status 设为 CLOSED.
+    直接设置 `done` 已被禁用；完成必须走 `/complete` 或 `/manual-complete`
+    的 checklist gate。
 
     Args:
         task_id: 任务 ID
@@ -2115,7 +2167,7 @@ def update_task_stage(
         Task: 更新后的任务
 
     Raises:
-        HTTPException: 当任务不存在时返回 404
+        HTTPException: 当任务不存在时返回 404；当阶段变更不合法时返回 422
     """
     existing_task_obj = TaskService.get_task_by_id(db_session, task_id)
     if not existing_task_obj:
@@ -2124,22 +2176,21 @@ def update_task_stage(
             detail=f"Task with id {task_id} not found",
         )
 
-    previous_workflow_stage = existing_task_obj.workflow_stage
-    updated_task = TaskService.update_workflow_stage(db_session, task_id, stage_update)
+    try:
+        updated_task = TaskService.update_workflow_stage(
+            db_session,
+            task_id,
+            stage_update,
+        )
+    except ValueError as validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(validation_error),
+        ) from validation_error
     if not updated_task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found",
-        )
-    if (
-        stage_update.workflow_stage == WorkflowStage.DONE
-        and previous_workflow_stage != WorkflowStage.DONE
-    ):
-        _create_internal_archive_audit_log(
-            db_session,
-            updated_task,
-            log_text_content="需求验收通过，已标记为完成。",
-            log_state_tag=DevLogStateTag.FIXED,
         )
     return _hydrate_task_response(updated_task, db_session=db_session)
 
@@ -2567,11 +2618,57 @@ def resume_task(
     )
 
 
+@router.get(
+    "/{task_id}/completion-checklist",
+    response_model=TaskCompletionChecklistResponseSchema,
+)
+def get_task_completion_checklist(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+    mode: Annotated[
+        TaskCompletionChecklistMode,
+        Query(description="Completion mode: complete or manual_complete"),
+    ] = "complete",
+) -> TaskCompletionChecklistResponseSchema:
+    """Return the canonical completion checklist for a task.
+
+    Args:
+        task_id: 任务 ID
+        mode: 完成模式
+        db_session: 数据库会话
+
+    Returns:
+        TaskCompletionChecklistResponseSchema: Canonical checklist response.
+
+    Raises:
+        HTTPException: 当任务不存在时返回 404；当任务不满足指定完成模式时返回 422
+    """
+    try:
+        checklist_response = TaskCompletionChecklistService.build_completion_checklist(
+            db_session=db_session,
+            task_id_str=task_id,
+            checklist_mode=mode,
+        )
+    except TaskCompletionChecklistValidationError as validation_error:
+        _raise_completion_checklist_http_exception(validation_error)
+
+    if checklist_response is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+    return checklist_response
+
+
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)
 def complete_task(
     task_id: str,
     background_tasks: BackgroundTasks,
     db_session: Annotated[Session, Depends(get_db)],
+    completion_confirmation: Annotated[
+        TaskCompletionConfirmationSchema | None,
+        Body(),
+    ] = None,
 ) -> Task:
     """触发任务进入完成收尾阶段，并执行确定性的 Git 收尾与合并动作.
 
@@ -2594,6 +2691,7 @@ def complete_task(
         task_id: 任务 ID
         background_tasks: FastAPI 后台任务注入
         db_session: 数据库会话
+        completion_confirmation: 用户确认的完成 checklist payload
 
     Returns:
         Task: 已更新为 `pr_preparing` 的任务对象
@@ -2607,6 +2705,24 @@ def complete_task(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task automation is already running for this task.",
+        )
+
+    try:
+        checklist_response = (
+            TaskCompletionChecklistService.validate_completion_confirmation(
+                db_session=db_session,
+                task_id_str=task_id,
+                expected_checklist_mode="complete",
+                confirmation_schema=completion_confirmation,
+            )
+        )
+    except TaskCompletionChecklistValidationError as validation_error:
+        _raise_completion_checklist_http_exception(validation_error)
+
+    if checklist_response is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
         )
 
     source_task = TaskService.get_task_by_id(db_session, task_id)
@@ -2641,6 +2757,12 @@ def complete_task(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Task has no worktree_path. Complete is only available for worktree-backed tasks.",
         )
+
+    TaskCompletionChecklistService.create_confirmation_audit_log(
+        db_session=db_session,
+        task_obj=completion_task,
+        checklist_response=checklist_response,
+    )
 
     from pathlib import Path as _Path
 
@@ -2716,6 +2838,10 @@ def complete_task(
 def manual_complete_task(
     task_id: str,
     db_session: Annotated[Session, Depends(get_db)],
+    completion_confirmation: Annotated[
+        TaskCompletionConfirmationSchema | None,
+        Body(),
+    ] = None,
 ) -> Task:
     """Manually close a task after a missing-branch confirmation.
 
@@ -2726,6 +2852,7 @@ def manual_complete_task(
     Args:
         task_id: 任务 ID
         db_session: 数据库会话
+        completion_confirmation: 用户确认的完成 checklist payload
 
     Returns:
         Task: 已收敛到 `done / CLOSED` 的任务对象
@@ -2738,6 +2865,24 @@ def manual_complete_task(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task automation is already running for this task.",
+        )
+
+    try:
+        checklist_response = (
+            TaskCompletionChecklistService.validate_completion_confirmation(
+                db_session=db_session,
+                task_id_str=task_id,
+                expected_checklist_mode="manual_complete",
+                confirmation_schema=completion_confirmation,
+            )
+        )
+    except TaskCompletionChecklistValidationError as validation_error:
+        _raise_completion_checklist_http_exception(validation_error)
+
+    if checklist_response is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
         )
 
     task_obj = TaskService.get_task_by_id(db_session, task_id)
@@ -2758,6 +2903,12 @@ def manual_complete_task(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(manual_completion_error),
         ) from manual_completion_error
+
+    TaskCompletionChecklistService.create_confirmation_audit_log(
+        db_session=db_session,
+        task_obj=task_obj,
+        checklist_response=checklist_response,
+    )
 
     db_session.add(
         DevLog(

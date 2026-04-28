@@ -170,6 +170,34 @@ export interface Task {
   branch_health: TaskBranchHealth | null;
 }
 
+/** Completion checklist mode */
+export type TaskCompletionChecklistMode = "complete" | "manual_complete";
+
+/** Canonical completion checklist item */
+export interface TaskCompletionChecklistItem {
+  item_id: string;
+  label: string;
+  group: string;
+  required: boolean;
+  source: string;
+  covered_source_item_count: number | null;
+}
+
+/** Canonical completion checklist preview response */
+export interface TaskCompletionChecklistResponse {
+  task_id: string;
+  mode: TaskCompletionChecklistMode;
+  checklist_signature: string;
+  items: TaskCompletionChecklistItem[];
+}
+
+/** Completion confirmation request payload */
+export interface TaskCompletionConfirmation {
+  checklist_mode: TaskCompletionChecklistMode;
+  checklist_signature: string;
+  confirmed_checklist_item_ids: string[];
+}
+
 /** 可从 tasks/pending 中选择的 PRD 文件 */
 export interface PendingPrdFile {
   file_name: string;

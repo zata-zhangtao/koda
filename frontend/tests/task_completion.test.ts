@@ -14,6 +14,7 @@ function buildTask(overrides: Partial<Task> = {}): Task {
     last_ai_activity_at: null,
     stage_updated_at: "2026-04-24T17:30:00+08:00",
     worktree_path: null,
+    worktree_base_branch_name: "main",
     requirement_brief: null,
     auto_confirm_prd_and_execute: false,
     business_sync_original_workflow_stage: null,
@@ -42,6 +43,45 @@ assert.equal(
   }),
   true,
   "manual fixes in a changes_requested worktree should be completable"
+);
+
+assert.equal(
+  canCompleteTask({
+    taskItem: buildTask({
+      worktree_path: null,
+      workflow_stage: "backlog" as Task["workflow_stage"],
+    }),
+    taskStage: "backlog",
+    taskBranchHealth: null,
+  }),
+  false,
+  "no-worktree tasks should not expose Complete"
+);
+
+assert.equal(
+  canCompleteTask({
+    taskItem: buildTask({
+      worktree_path: "/tmp/koda-task-worktree",
+      workflow_stage: "implementation_in_progress" as Task["workflow_stage"],
+      branch_health: {
+        expected_branch_name: "task/12345678",
+        branch_exists: false,
+        worktree_exists: false,
+        manual_completion_candidate: true,
+        status_message: "Branch missing",
+      },
+    }),
+    taskStage: "implementation_in_progress",
+    taskBranchHealth: {
+      expected_branch_name: "task/12345678",
+      branch_exists: false,
+      worktree_exists: false,
+      manual_completion_candidate: true,
+      status_message: "Branch missing",
+    },
+  }),
+  true,
+  "manual completion candidates should expose Complete confirmation"
 );
 
 assert.equal(
