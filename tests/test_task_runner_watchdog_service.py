@@ -199,3 +199,68 @@ def test_watchdog_does_not_clear_active_pr_preparing_task_with_start_log(
     assert resumed_task_count_int == 0
     assert cleared_task_id_list == []
     assert resumed_task_id_list == []
+
+
+def test_watchdog_skips_test_stage_waiting_for_user_completion(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tasks parked after a lint pass should wait for Complete, not Resume."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    stale_stage_updated_at = utc_now_naive() - timedelta(minutes=10)
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Lint passed waiting for complete",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        stage_updated_at=stale_stage_updated_at,
+        worktree_path="/tmp/repo-wt-lint-passed",
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    db_session.add(
+        DevLog(
+            task_id=task_obj.id,
+            run_account_id=run_account_obj.id,
+            created_at=stale_stage_updated_at + timedelta(minutes=1),
+            text_content="✅ post-review lint 闭环完成：pre-commit 已通过。",
+            state_tag=DevLogStateTag.FIXED,
+        )
+    )
+    db_session.commit()
+
+    test_session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db_session.get_bind(),
+    )
+    monkeypatch.setattr(watchdog_service, "SessionLocal", test_session_factory)
+
+    resumed_task_id_list: list[str] = []
+    monkeypatch.setattr(
+        automation_runner,
+        "is_task_automation_running",
+        lambda _task_id_str: False,
+    )
+    monkeypatch.setattr(
+        watchdog_service,
+        "_attempt_resume_stuck_task",
+        lambda task_id_str, db_session: (
+            resumed_task_id_list.append(task_id_str) or True
+        ),
+    )
+
+    resumed_task_count_int = TaskRunnerWatchdogService.scan_and_resume_stuck_tasks()
+
+    assert resumed_task_count_int == 0
+    assert resumed_task_id_list == []

@@ -2391,7 +2391,13 @@ function App() {
 
   async function initializeDashboard(): Promise<void> {
     await loadAppConfig();
-    await Promise.all([loadDashboardData(false), loadProjectList()]);
+    await Promise.all([
+      loadDashboardData(false, { includeTaskCardMetadata: false }),
+      loadProjectList(),
+    ]);
+    void refreshTaskCardMetadata({
+      errorLabel: "Failed to load initial task card metadata:",
+    });
   }
 
   async function loadProjectList(): Promise<void> {

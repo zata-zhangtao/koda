@@ -4,12 +4,12 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 import re
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.dsl.models.dev_log import DevLog
@@ -102,6 +102,7 @@ _WAITING_USER_DISPLAY_STAGE_KEY = "waiting_user"
 _WAITING_USER_DISPLAY_STAGE_LABEL = "等待用户"
 _BRANCH_MISSING_DISPLAY_STAGE_KEY = "branch_missing"
 _BRANCH_MISSING_DISPLAY_STAGE_LABEL = "缺失分支待确认"
+_TASK_CARD_METADATA_MARKER_SCAN_LIMIT = 500
 _DESTROY_CLEANUP_INTERNAL_OUTPUT_PREFIX_LIST = [
     "Repo-local cleanup script exited successfully",
     "Repo-local cleanup script failed",
@@ -339,15 +340,49 @@ def _get_latest_requirement_change_snapshot(
     return None
 
 
+def _get_recent_task_log_text_list(
+    db_session: Session,
+    task_id_str: str,
+    *,
+    created_at_lower_bound: datetime | None = None,
+    limit: int = _TASK_CARD_METADATA_MARKER_SCAN_LIMIT,
+) -> list[str]:
+    """Fetch a bounded recent log text window for card metadata markers.
+
+    Args:
+        db_session: 数据库会话
+        task_id_str: 任务 ID
+        created_at_lower_bound: 可选的日志创建时间下界
+        limit: 最多读取的最近日志条数
+
+    Returns:
+        list[str]: 按创建时间倒序排列的最近日志正文列表
+    """
+    recent_log_query = db_session.query(DevLog.text_content).filter(
+        DevLog.task_id == task_id_str
+    )
+    if created_at_lower_bound is not None:
+        recent_log_query = recent_log_query.filter(
+            DevLog.created_at >= created_at_lower_bound
+        )
+
+    recent_log_row_list = (
+        recent_log_query.order_by(DevLog.created_at.desc(), DevLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [log_text or "" for (log_text,) in recent_log_row_list]
+
+
 def _get_latest_requirement_change_snapshot_map_by_task_id(
     db_session: Session,
     task_id_list: list[str],
 ) -> dict[str, RequirementChangeSnapshot]:
     """批量返回任务最近一条需求变更快照.
 
-    `card-metadata` 只需要需求变更摘要，不应该把任务的全部时间线都读入内存。
-    这里仅查询带有 requirement-change marker 的日志，并按时间倒序为每个任务保留
-    第一条匹配记录。
+    `card-metadata` 只需要需求变更摘要，不应该把任务的全部时间线都读入内存，
+    也不能在大日志库中对 `text_content` 做全量 LIKE 扫描。这里按任务读取最近
+    少量日志，并在应用层解析 marker；若 marker 很旧，前端会回退到任务需求摘要。
 
     Args:
         db_session: 数据库会话
@@ -360,34 +395,18 @@ def _get_latest_requirement_change_snapshot_map_by_task_id(
     if not task_id_list:
         return {}
 
-    relevant_requirement_change_filter = or_(
-        DevLog.text_content.contains(_REQUIREMENT_UPDATE_MARKER),
-        DevLog.text_content.contains(_REQUIREMENT_DELETE_MARKER),
-    )
-    relevant_requirement_change_row_list = (
-        db_session.query(
-            DevLog.task_id,
-            DevLog.text_content,
-        )
-        .filter(
-            DevLog.task_id.in_(task_id_list),
-            relevant_requirement_change_filter,
-        )
-        .order_by(DevLog.task_id.asc(), DevLog.created_at.desc(), DevLog.id.desc())
-        .all()
-    )
-
     latest_requirement_change_snapshot_map_by_task_id: dict[
         str, RequirementChangeSnapshot
     ] = {}
-    for task_id_str, log_text in relevant_requirement_change_row_list:
-        if task_id_str in latest_requirement_change_snapshot_map_by_task_id:
-            continue
-        requirement_change_snapshot = _parse_requirement_change_log(log_text)
-        if requirement_change_snapshot is not None:
-            latest_requirement_change_snapshot_map_by_task_id[task_id_str] = (
-                requirement_change_snapshot
-            )
+    for task_id_str in task_id_list:
+        recent_log_text_list = _get_recent_task_log_text_list(db_session, task_id_str)
+        for log_text in recent_log_text_list:
+            requirement_change_snapshot = _parse_requirement_change_log(log_text)
+            if requirement_change_snapshot is not None:
+                latest_requirement_change_snapshot_map_by_task_id[task_id_str] = (
+                    requirement_change_snapshot
+                )
+                break
 
     return latest_requirement_change_snapshot_map_by_task_id
 
@@ -395,16 +414,18 @@ def _get_latest_requirement_change_snapshot_map_by_task_id(
 def _get_latest_waiting_user_signal_map_by_task_id(
     db_session: Session,
     task_id_list: list[str],
+    task_stage_entry_map_by_task_id: dict[str, datetime | None] | None = None,
 ) -> dict[str, dict[str, bool | None]]:
     """批量返回任务最近一轮 review/lint 的通过信号.
 
     该接口只为任务卡片元数据服务，因此不需要把整条任务日志历史全部载入内存。
-    我们只查询与“等待用户点击 Complete”判断有关的少量标记日志，并按时间倒序
-    为每个任务提取最近一次相关结论。
+    我们按任务读取当前阶段开始后的最近少量日志，并按时间倒序为每个任务提取
+    最近一次相关结论，避免对大日志库的 `text_content` 做全量 LIKE 扫描。
 
     Args:
         db_session: 数据库会话
         task_id_list: 任务 ID 列表
+        task_stage_entry_map_by_task_id: `task_id -> 当前阶段进入时间` 映射
 
     Returns:
         dict[str, dict[str, bool | None]]: `task_id -> signal map`
@@ -419,63 +440,45 @@ def _get_latest_waiting_user_signal_map_by_task_id(
     if not task_id_list:
         return latest_signal_map_by_task_id
 
-    relevant_marker_text_list = [
-        *_SELF_REVIEW_PASSED_LOG_MARKER_LIST,
-        *_SELF_REVIEW_STARTED_LOG_MARKER_LIST,
-        *_POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST,
-        *_POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST,
-    ]
-    relevant_marker_filter = or_(
-        *(
-            DevLog.text_content.contains(marker_text)
-            for marker_text in relevant_marker_text_list
-        )
-    )
-    relevant_log_row_list = (
-        db_session.query(
-            DevLog.task_id,
-            DevLog.text_content,
-        )
-        .filter(
-            DevLog.task_id.in_(task_id_list),
-            relevant_marker_filter,
-        )
-        .order_by(DevLog.task_id.asc(), DevLog.created_at.desc(), DevLog.id.desc())
-        .all()
-    )
-
-    for task_id_str, log_text in relevant_log_row_list:
-        task_signal_map = latest_signal_map_by_task_id.setdefault(
+    stage_entry_map = task_stage_entry_map_by_task_id or {}
+    for task_id_str in task_id_list:
+        task_signal_map = latest_signal_map_by_task_id[task_id_str]
+        recent_log_text_list = _get_recent_task_log_text_list(
+            db_session,
             task_id_str,
-            {
-                "self_review_passed": None,
-                "post_review_lint_passed": None,
-            },
+            created_at_lower_bound=stage_entry_map.get(task_id_str),
         )
 
-        if task_signal_map["self_review_passed"] is None:
-            if any(
-                marker_text in log_text
-                for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST
-            ):
-                task_signal_map["self_review_passed"] = True
-            elif any(
-                marker_text in log_text
-                for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
-            ):
-                task_signal_map["self_review_passed"] = False
+        for log_text in recent_log_text_list:
+            if task_signal_map["self_review_passed"] is None:
+                if any(
+                    marker_text in log_text
+                    for marker_text in _SELF_REVIEW_PASSED_LOG_MARKER_LIST
+                ):
+                    task_signal_map["self_review_passed"] = True
+                elif any(
+                    marker_text in log_text
+                    for marker_text in _SELF_REVIEW_STARTED_LOG_MARKER_LIST
+                ):
+                    task_signal_map["self_review_passed"] = False
 
-        if task_signal_map["post_review_lint_passed"] is None:
-            if any(
-                marker_text in log_text
-                for marker_text in _POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST
+            if task_signal_map["post_review_lint_passed"] is None:
+                if any(
+                    marker_text in log_text
+                    for marker_text in _POST_REVIEW_LINT_PASSED_LOG_MARKER_LIST
+                ):
+                    task_signal_map["post_review_lint_passed"] = True
+                elif any(
+                    marker_text in log_text
+                    for marker_text in _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST
+                ):
+                    task_signal_map["post_review_lint_passed"] = False
+
+            if (
+                task_signal_map["self_review_passed"] is not None
+                and task_signal_map["post_review_lint_passed"] is not None
             ):
-                task_signal_map["post_review_lint_passed"] = True
-            elif any(
-                marker_text in log_text
-                for marker_text in _POST_REVIEW_LINT_STARTED_LOG_MARKER_LIST
-            ):
-                task_signal_map["post_review_lint_passed"] = False
+                break
 
     return latest_signal_map_by_task_id
 
@@ -1593,6 +1596,7 @@ def _build_task_card_metadata(
     *,
     ordered_task_dev_log_list: list[DevLog] | None = None,
     latest_requirement_change_snapshot: RequirementChangeSnapshot | None = None,
+    load_requirement_change_snapshot_if_missing: bool = True,
     is_task_running: bool,
     latest_self_review_passed: bool = False,
     latest_post_review_lint_passed: bool = False,
@@ -1601,13 +1605,20 @@ def _build_task_card_metadata(
 
     Args:
         task_obj: 任务对象
+        task_branch_health: 当前任务的分支健康快照
+        ordered_task_dev_log_list: 可选的已排序任务日志列表
+        latest_requirement_change_snapshot: 可选的最近需求变更快照
+        load_requirement_change_snapshot_if_missing: 缺少快照时是否允许读取完整日志
         is_task_running: 当前后台自动化是否仍在运行
 
     Returns:
         TaskCardMetadataSchema: 供左侧卡片和详情头部共用的展示元数据
     """
     resolved_latest_requirement_change_snapshot = latest_requirement_change_snapshot
-    if resolved_latest_requirement_change_snapshot is None:
+    if (
+        resolved_latest_requirement_change_snapshot is None
+        and load_requirement_change_snapshot_if_missing
+    ):
         resolved_ordered_task_dev_log_list = (
             ordered_task_dev_log_list
             if ordered_task_dev_log_list is not None
@@ -1888,6 +1899,11 @@ def list_task_card_metadata(
             WorkflowStage.TEST_IN_PROGRESS,
         }
     ]
+    waiting_user_candidate_stage_entry_map_by_task_id = {
+        task_item.id: task_item.stage_updated_at
+        for task_item in task_list
+        if task_item.id in waiting_user_candidate_task_id_list
+    }
     latest_requirement_change_snapshot_map_by_task_id = (
         _get_latest_requirement_change_snapshot_map_by_task_id(
             db_session,
@@ -1898,6 +1914,9 @@ def list_task_card_metadata(
         _get_latest_waiting_user_signal_map_by_task_id(
             db_session,
             waiting_user_candidate_task_id_list,
+            task_stage_entry_map_by_task_id=(
+                waiting_user_candidate_stage_entry_map_by_task_id
+            ),
         )
     )
     task_branch_health_map = TaskService.build_task_branch_health_map(
@@ -1921,6 +1940,7 @@ def list_task_card_metadata(
                 latest_requirement_change_snapshot=(
                     latest_requirement_change_snapshot_map_by_task_id.get(task_item.id)
                 ),
+                load_requirement_change_snapshot_if_missing=False,
                 is_task_running=is_codex_task_running(task_item.id),
                 latest_self_review_passed=bool(
                     waiting_user_signal_map["self_review_passed"]

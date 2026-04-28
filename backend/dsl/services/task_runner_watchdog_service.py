@@ -166,6 +166,53 @@ def _clear_stale_pr_preparing_runtime_flag_if_needed(task_obj: Task) -> bool:
     return True
 
 
+def _is_task_waiting_for_user_completion(task_obj: Task) -> bool:
+    """Return whether a watched task is parked for the user's Complete action.
+
+    Args:
+        task_obj: Candidate stuck task snapshot
+
+    Returns:
+        bool: True when the current self-review or lint stage has already passed
+            and the task should not be auto-resumed
+    """
+    if task_obj.workflow_stage not in {
+        WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        WorkflowStage.TEST_IN_PROGRESS,
+    }:
+        return False
+
+    import backend.dsl.api.tasks as task_api_module
+
+    db_session: Session = SessionLocal()
+    try:
+        latest_waiting_user_signal_map = (
+            task_api_module._get_latest_waiting_user_signal_map_by_task_id(
+                db_session,
+                [task_obj.id],
+                task_stage_entry_map_by_task_id={
+                    task_obj.id: task_obj.stage_updated_at,
+                },
+            )
+        )
+    finally:
+        db_session.close()
+
+    task_waiting_user_signal_map = latest_waiting_user_signal_map.get(
+        task_obj.id,
+        {
+            "self_review_passed": None,
+            "post_review_lint_passed": None,
+        },
+    )
+    if task_obj.workflow_stage == WorkflowStage.SELF_REVIEW_IN_PROGRESS:
+        return bool(task_waiting_user_signal_map["self_review_passed"])
+    if task_obj.workflow_stage == WorkflowStage.TEST_IN_PROGRESS:
+        return bool(task_waiting_user_signal_map["post_review_lint_passed"])
+
+    return False
+
+
 class TaskRunnerWatchdogService:
     """任务 Runner 看门狗服务."""
 
@@ -218,6 +265,9 @@ class TaskRunnerWatchdogService:
                 task_is_running_bool = is_task_automation_running(task_id_str)
 
             if task_is_running_bool:
+                continue
+
+            if _is_task_waiting_for_user_completion(stuck_task_obj):
                 continue
 
             prior_resume_count_int = _session_resume_counts.get(task_id_str, 0)

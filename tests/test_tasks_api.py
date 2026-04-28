@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
 from typing import Generator
@@ -1152,6 +1152,64 @@ def test_list_task_card_metadata_defaults_missing_waiting_user_markers_to_false(
     assert review_metadata.is_waiting_for_user is False
     assert lint_metadata.display_stage_key == WorkflowStage.TEST_IN_PROGRESS.value
     assert lint_metadata.is_waiting_for_user is False
+
+
+def test_list_task_card_metadata_ignores_waiting_user_markers_before_stage_entry(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card metadata should only use review/lint signals from the current stage."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    stage_entry_datetime = datetime(2026, 4, 28, 12, 0, 0)
+    review_task = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Review restarted after old pass",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.SELF_REVIEW_IN_PROGRESS,
+        stage_updated_at=stage_entry_datetime,
+    )
+    db_session.add(review_task)
+    db_session.commit()
+
+    db_session.add_all(
+        [
+            DevLog(
+                task_id=review_task.id,
+                run_account_id=run_account_obj.id,
+                created_at=stage_entry_datetime - timedelta(minutes=5),
+                text_content="AI 自检闭环完成",
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            DevLog(
+                task_id=review_task.id,
+                run_account_id=run_account_obj.id,
+                created_at=stage_entry_datetime + timedelta(minutes=1),
+                text_content="开始执行代码评审",
+                state_tag=DevLogStateTag.OPTIMIZATION,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda _task_id: False)
+
+    task_card_metadata_list = list_task_card_metadata(db_session)
+
+    assert len(task_card_metadata_list) == 1
+    assert (
+        task_card_metadata_list[0].display_stage_key
+        == WorkflowStage.SELF_REVIEW_IN_PROGRESS.value
+    )
+    assert task_card_metadata_list[0].is_waiting_for_user is False
 
 
 def test_list_task_card_metadata_does_not_require_full_task_log_history(
