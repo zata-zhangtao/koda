@@ -107,6 +107,8 @@
 7. 对远程协作任务点击 `Complete / Create PR`，确认任务分支被 push，GitHub PR 被创建或复用，任务进入 `acceptance_in_progress` 而不是直接关闭
 8. PR merge 后点击 `Sync PR`，确认任务进入 `done / CLOSED`
 9. 人为让远程任务分支在本地 sync cursor 之外前进，再点击 `Push Progress`，确认接口返回冲突而不是覆盖远程更新
+10. 在未配置 `KODA_GITHUB_TOKEN` / `GITHUB_TOKEN` / `GH_TOKEN` 但本机 `gh auth status --active` 成功的环境中重复第 7-8 步，确认 PR 创建、复用和状态同步走 `gh` CLI fallback
+11. 在未配置 token 且 `gh` 未安装或未登录的环境中点击 `Complete / Create PR`，确认错误提示同时说明 token 路径和 `gh auth login` 路径，且任务分支 push 逻辑不被误描述为需要 token
 
 ### 媒体与导出
 

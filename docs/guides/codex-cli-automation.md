@@ -82,6 +82,17 @@
 11. 若收尾成功，任务自动推进到 `done`；若在合并到任务基底分支前失败，任务回退到 `changes_requested`
 12. 若这次失败属于 Git 收尾阶段本身（例如承载任务基底分支的工作区不干净），用户修复外部 Git 状态后，可以再次打开 checklist 并点击 `Complete` 重试收尾，而不必重跑整条实现链
 
+### 远程 PR Handoff
+
+当任务绑定的项目启用了 `GitHub-backed requirement branches` 且保留 `Create PR on Complete` 时，`Complete` 会走远程 PR 模式，而不是本地 merge/cleanup 模式：
+
+1. 任务分支与 `.koda/requirements/<task_id>.json` manifest 仍通过本机 `git push` 推到项目 remote；这一步使用本地 Git 凭据，例如 SSH key 或 credential helper。
+2. PR 创建和状态同步由 `backend/dsl/remote_requirements/infrastructure/github_pull_request_adapter.py` 处理。
+3. 若服务环境配置了 `KODA_GITHUB_TOKEN`、`GITHUB_TOKEN` 或 `GH_TOKEN`，adapter 会优先通过 GitHub REST API 创建、复用和查询 PR。
+4. 若没有这些 token，adapter 会回退到本机 GitHub CLI：先验证 `gh auth status --active`，再执行 `gh pr list`、`gh pr create` 或 `gh pr view`。
+5. `Push Progress` 只提交并推送任务分支与 manifest，不创建 PR，也不需要 GitHub token 或 `gh`。
+6. 如果 token 缺失且 `gh` 未安装或未登录，PR 操作会失败并提示配置 token 或执行 `gh auth login`；远程分支 push 能力本身不受影响。
+
 ### 独立代码评审链路
 
 1. 用户直接调用 `POST /api/tasks/{task_id}/review`，或通过 schedule 的 `review_task` 动作触发 `run-now` / Cron

@@ -28,7 +28,7 @@ backend/dsl/<domain>/
 
 `backend/dsl/prd_sources/` 是该模式的首个落地模块：pending PRD 列表、选择、手动导入、路径安全、文件 staging、任务阶段推进和 auto-confirm 分流都收敛在该领域切片内；旧 `TaskService`、runner 和 PRD 文件命名/读取逻辑只通过 infrastructure adapter 复用。
 
-`backend/dsl/remote_requirements/` 承载远程需求协作：domain 层定义 `.koda/requirements/<task_id>.json` manifest、同步状态和 PR metadata；infrastructure 层隔离 Git 命令与 GitHub REST PR adapter；service 层提供建卡即建远程分支、Push Progress、远程 manifest 同步、Complete-as-PR 和 PR 状态同步。路由层只能调用这些 use case 并映射 HTTP 错误，不应直接编排 Git/GitHub 命令。
+`backend/dsl/remote_requirements/` 承载远程需求协作：domain 层定义 `.koda/requirements/<task_id>.json` manifest、同步状态和 PR metadata；infrastructure 层隔离 Git 命令与 GitHub PR adapter；service 层提供建卡即建远程分支、Push Progress、远程 manifest 同步、Complete-as-PR 和 PR 状态同步。GitHub PR adapter 在服务环境中优先使用 `KODA_GITHUB_TOKEN` / `GITHUB_TOKEN` / `GH_TOKEN` 走 REST API；没有 token 时会回退到本机已安装且已登录的 `gh` CLI。路由层只能调用这些 use case 并映射 HTTP 错误，不应直接编排 Git/GitHub 命令。
 
 ### 启动链路
 
@@ -136,9 +136,9 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 25. merge 成功后的 cleanup 不会只看 repo-local cleanup script 的退出码；系统还会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理
 26. 对启用远程需求协作的项目，创建任务会创建并 push 远程任务分支，并写入 `.koda/requirements/<task_id>.json`；后续启动任务时复用 `Task.task_branch_name`，不再重新生成第二个分支名
 27. 远程任务详情可执行 `Push Progress`，该动作提交并推送当前任务分支和 manifest，但不创建 PR，也不改变真实 workflow stage
-28. 远程 PR 模式下的 `Complete` 不执行本地 merge/cleanup；它提交、rebase、push 任务分支，创建或复用 GitHub PR，并把任务停在 `acceptance_in_progress`
+28. 远程 PR 模式下的 `Complete` 不执行本地 merge/cleanup；它提交、rebase、push 任务分支，创建或复用 GitHub PR，并把任务停在 `acceptance_in_progress`。PR 创建优先使用 token-based REST；未配置 token 时会使用 `gh pr list/create/view`，前提是本机已执行 `gh auth login`
 29. `Sync Remote` 会 fetch 项目 remote，读取匹配分支下的 manifest，并把缺失的本地卡片 materialize 回当前数据库
-30. `Sync PR` 会读取 GitHub PR 状态；PR merged 后本地任务才会进入 `done / CLOSED`
+30. `Sync PR` 会读取 GitHub PR 状态；PR merged 后本地任务才会进入 `done / CLOSED`。该状态读取同样支持 token REST 或 authenticated `gh` CLI
 
 ### 调度能力（新增）
 
@@ -198,6 +198,7 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 - `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名
 - 任何会改变 `workflow_stage` 的新逻辑，都要同步考虑 `stage_updated_at` 是否应该刷新，以及是否需要进入统一通知服务
 - 远程协作项目的任务变更要同步考虑 manifest 是否需要更新；Git/GitHub 副作用必须通过 `RemoteRequirementService` 或其 infrastructure adapter
+- 远程 PR handoff 的认证路径是 token-first：部署环境配置 `KODA_GITHUB_TOKEN`、`GITHUB_TOKEN` 或 `GH_TOKEN`；本地开发若没有 token，则确认 `gh auth status --active` 成功
 - 远程 PR 模式下不要在 `Complete` 后直接关闭任务；只有 PR 状态同步为 merged 或用户明确验收后才能收敛为 `DONE/CLOSED`
 
 ### 改媒体上传时
