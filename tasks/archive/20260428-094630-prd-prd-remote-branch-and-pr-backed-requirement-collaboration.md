@@ -558,6 +558,8 @@ Verification:
 - `cd frontend && npm run build` passed. Vite emitted the existing large chunk warning.
 - `just docs-build` passed. Material for MkDocs emitted its upstream MkDocs 2.0 warning.
 - Local dev smoke started with `just dsl-dev 8001 23457`; backend health returned 200 and frontend root returned 200 at `http://localhost:23457/`.
+- 2026-04-28 verification resume: remote requirement API/service tests were adapted to the completion checklist confirmation payload and required worktree resource policy JSON, then `uv run pytest tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py -q` passed: 20 tests.
+- 2026-04-28 verification resume: `node --experimental-strip-types --experimental-specifier-resolution=node tests/api_client.test.ts`, `cd frontend && npm run build`, `just docs-build`, `uv run ruff check tests/test_remote_requirements_api.py tests/test_remote_requirements_service.py`, and `git diff --check` passed. Vite kept the existing large chunk warning and Material for MkDocs kept its upstream MkDocs 2.0 warning.
 
 Known follow-ups:
 

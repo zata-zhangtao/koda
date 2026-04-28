@@ -284,6 +284,9 @@ def _create_remote_enabled_project(
         repo_path=str(repo_root_path),
         repo_remote_url=None,
         repo_head_commit_hash=None,
+        worktree_resource_policy_json=json.dumps(
+            {"confirmation_status": "accepted_default", "rules": []}
+        ),
         remote_requirement_management_enabled=True,
         remote_requirement_branch_prefix="task",
         remote_requirement_remote_name="origin",

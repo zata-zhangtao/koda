@@ -411,13 +411,25 @@ def test_remote_complete_route_maps_validation_errors_to_422(
         "RemoteRequirementService",
         FailingCompleteRemoteRequirementService,
     )
+    monkeypatch.setattr(
+        tasks_api.TaskCompletionChecklistService,
+        "validate_completion_confirmation",
+        staticmethod(lambda **_kwargs: object()),
+    )
 
     def _get_test_db() -> Generator[Session, None, None]:
         yield from _override_get_db(session_factory)
 
     app.dependency_overrides[get_db] = _get_test_db
     with TestClient(app) as test_client:
-        response = test_client.post(f"/api/tasks/{task_id_str}/complete")
+        response = test_client.post(
+            f"/api/tasks/{task_id_str}/complete",
+            json={
+                "checklist_mode": "complete",
+                "checklist_signature": "sha256:test",
+                "confirmed_checklist_item_ids": ["placeholder"],
+            },
+        )
     app.dependency_overrides.clear()
 
     assert response.status_code == 422
