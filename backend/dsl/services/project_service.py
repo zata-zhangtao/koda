@@ -122,6 +122,34 @@ class ProjectService:
         return build_default_project_worktree_resource_policy(repo_path_obj)
 
     @staticmethod
+    def _normalize_remote_requirement_branch_prefix(raw_prefix_str: str | None) -> str:
+        """Normalize the remote requirement branch prefix.
+
+        Args:
+            raw_prefix_str: Raw branch prefix from project settings.
+
+        Returns:
+            str: Normalized branch prefix, defaulting to ``task``.
+        """
+        normalized_prefix_str = (raw_prefix_str or "task").strip().strip("/")
+        return normalized_prefix_str or "task"
+
+    @staticmethod
+    def _normalize_optional_project_text(raw_text_str: str | None) -> str | None:
+        """Normalize optional project setting text.
+
+        Args:
+            raw_text_str: Raw optional project setting.
+
+        Returns:
+            str | None: Trimmed text, or None when blank.
+        """
+        if raw_text_str is None:
+            return None
+        normalized_text_str = raw_text_str.strip()
+        return normalized_text_str or None
+
+    @staticmethod
     def _normalize_repo_path(raw_repo_path_str: str) -> Path:
         """标准化并验证项目仓库路径.
 
@@ -501,6 +529,28 @@ class ProjectService:
             worktree_resource_policy_json=resolved_policy_schema.model_dump_json(
                 exclude_none=True
             ),
+            remote_requirement_management_enabled=(
+                project_create_schema.remote_requirement_management_enabled
+            ),
+            remote_requirement_branch_prefix=(
+                ProjectService._normalize_remote_requirement_branch_prefix(
+                    project_create_schema.remote_requirement_branch_prefix
+                )
+            ),
+            remote_requirement_remote_name=(
+                ProjectService._normalize_optional_project_text(
+                    project_create_schema.remote_requirement_remote_name
+                )
+            ),
+            github_pr_creation_enabled=(
+                project_create_schema.github_pr_creation_enabled
+            ),
+            github_repository_full_name=ProjectService._normalize_optional_project_text(
+                project_create_schema.github_repository_full_name
+            ),
+            remote_requirement_delete_branch_after_pr_merge=(
+                project_create_schema.remote_requirement_delete_branch_after_pr_merge
+            ),
             description=project_create_schema.description,
         )
 
@@ -571,6 +621,30 @@ class ProjectService:
             )
         )
         existing_project_obj.repo_path = normalized_repo_path_str
+        existing_project_obj.remote_requirement_management_enabled = (
+            project_update_schema.remote_requirement_management_enabled
+        )
+        existing_project_obj.remote_requirement_branch_prefix = (
+            ProjectService._normalize_remote_requirement_branch_prefix(
+                project_update_schema.remote_requirement_branch_prefix
+            )
+        )
+        existing_project_obj.remote_requirement_remote_name = (
+            ProjectService._normalize_optional_project_text(
+                project_update_schema.remote_requirement_remote_name
+            )
+        )
+        existing_project_obj.github_pr_creation_enabled = (
+            project_update_schema.github_pr_creation_enabled
+        )
+        existing_project_obj.github_repository_full_name = (
+            ProjectService._normalize_optional_project_text(
+                project_update_schema.github_repository_full_name
+            )
+        )
+        existing_project_obj.remote_requirement_delete_branch_after_pr_merge = (
+            project_update_schema.remote_requirement_delete_branch_after_pr_merge
+        )
         if existing_project_obj.repo_remote_url is None:
             existing_project_obj.repo_remote_url = (
                 current_repo_fingerprint_obj.normalized_remote_url

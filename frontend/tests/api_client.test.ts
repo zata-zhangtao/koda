@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { ApiClientError, taskApi } from "../src/api/client.ts";
+import { ApiClientError, projectApi, taskApi } from "../src/api/client.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -14,15 +14,33 @@ try {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       observedRequestList.push({ input, init });
-      return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({}), { status: 200 });
     },
   });
 
   await taskApi.deleteUnstarted("task-1");
+  await taskApi.pushProgress("task-1");
+  await taskApi.syncPrStatus("task-1");
+  await projectApi.syncRemoteRequirements("project-1");
 
-  assert.equal(observedRequestList.length, 1);
+  assert.equal(observedRequestList.length, 4);
   assert.equal(String(observedRequestList[0].input), "/api/tasks/task-1");
   assert.equal(observedRequestList[0].init?.method, "DELETE");
+  assert.equal(
+    String(observedRequestList[1].input),
+    "/api/tasks/task-1/push-progress",
+  );
+  assert.equal(observedRequestList[1].init?.method, "POST");
+  assert.equal(
+    String(observedRequestList[2].input),
+    "/api/tasks/task-1/sync-pr-status",
+  );
+  assert.equal(observedRequestList[2].init?.method, "POST");
+  assert.equal(
+    String(observedRequestList[3].input),
+    "/api/projects/project-1/sync-remote-requirements",
+  );
+  assert.equal(observedRequestList[3].init?.method, "POST");
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,

@@ -10,10 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.dsl.models.project import Project
+from backend.dsl.models.run_account import RunAccount
 from backend.dsl.schemas.project_schema import (
     ProjectBranchListSchema,
     ProjectCreateSchema,
     ProjectResponseSchema,
+    RemoteRequirementSyncResponseSchema,
     ProjectUpdateSchema,
 )
 from backend.dsl.worktree_resources import (
@@ -30,6 +32,8 @@ from backend.dsl.services.path_opener import (
     open_path_in_editor,
 )
 from backend.dsl.services.project_service import ProjectService
+from backend.dsl.remote_requirements.domain import RemoteRequirementError
+from backend.dsl.remote_requirements.service import RemoteRequirementService
 from utils.database import get_db
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -101,6 +105,27 @@ def _build_lightweight_policy_snapshot(
     return True, None, parsed_policy_obj
 
 
+def _get_current_run_account_id(db_session: Session) -> str:
+    """Return the active run account ID.
+
+    Args:
+        db_session: 数据库会话
+
+    Returns:
+        str: 当前活跃账户 ID
+
+    Raises:
+        HTTPException: 当没有活跃账户时返回 400
+    """
+    active_account = db_session.query(RunAccount).filter(RunAccount.is_active).first()
+    if active_account is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active run account. Please create a run account first.",
+        )
+    return active_account.id
+
+
 def _to_response(
     project_obj: Project,
     *,
@@ -140,6 +165,22 @@ def _to_response(
             else WorktreeResourcePolicyConfirmation.DEFERRED
         ),
         worktree_resource_policy=parsed_policy_obj,
+        remote_requirement_management_enabled=bool(
+            project_obj.remote_requirement_management_enabled
+        ),
+        remote_requirement_branch_prefix=(
+            project_obj.remote_requirement_branch_prefix or "task"
+        ),
+        remote_requirement_remote_name=project_obj.remote_requirement_remote_name,
+        github_pr_creation_enabled=(
+            True
+            if project_obj.github_pr_creation_enabled is None
+            else bool(project_obj.github_pr_creation_enabled)
+        ),
+        github_repository_full_name=project_obj.github_repository_full_name,
+        remote_requirement_delete_branch_after_pr_merge=bool(
+            project_obj.remote_requirement_delete_branch_after_pr_merge
+        ),
         current_repo_remote_url=consistency_snapshot.current_repo_remote_url,
         current_repo_head_commit_hash=consistency_snapshot.current_repo_head_commit_hash,
         description=project_obj.description,
@@ -377,6 +418,59 @@ def list_project_branches(
     return ProjectBranchListSchema(
         branches=local_branch_name_list,
         current_branch_name=current_branch_name_str,
+    )
+
+
+@router.post(
+    "/{project_id}/sync-remote-requirements",
+    response_model=RemoteRequirementSyncResponseSchema,
+)
+def sync_project_remote_requirements(
+    project_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> RemoteRequirementSyncResponseSchema:
+    """Fetch remote task branches and materialize local requirement cards.
+
+    Args:
+        project_id: 项目 ID
+        db_session: 数据库会话
+
+    Returns:
+        RemoteRequirementSyncResponseSchema: 同步摘要
+
+    Raises:
+        HTTPException: 项目不存在或远程协作不可用时返回错误
+    """
+    project_obj = ProjectService.get_project_by_id(db_session, project_id)
+    if not project_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    try:
+        sync_outcome = RemoteRequirementService().sync_project_remote_requirements(
+            db_session,
+            project_obj,
+            _get_current_run_account_id(db_session),
+        )
+    except RemoteRequirementError as remote_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(remote_error),
+        ) from remote_error
+
+    return RemoteRequirementSyncResponseSchema(
+        project_id=project_id,
+        imported_count=sync_outcome.imported_count,
+        updated_count=sync_outcome.updated_count,
+        skipped_count=sync_outcome.skipped_count,
+        message=(
+            "Remote requirements synced: "
+            f"{sync_outcome.imported_count} imported, "
+            f"{sync_outcome.updated_count} updated, "
+            f"{sync_outcome.skipped_count} skipped."
+        ),
     )
 
 

@@ -19,6 +19,7 @@ import type {
   ProjectWorktreeResourcePolicy,
   WorktreeResourceCandidateList,
   WorktreeResourcePreviewRequest,
+  RemoteRequirementSyncResponse,
   RunAccount,
   Task,
   TaskCardMetadata,
@@ -460,6 +461,18 @@ export const taskApi = {
       body: JSON.stringify(confirmation),
     }),
 
+  /** 提交并推送远程任务分支进度，但不创建 PR */
+  pushProgress: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/push-progress`, {
+      method: "POST",
+    }),
+
+  /** 同步远程任务关联的 GitHub PR 状态 */
+  syncPrStatus: (id: string) =>
+    fetchApi<Task>(`/tasks/${id}/sync-pr-status`, {
+      method: "POST",
+    }),
+
   /** 在检测到任务分支缺失后人工确认完成 */
   manualComplete: (id: string, confirmation: TaskCompletionConfirmation) =>
     fetchApi<Task>(`/tasks/${id}/manual-complete`, {
@@ -646,6 +659,12 @@ export const projectApi = {
     display_name: string;
     project_category?: string | null;
     repo_path: string;
+    remote_requirement_management_enabled?: boolean;
+    remote_requirement_branch_prefix?: string;
+    remote_requirement_remote_name?: string | null;
+    github_pr_creation_enabled?: boolean;
+    github_repository_full_name?: string | null;
+    remote_requirement_delete_branch_after_pr_merge?: boolean;
     description?: string | null;
     worktree_resource_policy_confirmation:
       | "accepted_default"
@@ -665,6 +684,12 @@ export const projectApi = {
       display_name: string;
       project_category?: string | null;
       repo_path: string;
+      remote_requirement_management_enabled?: boolean;
+      remote_requirement_branch_prefix?: string;
+      remote_requirement_remote_name?: string | null;
+      github_pr_creation_enabled?: boolean;
+      github_repository_full_name?: string | null;
+      remote_requirement_delete_branch_after_pr_merge?: boolean;
       description?: string | null;
       worktree_resource_policy_confirmation:
         | "accepted_default"
@@ -684,6 +709,15 @@ export const projectApi = {
   /** 列出项目本地分支 */
   listBranches: (id: string) =>
     fetchApi<ProjectBranchList>(`/projects/${id}/branches`),
+
+  /** 同步远程需求分支 manifest 到本地任务卡片 */
+  syncRemoteRequirements: (id: string) =>
+    fetchApi<RemoteRequirementSyncResponse>(
+      `/projects/${id}/sync-remote-requirements`,
+      {
+        method: "POST",
+      }
+    ),
 
   /** 删除项目 */
   delete: async (id: string) => {

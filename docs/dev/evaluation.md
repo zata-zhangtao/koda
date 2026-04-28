@@ -96,6 +96,18 @@
 20. 对已启动且处于 `Abandoned` 的任务确认仍可直接走 `Destroy`，不必先恢复
 21. 手动 merge 并删除任务分支，确认详情页进入“缺失分支待确认”；点击“确认 Complete”后同样先展示 `manual_complete` checklist，未全选不能提交，全选后 `/manual-complete` 写入 checklist confirmation 与人工完成审计日志
 
+### 远程需求分支与 PR handoff
+
+1. 在项目面板启用 `GitHub-backed requirement branches`，填写 remote 名称、分支前缀和 GitHub 仓库全名
+2. 创建绑定该项目的需求卡片，确认远程仓库出现 `task/<task_id[:8]>-<slug>` 分支
+3. 在远程分支中确认 `.koda/requirements/<task_id>.json` 存在，且包含标题、摘要、阶段、分支名和基底分支
+4. 点击“开始任务”，确认 worktree 检出的分支是 `Task.task_branch_name`，不是重新生成的新分支
+5. 在 worktree 中修改文件后点击 `Push Progress`，确认远程分支推进，且 GitHub PR 不会被创建
+6. 在另一台机器或清空本地任务记录后点击项目 `Sync Remote`，确认 manifest-backed 任务会被导入本地卡片列表
+7. 对远程协作任务点击 `Complete / Create PR`，确认任务分支被 push，GitHub PR 被创建或复用，任务进入 `acceptance_in_progress` 而不是直接关闭
+8. PR merge 后点击 `Sync PR`，确认任务进入 `done / CLOSED`
+9. 人为让远程任务分支在本地 sync cursor 之外前进，再点击 `Push Progress`，确认接口返回冲突而不是覆盖远程更新
+
 ### 媒体与导出
 
 1. 上传图片或附件

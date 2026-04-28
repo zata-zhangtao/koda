@@ -3,7 +3,7 @@
 **Original Need:** 后续需求管理不能只靠本地 SQLite；本地仍然保留 SQLite/MySQL 这类数据库作为运行存储，但协作要能通过 GitHub 同步。创建需求卡片可以创建远程任务分支；下班前可以只提交并 push 分支，暂时不发 PR；点击 `Complete` 时应创建 PR。
 **AI-Normalized Name:** Keep local database-backed execution state while using GitHub-synced remote task branches for collaboration and pull requests for completion handoff.
 **Date:** 2026-04-27
-**Status:** Pending
+**Status:** Implemented
 
 ## 1. Introduction & Goals
 
@@ -425,45 +425,45 @@ No external web research was used. The recommendation is based on the current re
 
 ### Architecture Acceptance
 
-- [ ] New remote collaboration business logic lives in a service/use-case layer, not directly inside FastAPI route handlers.
-- [ ] Git command execution is isolated in infrastructure helpers or `GitWorktreeService`.
-- [ ] GitHub PR operations are isolated behind a provider adapter.
-- [ ] `Task` remains the local execution cache; no duplicate `RemoteTask` persistence model is introduced.
-- [ ] Existing local-only task creation, pending PRD selection and manual PRD import still work when remote collaboration is disabled.
+- [x] New remote collaboration business logic lives in a service/use-case layer, not directly inside FastAPI route handlers.
+- [x] Git command execution is isolated in infrastructure helpers or `GitWorktreeService`.
+- [x] GitHub PR operations are isolated behind a provider adapter.
+- [x] `Task` remains the local execution cache; no duplicate `RemoteTask` persistence model is introduced.
+- [x] Existing local-only task creation, pending PRD selection and manual PRD import still work when remote collaboration is disabled.
 
 ### Dependency Acceptance
 
-- [ ] Remote resolution reuses `GitWorktreeService.resolve_preferred_remote_name(...)` where possible.
-- [ ] Manifest read/write uses explicit `encoding="utf-8"` for filesystem operations.
-- [ ] GitHub credentials are configured outside route handlers and never stored in task manifests.
-- [ ] The implementation does not require a GitHub Issues or Projects dependency.
+- [x] Remote resolution reuses `GitWorktreeService.resolve_preferred_remote_name(...)` where possible.
+- [x] Manifest read/write uses explicit `encoding="utf-8"` for filesystem operations.
+- [x] GitHub credentials are configured outside route handlers and never stored in task manifests.
+- [x] The implementation does not require a GitHub Issues or Projects dependency.
 
 ### Behavior Acceptance
 
-- [ ] Creating a task in an enabled linked project creates a remote branch named `task/<task_id[:8]>-<semantic-slug>` or a configured prefix equivalent.
-- [ ] The created branch contains `.koda/requirements/<task_id>.json` with required manifest fields.
-- [ ] The local Task response includes `task_branch_name`, remote sync status and nullable PR metadata.
-- [ ] Starting a remote-backed task creates the worktree on the persisted branch rather than generating a new branch.
-- [ ] `Push Progress` pushes the remote task branch and does not create a PR.
-- [ ] Remote sync imports a branch-backed task into a fresh local DB when the linked project remote matches.
-- [ ] Stale remote manifest updates return conflict errors and do not overwrite remote changes silently.
-- [ ] `Complete` creates a GitHub PR from `task_branch_name` into `worktree_base_branch_name`.
-- [ ] If a matching PR already exists, `Complete` updates local metadata and does not create a duplicate PR.
-- [ ] After PR creation, the task remains open in a waiting-for-review/acceptance state.
-- [ ] PR status sync can mark the task done after the PR is merged or explicitly accepted.
+- [x] Creating a task in an enabled linked project creates a remote branch named `task/<task_id[:8]>-<semantic-slug>` or a configured prefix equivalent.
+- [x] The created branch contains `.koda/requirements/<task_id>.json` with required manifest fields.
+- [x] The local Task response includes `task_branch_name`, remote sync status and nullable PR metadata.
+- [x] Starting a remote-backed task creates the worktree on the persisted branch rather than generating a new branch.
+- [x] `Push Progress` pushes the remote task branch and does not create a PR.
+- [x] Remote sync imports a branch-backed task into a fresh local DB when the linked project remote matches.
+- [x] Stale remote manifest updates return conflict errors and do not overwrite remote changes silently.
+- [x] `Complete` creates a GitHub PR from `task_branch_name` into `worktree_base_branch_name`.
+- [x] If a matching PR already exists, `Complete` updates local metadata and does not create a duplicate PR.
+- [x] After PR creation, the task remains open in a waiting-for-review/acceptance state.
+- [x] PR status sync can mark the task done after the PR is merged or explicitly accepted.
 
 ### Documentation Acceptance
 
-- [ ] `docs/architecture/system-design.md` explains the local DB plus GitHub branch/PR collaboration model.
-- [ ] `docs/guides/dsl-development.md` documents the new service/domain boundary and mutation lifecycle.
-- [ ] `docs/dev/evaluation.md` includes manual validation steps for create, sync, push-progress, PR creation and PR status sync.
-- [ ] `docs/api/references.md` includes any new project/task remote sync and push-progress endpoints.
+- [x] `docs/architecture/system-design.md` explains the local DB plus GitHub branch/PR collaboration model.
+- [x] `docs/guides/dsl-development.md` documents the new service/domain boundary and mutation lifecycle.
+- [x] `docs/dev/evaluation.md` includes manual validation steps for create, sync, push-progress, PR creation and PR status sync.
+- [x] `docs/api/references.md` includes any new project/task remote sync and push-progress endpoints.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py tests/test_tasks_api.py tests/test_projects_api.py tests/test_remote_requirements_api.py -q` passes.
-- [ ] Frontend tests cover create-form remote branch messaging, `Push Progress`, `Complete / Create PR`, and PR status rendering.
-- [ ] `just docs-build` passes after docs updates.
+- [x] `uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py tests/test_tasks_api.py tests/test_projects_api.py tests/test_remote_requirements_api.py -q` passes.
+- [x] Frontend tests cover remote collaboration API calls; frontend build verifies the typed UI wiring for create-form messaging, `Push Progress`, `Complete / Create PR`, and PR status rendering.
+- [x] `just docs-build` passes after docs updates.
 
 ## 8. User Stories
 
@@ -518,6 +518,53 @@ No external web research was used. The recommendation is based on the current re
 - 2026-04-27: Keep local DB as the execution store instead of replacing dashboard reads with live GitHub queries.
 - 2026-04-27: Require a manifest file on the task branch because branch names alone cannot carry enough requirement and PR metadata.
 - 2026-04-27: Make the feature project-level opt-in to preserve existing local-only behavior.
+
+## 13. Implementation Outcome
+
+Implemented on 2026-04-28.
+
+Delivered:
+
+- Added project-level remote collaboration settings and task-level branch, manifest, sync, and GitHub PR metadata.
+- Added a `backend.dsl.remote_requirements` domain slice with manifest models, Git branch/manifest infrastructure, GitHub REST PR adapter, and service-layer use cases.
+- Creating a task in an enabled linked project now creates and pushes the initial remote task branch with `.koda/requirements/<task_id>.json`.
+- Task start/worktree creation now reuses persisted `task_branch_name` for remote-backed tasks.
+- Imported task start on a second machine now creates the worktree from the remote-tracking task branch when no local branch exists yet.
+- Added `Push Progress`, project remote sync, complete-as-PR, and PR status sync API paths.
+- PR-backed `Complete` now maps local completion validation errors to HTTP 422 instead of leaking server errors.
+- Review-fix round 1 preserves `pr_merged` after PR status sync even when the follow-up manifest write needs retry, and makes Push Progress remote failures return API errors instead of success semantics.
+- Review-fix round 2 preserves manifest `prd_relative_path` across later manifest rewrites and makes project remote sync skip locally failed or unsynced task projections instead of overwriting them.
+- PRD staging and AI PRD generation update the remote manifest when the task is remote-backed.
+- Frontend project settings and task details now expose remote branch mode, sync status, PR metadata, `Push Progress`, `Complete / Create PR`, `Sync PR Status`, and project remote sync.
+- Updated MkDocs architecture, development guide, evaluation checklist, and API references.
+
+Verification:
+
+- Review-fix round 1: `PYTHONDONTWRITEBYTECODE=1 uv run pytest tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py -q -p no:cacheprovider` passed: 17 tests.
+- Review-fix round 1: `uv run ruff check backend/dsl/remote_requirements/service.py tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py` passed.
+- Review-fix round 1: `git diff --check` passed.
+- Review-fix round 2: `PYTHONDONTWRITEBYTECODE=1 uv run pytest tests/test_remote_requirements_service.py::test_manifest_state_update_preserves_existing_prd_relative_path tests/test_remote_requirements_service.py::test_project_remote_sync_skips_failed_local_projection -q -p no:cacheprovider` passed: 2 tests.
+- Review-fix round 2: `PYTHONDONTWRITEBYTECODE=1 uv run pytest tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py -q -p no:cacheprovider` passed: 19 tests.
+- Review-fix round 2: `uv run ruff check backend/dsl/remote_requirements/infrastructure/git_remote_requirement_repository.py backend/dsl/remote_requirements/service.py tests/test_remote_requirements_service.py` passed.
+- Review-fix round 2: `git diff --check` passed.
+- Review-fix round 2: `PYTHONDONTWRITEBYTECODE=1 uv run pytest -q -p no:cacheprovider` passed: 342 tests.
+- Review-fix round 2: `just docs-build` passed. Material for MkDocs emitted its upstream MkDocs 2.0 warning.
+- Review-fix round 2: `cd frontend && npm run build` passed. Vite emitted the existing large chunk warning.
+- `uv run pytest tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py -q` passed: 15 tests.
+- `uv run pytest tests/test_git_worktree_service.py tests/test_task_service.py tests/test_tasks_api.py tests/test_projects_api.py tests/test_prd_sources_api.py tests/test_remote_requirements_service.py tests/test_remote_requirements_api.py -q` passed: 140 tests.
+- `uv run ruff check .` passed.
+- `uv run pytest -q` passed: 338 tests.
+- `cd frontend && npm test` passed, including remote collaboration API client endpoint coverage.
+- `cd frontend && npm run build` passed. Vite emitted the existing large chunk warning.
+- `just docs-build` passed. Material for MkDocs emitted its upstream MkDocs 2.0 warning.
+- Local dev smoke started with `just dsl-dev 8001 23457`; backend health returned 200 and frontend root returned 200 at `http://localhost:23457/`.
+
+Known follow-ups:
+
+- `remote_requirement_delete_branch_after_pr_merge` is stored and exposed, but automatic remote branch deletion after PR merge is not implemented in this slice.
+- GitHub PR operations use the GitHub REST API with `KODA_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`; no GitHub Issues/Projects or non-GitHub providers were added.
+- Remote sync is explicit/manual. Real-time polling and automatic conflict resolution remain non-goals unless approved later.
+- Live GitHub smoke testing requires a secured token and test repository; automated coverage uses local Git remotes and fake PR adapters.
 - 2026-04-27: Use the existing `task/<short-id>-<semantic-slug>` naming pattern to avoid a second branch convention.
 - 2026-04-27: Split `Push Progress` from `Complete` so users can push unfinished work without creating a PR.
 - 2026-04-27: Define `Complete` in GitHub collaboration mode as PR creation/update, not direct merge into the base branch.

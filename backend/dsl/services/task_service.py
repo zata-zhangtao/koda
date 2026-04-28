@@ -201,40 +201,47 @@ class TaskService:
             WorktreeBranchNamingService,
         )
 
-        recent_log_row_list: list[tuple[str]] = (
-            db_session.query(DevLog.text_content)
-            .filter(DevLog.task_id == task_obj.id)
-            .order_by(DevLog.created_at.desc())
-            .limit(3)
-            .all()
-        )
-        recent_log_text_list = [
-            recent_log_text_str
-            for (recent_log_text_str,) in recent_log_row_list
-            if recent_log_text_str
-        ]
-        branch_naming_result_obj = (
-            WorktreeBranchNamingService.build_task_branch_naming_result(
-                task_id_str=task_obj.id,
-                task_title_str=task_obj.task_title,
-                requirement_brief_str=task_obj.requirement_brief,
-                recent_context_text_list=recent_log_text_list,
+        if task_obj.task_branch_name:
+            task_branch_name_str = task_obj.task_branch_name
+            branch_naming_source_str = "persisted_task_branch_name"
+        else:
+            recent_log_row_list: list[tuple[str]] = (
+                db_session.query(DevLog.text_content)
+                .filter(DevLog.task_id == task_obj.id)
+                .order_by(DevLog.created_at.desc())
+                .limit(3)
+                .all()
             )
-        )
+            recent_log_text_list = [
+                recent_log_text_str
+                for (recent_log_text_str,) in recent_log_row_list
+                if recent_log_text_str
+            ]
+            branch_naming_result_obj = (
+                WorktreeBranchNamingService.build_task_branch_naming_result(
+                    task_id_str=task_obj.id,
+                    task_title_str=task_obj.task_title,
+                    requirement_brief_str=task_obj.requirement_brief,
+                    recent_context_text_list=recent_log_text_list,
+                )
+            )
+            task_branch_name_str = branch_naming_result_obj.branch_name_str
+            branch_naming_source_str = branch_naming_result_obj.naming_source_str
         created_worktree_path = GitWorktreeService.create_task_worktree(
             repo_root_path=repo_path_obj,
             task_id=task_obj.id,
-            task_branch_name_str=branch_naming_result_obj.branch_name_str,
+            task_branch_name_str=task_branch_name_str,
             base_branch_name_str=base_branch_name_str,
             project_worktree_resource_policy=project_policy_obj,
         )
         task_obj.worktree_path = str(created_worktree_path)
         task_obj.worktree_base_branch_name = base_branch_name_str
+        task_obj.task_branch_name = task_branch_name_str
         logger.info(
             f"Task {task_obj.id[:8]}... worktree created: {created_worktree_path} "
-            f"(branch: {branch_naming_result_obj.branch_name_str}, "
+            f"(branch: {task_branch_name_str}, "
             f"base_branch: {base_branch_name_str}, "
-            f"branch_naming_source: {branch_naming_result_obj.naming_source_str})"
+            f"branch_naming_source: {branch_naming_source_str})"
         )
 
     @staticmethod
@@ -334,8 +341,8 @@ class TaskService:
         from backend.dsl.services.git_worktree_service import GitWorktreeService
 
         resolved_linked_project_obj = linked_project_obj or task_obj.project
-        canonical_task_branch_name_str = GitWorktreeService.build_task_branch_name(
-            task_obj.id
+        canonical_task_branch_name_str = task_obj.task_branch_name or (
+            GitWorktreeService.build_task_branch_name(task_obj.id)
         )
         expected_branch_name_str = canonical_task_branch_name_str
         has_entered_worktree_backed_git_flow_bool = (
@@ -366,12 +373,25 @@ class TaskService:
             else:
                 branch_status_message_str = "当前无法定位可检查的本地 Git 仓库。"
         else:
-            matching_task_branch_name_list = (
-                GitWorktreeService.list_local_task_branch_names(
-                    branch_probe_working_tree_path,
-                    task_obj.id,
+            if task_obj.task_branch_name:
+                persisted_branch_exists_bool = (
+                    GitWorktreeService.check_local_branch_exists(
+                        branch_probe_working_tree_path,
+                        task_obj.task_branch_name,
+                    )
                 )
-            )
+                matching_task_branch_name_list = (
+                    [task_obj.task_branch_name]
+                    if persisted_branch_exists_bool is True
+                    else ([] if persisted_branch_exists_bool is False else None)
+                )
+            else:
+                matching_task_branch_name_list = (
+                    GitWorktreeService.list_local_task_branch_names(
+                        branch_probe_working_tree_path,
+                        task_obj.id,
+                    )
+                )
             if matching_task_branch_name_list is None:
                 branch_exists_bool = None
             else:
@@ -555,6 +575,36 @@ class TaskService:
         )
 
     @staticmethod
+    def _sync_remote_requirement_manifest_after_task_mutation(
+        db_session: Session,
+        task_obj: Task,
+        commit_message_text: str,
+    ) -> Task:
+        """Best-effort sync of a remote-backed task manifest after DB mutation.
+
+        Args:
+            db_session: Database session.
+            task_obj: Mutated task object.
+            commit_message_text: Commit message for the manifest-only update.
+
+        Returns:
+            Task: Refreshed task object.
+        """
+        if not task_obj.task_branch_name:
+            return task_obj
+
+        from backend.dsl.remote_requirements.service import RemoteRequirementService
+
+        synced_task_obj = (
+            RemoteRequirementService().update_manifest_after_task_state_change(
+                db_session,
+                task_obj.id,
+                commit_message_text=commit_message_text,
+            )
+        )
+        return synced_task_obj or task_obj
+
+    @staticmethod
     def create_task(
         db_session: Session,
         task_create_schema: TaskCreateSchema,
@@ -574,6 +624,7 @@ class TaskService:
             ValueError: 当关联的 Project 不存在时
         """
         normalized_project_id: str | None = None
+        linked_project_obj: "Project | None" = None
         normalized_worktree_base_branch_name_str = (
             TaskService._normalize_worktree_base_branch_name(
                 task_create_schema.worktree_base_branch_name
@@ -613,6 +664,24 @@ class TaskService:
         db_session.add(new_task)
         db_session.commit()
         db_session.refresh(new_task)
+
+        if linked_project_obj is not None:
+            from backend.dsl.remote_requirements.service import (
+                RemoteRequirementService,
+            )
+
+            if RemoteRequirementService.is_project_remote_requirement_enabled(
+                linked_project_obj
+            ):
+                try:
+                    new_task = RemoteRequirementService().create_remote_branch_for_task(
+                        db_session,
+                        new_task,
+                        linked_project_obj,
+                    )
+                except ValueError:
+                    db_session.refresh(new_task)
+                    raise
 
         logger.info(f"Created Task: {new_task.id[:8]}... - {new_task.task_title}")
         return new_task
@@ -747,6 +816,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} status",
+        )
 
         logger.info(
             f"Updated Task {task_id[:8]}... status to {task_obj.lifecycle_status.value}"
@@ -858,6 +932,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} stage",
+        )
 
         logger.info(
             f"Task {task_id[:8]}... stage: {previous_stage_value} → {task_obj.workflow_stage.value}"
@@ -903,6 +982,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} start",
+        )
 
         logger.info(f"Task {task_id[:8]}... started → prd_generating")
         return task_obj
@@ -955,6 +1039,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} PRD regeneration",
+        )
 
         logger.info(
             f"Task {task_id[:8]}... PRD regeneration requested → prd_generating"
@@ -1010,6 +1099,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} execution",
+        )
 
         logger.info(
             f"Task {task_id[:8]}... execution started → implementation_in_progress"
@@ -1213,6 +1307,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} details",
+        )
 
         logger.info(f"Updated Task {task_id[:8]}... content")
         return task_obj
@@ -1263,6 +1362,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} destroy",
+        )
 
         logger.info(f"Destroyed Task {task_id[:8]}... with recorded reason")
         return task_obj
@@ -1305,6 +1409,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} restore",
+        )
 
         logger.info(
             "Restored Task %s... from abandoned history to %s",
@@ -1413,6 +1522,11 @@ class TaskService:
 
         db_session.commit()
         db_session.refresh(task_obj)
+        task_obj = TaskService._sync_remote_requirement_manifest_after_task_mutation(
+            db_session,
+            task_obj,
+            f"chore(koda): sync requirement {task_obj.id[:8]} manual completion",
+        )
 
         logger.info(
             "Task %s... manually completed after missing-branch confirmation",

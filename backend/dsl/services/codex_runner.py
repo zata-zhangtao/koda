@@ -2697,6 +2697,39 @@ def _advance_stage_in_db(task_id_str: str, next_stage_value: str) -> None:
         db_session.close()
 
 
+def _update_remote_requirement_manifest_after_prd_generation(
+    task_id_str: str,
+    work_dir_path: Path,
+    prd_file_path: Path,
+) -> None:
+    """Update a remote requirement manifest after AI PRD generation.
+
+    Args:
+        task_id_str: Task UUID.
+        work_dir_path: Workspace directory containing the PRD.
+        prd_file_path: Generated PRD file path.
+    """
+    from backend.dsl.remote_requirements.service import RemoteRequirementService
+
+    db_session = SessionLocal()
+    try:
+        prd_relative_path_str = os.path.relpath(prd_file_path, work_dir_path)
+        RemoteRequirementService().update_manifest_after_prd_staging(
+            db_session,
+            task_id_str,
+            prd_relative_path_str,
+        )
+    except Exception as manifest_update_error:
+        logger.warning(
+            "Failed to update remote requirement manifest after PRD generation for task %s...: %s",
+            task_id_str[:8],
+            manifest_update_error,
+        )
+        db_session.rollback()
+    finally:
+        db_session.close()
+
+
 def _get_task_auto_confirm_prd_and_execute_bool(task_id_str: str) -> bool:
     """读取任务级自动确认 PRD 并执行策略.
 
@@ -3286,6 +3319,12 @@ async def run_codex_prd(
             _capture_planning_artifact_snapshot_in_db,
             task_id_str,
             work_dir_path,
+        )
+        await asyncio.to_thread(
+            _update_remote_requirement_manifest_after_prd_generation,
+            task_id_str,
+            work_dir_path,
+            prd_file_correction_result.resolved_file_path,
         )
         logger.info(
             f"Task {task_id_str[:8]}... PRD generated → prd_waiting_confirmation"

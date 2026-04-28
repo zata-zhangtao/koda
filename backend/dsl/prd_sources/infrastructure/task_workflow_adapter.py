@@ -24,6 +24,7 @@ from backend.dsl.prd_sources.domain.models import (
     StagedPrdDocument,
 )
 from backend.dsl.schemas.task_schema import TaskCreateSchema
+from backend.dsl.remote_requirements.service import RemoteRequirementService
 from backend.dsl.services.automation_runner import (
     is_task_automation_running,
     register_task_background_activity,
@@ -221,6 +222,13 @@ class SqlAlchemyTaskWorkflowAdapter:
         task_obj.lifecycle_status = TaskLifecycleStatus.OPEN
         TaskService._clear_business_sync_restore_markers(task_obj)
         self._db_session.commit()
+        self._db_session.refresh(task_obj)
+
+        RemoteRequirementService().update_manifest_after_prd_staging(
+            self._db_session,
+            task_obj.id,
+            staged_prd_document.relative_path_str,
+        )
         self._db_session.refresh(task_obj)
 
         if not bool(task_obj.auto_confirm_prd_and_execute):

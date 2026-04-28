@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utils.database import Base
@@ -44,6 +44,16 @@ class Task(Base):
         last_ai_activity_at (datetime | None): 最近一次 Codex 自动化输出写入时间
         worktree_path (str | None): codex 执行时创建的 git worktree 绝对路径
         worktree_base_branch_name (str): 创建任务 worktree 与完成合并时使用的基底分支
+        task_branch_name (str | None): 远程协作或 worktree 使用的真实任务分支名
+        remote_requirement_manifest_path (str | None): 远程需求 manifest 相对路径
+        remote_requirement_synced_commit_hash (str | None): 最近同步到远程的任务分支 commit
+        remote_requirement_sync_status (str | None): 远程协作同步状态
+        remote_requirement_last_error (str | None): 最近一次远程协作失败原因
+        remote_requirement_last_synced_at (datetime | None): 最近一次远程协作同步时间
+        github_pr_url (str | None): Complete 后关联的 GitHub PR URL
+        github_pr_number (int | None): Complete 后关联的 GitHub PR 编号
+        github_pr_state (str | None): Complete 后关联的 GitHub PR 状态
+        last_progress_pushed_at (datetime | None): 最近一次 Push Progress 时间
         auto_confirm_prd_and_execute (bool): PRD 生成后是否自动确认并直接进入执行
         business_sync_original_workflow_stage (str | None): 业务同步恢复前的原始阶段快照
         business_sync_original_lifecycle_status (str | None): 业务同步恢复前的原始生命周期快照
@@ -97,6 +107,46 @@ class Task(Base):
         default="main",
         server_default="main",
         nullable=False,
+    )
+    task_branch_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    remote_requirement_manifest_path: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    remote_requirement_synced_commit_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    remote_requirement_sync_status: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    remote_requirement_last_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    remote_requirement_last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    github_pr_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    github_pr_number: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    github_pr_state: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    last_progress_pushed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
     requirement_brief: Mapped[str | None] = mapped_column(
         String(TASK_REQUIREMENT_BRIEF_MAX_LENGTH),

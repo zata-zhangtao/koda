@@ -406,6 +406,23 @@ img {
   font-weight: 800;
 }
 
+.devflow-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--devflow-text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.devflow-checkbox-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--devflow-accent);
+  flex: 0 0 auto;
+}
+
 .devflow-create-panel__composer {
   position: relative;
   margin-top: 14px;

@@ -63,6 +63,46 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
         "Migration: added worktree_base_branch_name column to tasks",
     ),
     (
+        "ALTER TABLE tasks ADD COLUMN task_branch_name VARCHAR(255)",
+        "Migration: added task_branch_name column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN remote_requirement_manifest_path VARCHAR(500)",
+        "Migration: added remote_requirement_manifest_path column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN remote_requirement_synced_commit_hash VARCHAR(64)",
+        "Migration: added remote_requirement_synced_commit_hash column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN remote_requirement_sync_status VARCHAR(64)",
+        "Migration: added remote_requirement_sync_status column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN remote_requirement_last_error TEXT",
+        "Migration: added remote_requirement_last_error column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN remote_requirement_last_synced_at DATETIME",
+        "Migration: added remote_requirement_last_synced_at column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN github_pr_url VARCHAR(500)",
+        "Migration: added github_pr_url column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN github_pr_number INTEGER",
+        "Migration: added github_pr_number column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN github_pr_state VARCHAR(64)",
+        "Migration: added github_pr_state column to tasks",
+    ),
+    (
+        "ALTER TABLE tasks ADD COLUMN last_progress_pushed_at DATETIME",
+        "Migration: added last_progress_pushed_at column to tasks",
+    ),
+    (
         "ALTER TABLE projects ADD COLUMN repo_remote_url VARCHAR(500)",
         "Migration: added repo_remote_url column to projects",
     ),
@@ -77,6 +117,34 @@ _INCREMENTAL_SCHEMA_PATCHES: tuple[tuple[str, str], ...] = (
     (
         "ALTER TABLE projects ADD COLUMN worktree_resource_policy_json TEXT",
         "Migration: added worktree_resource_policy_json column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN remote_requirement_management_enabled "
+        "BOOLEAN NOT NULL DEFAULT 0",
+        "Migration: added remote_requirement_management_enabled column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN remote_requirement_branch_prefix "
+        "VARCHAR(80) NOT NULL DEFAULT 'task'",
+        "Migration: added remote_requirement_branch_prefix column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN remote_requirement_remote_name VARCHAR(120)",
+        "Migration: added remote_requirement_remote_name column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN github_pr_creation_enabled "
+        "BOOLEAN NOT NULL DEFAULT 1",
+        "Migration: added github_pr_creation_enabled column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN github_repository_full_name VARCHAR(255)",
+        "Migration: added github_repository_full_name column to projects",
+    ),
+    (
+        "ALTER TABLE projects ADD COLUMN remote_requirement_delete_branch_after_pr_merge "
+        "BOOLEAN NOT NULL DEFAULT 0",
+        "Migration: added remote_requirement_delete_branch_after_pr_merge column to projects",
     ),
     (
         "CREATE INDEX IF NOT EXISTS idx_tasks_run_account_created_at "

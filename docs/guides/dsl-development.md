@@ -28,6 +28,8 @@ backend/dsl/<domain>/
 
 `backend/dsl/prd_sources/` 是该模式的首个落地模块：pending PRD 列表、选择、手动导入、路径安全、文件 staging、任务阶段推进和 auto-confirm 分流都收敛在该领域切片内；旧 `TaskService`、runner 和 PRD 文件命名/读取逻辑只通过 infrastructure adapter 复用。
 
+`backend/dsl/remote_requirements/` 承载远程需求协作：domain 层定义 `.koda/requirements/<task_id>.json` manifest、同步状态和 PR metadata；infrastructure 层隔离 Git 命令与 GitHub REST PR adapter；service 层提供建卡即建远程分支、Push Progress、远程 manifest 同步、Complete-as-PR 和 PR 状态同步。路由层只能调用这些 use case 并映射 HTTP 错误，不应直接编排 Git/GitHub 命令。
+
 ### 启动链路
 
 1. `main.py` 调用 `uvicorn.run("backend.dsl.app:app", ...)`
@@ -46,6 +48,7 @@ backend/dsl/<domain>/
 - `backend/dsl/<domain>/domain/`：负责纯业务规则，不依赖 FastAPI、SQLAlchemy、真实文件系统或前端类型
 - `backend/dsl/<domain>/infrastructure/`：负责数据库、文件系统、CLI runner、WebDAV、邮件等外部系统适配
 - `backend/dsl/services/`：历史服务层，新增能力应通过 adapter 复用而不是继续平铺扩张
+- `backend/dsl/remote_requirements/`：远程需求分支与 PR handoff 领域切片
 - `backend/dsl/models/`：定义数据库实体
 - `backend/dsl/schemas/`：定义请求与响应模型
 - 任务调度约定：自动触发统一复用既有 `start_task` / `resume_task` / `review_task` 路由逻辑；其中 `review_task` 只写日志，不改变任务阶段
@@ -131,6 +134,11 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 23. 对 worktree-backed 的 `changes_requested` 任务，前端会恢复普通 `Complete` CTA；用户修复实现、自检、lint 或 Git 环境问题后可以直接重试收尾，而不必回到 `execute` 重跑实现链
 24. `pr_preparing` 在同步任务的 worktree 基底分支时会优先解析该分支配置的 remote；如果没有显式配置，则回退到仓库唯一 remote，再回退到 `origin` / `zata`，避免因 remote 名称与仓库实际配置不一致而误报
 25. merge 成功后的 cleanup 不会只看 repo-local cleanup script 的退出码；系统还会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理
+26. 对启用远程需求协作的项目，创建任务会创建并 push 远程任务分支，并写入 `.koda/requirements/<task_id>.json`；后续启动任务时复用 `Task.task_branch_name`，不再重新生成第二个分支名
+27. 远程任务详情可执行 `Push Progress`，该动作提交并推送当前任务分支和 manifest，但不创建 PR，也不改变真实 workflow stage
+28. 远程 PR 模式下的 `Complete` 不执行本地 merge/cleanup；它提交、rebase、push 任务分支，创建或复用 GitHub PR，并把任务停在 `acceptance_in_progress`
+29. `Sync Remote` 会 fetch 项目 remote，读取匹配分支下的 manifest，并把缺失的本地卡片 materialize 回当前数据库
+30. `Sync PR` 会读取 GitHub PR 状态；PR merged 后本地任务才会进入 `done / CLOSED`
 
 ### 调度能力（新增）
 
@@ -146,15 +154,15 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 8. 前端创建 `once` 规则时会把 `datetime-local` 输入转换为 UTC ISO 并携带浏览器时区，避免与后端默认 `APP_TIMEZONE` 不一致导致触发时间偏移
 9. `review_task` 会在任务 worktree 或关联项目仓库上执行一次独立 review-only 评审；结论写回 `DevLog`，但不会自动回改，也不会推进到 lint / Complete
 
-### 已建模但尚未自动化闭环的阶段
+### 已建模但尚未完全自动化闭环的阶段
 
-以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示，但当前仓库尚未完整实现自动推进器：
+以下阶段已经在 `WorkflowStage` 中定义，也能在前端显示；其中 `pr_preparing` 已服务于本地 merge 收尾和远程 PR handoff，`acceptance_in_progress` 已可承载 PR 等待评审状态，但仍没有完整的外部验收自动推进器：
 
 - `pr_preparing`
 - `acceptance_in_progress`
 - `changes_requested` 到后续更细粒度阶段的闭环
 
-这部分要理解为“产品路线已经确定，自动化编排还在建设中”。
+这部分要理解为“主状态路线已经确定，外部验收闭环仍在建设中”。
 
 ## 数据与文件
 
@@ -164,6 +172,7 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 - 应用日志：`logs/app.log`
 - 任务实时输出：`/tmp/koda-<task短ID>.log`
 - 任务内独立问答：`task_qa_messages` 表（由 `utils.database.ensure_database_schema_ready()` 自动创建）
+- 远程需求 manifest：启用远程协作的任务分支内 `.koda/requirements/<task_id>.json`
 
 如果出现“数据库有记录但界面没刷新”的情况，优先检查：
 
@@ -188,6 +197,8 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 - 文档中要同步说明哪些阶段已自动化，哪些只是占位
 - `changes_requested` 现在代表“AI 无法自行完成闭环后的人工介入态”，不要再把它当成第一次 self-review 失败的直接别名
 - 任何会改变 `workflow_stage` 的新逻辑，都要同步考虑 `stage_updated_at` 是否应该刷新，以及是否需要进入统一通知服务
+- 远程协作项目的任务变更要同步考虑 manifest 是否需要更新；Git/GitHub 副作用必须通过 `RemoteRequirementService` 或其 infrastructure adapter
+- 远程 PR 模式下不要在 `Complete` 后直接关闭任务；只有 PR 状态同步为 merged 或用户明确验收后才能收敛为 `DONE/CLOSED`
 
 ### 改媒体上传时
 

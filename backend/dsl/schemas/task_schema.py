@@ -324,6 +324,16 @@ class TaskResponseSchema(DSLResponseSchema):
         stage_updated_at: 最近一次进入当前工作流阶段的时间
         last_ai_activity_at: 最近一次 Codex 自动化输出写入时间
         worktree_base_branch_name: 创建任务 worktree 与完成合并时使用的基底分支
+        task_branch_name: 远程协作或 worktree 使用的真实任务分支名
+        remote_requirement_manifest_path: 远程需求 manifest 相对路径
+        remote_requirement_synced_commit_hash: 最近同步到远程的任务分支 commit
+        remote_requirement_sync_status: 远程协作同步状态
+        remote_requirement_last_error: 最近一次远程协作失败原因
+        remote_requirement_last_synced_at: 最近一次远程协作同步时间
+        github_pr_url: Complete 后关联的 GitHub PR URL
+        github_pr_number: Complete 后关联的 GitHub PR 编号
+        github_pr_state: Complete 后关联的 GitHub PR 状态
+        last_progress_pushed_at: 最近一次 Push Progress 时间
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
         business_sync_original_workflow_stage: 最近一次业务同步恢复前的原始阶段快照
         business_sync_original_lifecycle_status: 最近一次业务同步恢复前的原始生命周期快照
@@ -361,6 +371,46 @@ class TaskResponseSchema(DSLResponseSchema):
     worktree_base_branch_name: str = Field(
         default="main",
         description="创建任务 worktree 与完成合并时使用的基底分支",
+    )
+    task_branch_name: str | None = Field(
+        None,
+        description="远程协作或 worktree 使用的真实任务分支名",
+    )
+    remote_requirement_manifest_path: str | None = Field(
+        None,
+        description="远程需求 manifest 相对路径",
+    )
+    remote_requirement_synced_commit_hash: str | None = Field(
+        None,
+        description="最近同步到远程的任务分支 commit",
+    )
+    remote_requirement_sync_status: str | None = Field(
+        None,
+        description="远程协作同步状态",
+    )
+    remote_requirement_last_error: str | None = Field(
+        None,
+        description="最近一次远程协作失败原因",
+    )
+    remote_requirement_last_synced_at: datetime | None = Field(
+        None,
+        description="最近一次远程协作同步时间",
+    )
+    github_pr_url: str | None = Field(
+        None,
+        description="Complete 后关联的 GitHub PR URL",
+    )
+    github_pr_number: int | None = Field(
+        None,
+        description="Complete 后关联的 GitHub PR 编号",
+    )
+    github_pr_state: str | None = Field(
+        None,
+        description="Complete 后关联的 GitHub PR 状态",
+    )
+    last_progress_pushed_at: datetime | None = Field(
+        None,
+        description="最近一次 Push Progress 时间",
     )
     requirement_brief: str | None = Field(None, description="需求描述文本")
     auto_confirm_prd_and_execute: bool = Field(

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from backend.dsl.models.dev_log import DevLog
 from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, WorkflowStage
+from backend.dsl.models.project import Project
 from backend.dsl.models.task import TASK_REQUIREMENT_BRIEF_MAX_LENGTH, Task
 from backend.dsl.models.task_reference_link import TaskReferenceLink
 from backend.dsl.schemas.dev_log_schema import DevLogCreateSchema
@@ -74,6 +75,11 @@ from backend.dsl.services.terminal_launcher import (
     open_log_tail_terminal,
 )
 from backend.dsl.services.task_service import TaskService
+from backend.dsl.remote_requirements.domain import (
+    RemoteRequirementConflictError,
+    RemoteRequirementError,
+)
+from backend.dsl.remote_requirements.service import RemoteRequirementService
 from utils.database import get_db
 from utils.logger import logger
 from utils.settings import config
@@ -1787,6 +1793,24 @@ def _hydrate_task_response(
     return task_obj
 
 
+def _resolve_linked_project_for_task(
+    db_session: Session,
+    task_obj: Task | None,
+) -> Project | None:
+    """Resolve the project linked to a task.
+
+    Args:
+        db_session: 数据库会话
+        task_obj: 任务对象
+
+    Returns:
+        Project | None: 关联项目；无关联或项目不存在时返回 None
+    """
+    if task_obj is None or not task_obj.project_id:
+        return None
+    return db_session.query(Project).filter(Project.id == task_obj.project_id).first()
+
+
 def _build_manual_branch_missing_completion_log_text(
     task_branch_health: TaskBranchHealthSchema,
 ) -> str:
@@ -2659,6 +2683,65 @@ def get_task_completion_checklist(
     return checklist_response
 
 
+@router.post("/{task_id}/push-progress", response_model=TaskResponseSchema)
+def push_task_progress(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """Commit and push a remote-backed task branch without creating a PR.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已更新远程同步状态的任务对象
+
+    Raises:
+        HTTPException: 当任务不存在、后台运行中、远程分支冲突或远程配置不可用时返回错误
+    """
+    if is_codex_task_running(task_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task automation is already running for this task.",
+        )
+
+    try:
+        pushed_task = RemoteRequirementService().push_progress(db_session, task_id)
+    except RemoteRequirementConflictError as remote_conflict_error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(remote_conflict_error),
+        ) from remote_conflict_error
+    except RemoteRequirementError as remote_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(remote_error),
+        ) from remote_error
+
+    if pushed_task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+
+    LogService.create_log(
+        db_session,
+        DevLogCreateSchema(
+            task_id=task_id,
+            text_content=(
+                "⬆️ 已执行 Push Progress：当前任务分支已提交并推送到远程，"
+                "不会创建或更新 PR。\n"
+                f"- Branch: `{pushed_task.task_branch_name}`\n"
+                f"- Commit: `{pushed_task.remote_requirement_synced_commit_hash}`"
+            ),
+            state_tag=DevLogStateTag.TRANSFERRED,
+        ),
+        pushed_task.run_account_id,
+    )
+    return _hydrate_task_response(pushed_task, db_session=db_session)
+
+
 @router.post("/{task_id}/complete", response_model=TaskResponseSchema)
 def complete_task(
     task_id: str,
@@ -2730,6 +2813,55 @@ def complete_task(
         source_task is not None
         and source_task.workflow_stage == WorkflowStage.CHANGES_REQUESTED
     )
+    source_project = _resolve_linked_project_for_task(db_session, source_task)
+    if RemoteRequirementService.should_use_pull_request_completion(
+        source_project,
+        source_task,
+    ):
+        try:
+            completion_task = RemoteRequirementService().complete_as_pull_request(
+                db_session,
+                task_id,
+                allow_complete_from_changes_requested_bool=(
+                    allow_complete_from_changes_requested_bool
+                ),
+            )
+        except RemoteRequirementConflictError as remote_conflict_error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(remote_conflict_error),
+            ) from remote_conflict_error
+        except RemoteRequirementError as remote_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(remote_error),
+            ) from remote_error
+        except ValueError as completion_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(completion_error),
+            ) from completion_error
+
+        if not completion_task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task with id {task_id} not found",
+            )
+
+        LogService.create_log(
+            db_session,
+            DevLogCreateSchema(
+                task_id=task_id,
+                text_content=(
+                    "✅ Complete 已创建或复用 GitHub PR，任务进入等待评审/验收阶段。\n"
+                    f"- Branch: `{completion_task.task_branch_name}`\n"
+                    f"- PR: {completion_task.github_pr_url or 'unknown'}"
+                ),
+                state_tag=DevLogStateTag.FIXED,
+            ),
+            completion_task.run_account_id,
+        )
+        return _hydrate_task_response(completion_task, db_session=db_session)
 
     try:
         completion_task = TaskService.prepare_task_completion(
@@ -2925,6 +3057,42 @@ def manual_complete_task(
         task_obj,
     )
     return _hydrate_task_response(manually_completed_task, db_session=db_session)
+
+
+@router.post("/{task_id}/sync-pr-status", response_model=TaskResponseSchema)
+def sync_task_pull_request_status(
+    task_id: str,
+    db_session: Annotated[Session, Depends(get_db)],
+) -> Task:
+    """Sync GitHub PR state for a remote-backed task.
+
+    Args:
+        task_id: 任务 ID
+        db_session: 数据库会话
+
+    Returns:
+        Task: 已更新 PR 状态的任务
+
+    Raises:
+        HTTPException: 当任务不存在、远程配置不可用或 PR 查询失败时返回错误
+    """
+    try:
+        synced_task = RemoteRequirementService().sync_pull_request_status(
+            db_session,
+            task_id,
+        )
+    except RemoteRequirementError as remote_error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(remote_error),
+        ) from remote_error
+
+    if synced_task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found",
+        )
+    return _hydrate_task_response(synced_task, db_session=db_session)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponseSchema)

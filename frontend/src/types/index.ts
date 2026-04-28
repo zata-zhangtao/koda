@@ -118,6 +118,12 @@ export interface Project {
   repo_path: string;
   repo_remote_url: string | null;
   repo_head_commit_hash: string | null;
+  remote_requirement_management_enabled: boolean;
+  remote_requirement_branch_prefix: string;
+  remote_requirement_remote_name: string | null;
+  github_pr_creation_enabled: boolean;
+  github_repository_full_name: string | null;
+  remote_requirement_delete_branch_after_pr_merge: boolean;
   current_repo_remote_url: string | null;
   current_repo_head_commit_hash: string | null;
   description: string | null;
@@ -192,6 +198,14 @@ export interface ProjectBranchList {
   current_branch_name: string | null;
 }
 
+export interface RemoteRequirementSyncResponse {
+  project_id: string;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  message: string;
+}
+
 /** Task 类型 */
 export interface TaskBranchHealth {
   expected_branch_name: string;
@@ -213,6 +227,16 @@ export interface Task {
   stage_updated_at: string;
   worktree_path: string | null;
   worktree_base_branch_name: string;
+  task_branch_name: string | null;
+  remote_requirement_manifest_path: string | null;
+  remote_requirement_synced_commit_hash: string | null;
+  remote_requirement_sync_status: string | null;
+  remote_requirement_last_error: string | null;
+  remote_requirement_last_synced_at: string | null;
+  github_pr_url: string | null;
+  github_pr_number: number | null;
+  github_pr_state: string | null;
+  last_progress_pushed_at: string | null;
   requirement_brief: string | null;
   auto_confirm_prd_and_execute: boolean;
   business_sync_original_workflow_stage: string | null;

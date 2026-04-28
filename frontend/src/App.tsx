@@ -256,6 +256,8 @@ type MutationName =
   | "qa_to_feedback"
   | "update"
   | "complete"
+  | "push_progress"
+  | "sync_pr_status"
   | "manual_complete"
   | "abandon"
   | "restore"
@@ -264,6 +266,7 @@ type MutationName =
   | "open_editor"
   | "open_trae"
   | "open_terminal"
+  | "sync_remote_requirements"
   | "cancel"
   | "force_interrupt"
   | null;
@@ -1001,6 +1004,20 @@ function App() {
   ] = useState<string | null>(null);
   const [worktreeResourceChooserState, setWorktreeResourceChooserState] =
     useState<WorktreeResourceChooserState | null>(null);
+  const [newProjectRemoteRequirementEnabled, setNewProjectRemoteRequirementEnabled] =
+    useState(false);
+  const [newProjectRemoteRequirementBranchPrefix, setNewProjectRemoteRequirementBranchPrefix] =
+    useState("task");
+  const [newProjectRemoteRequirementRemoteName, setNewProjectRemoteRequirementRemoteName] =
+    useState("");
+  const [newProjectGithubPrCreationEnabled, setNewProjectGithubPrCreationEnabled] =
+    useState(true);
+  const [newProjectGithubRepositoryFullName, setNewProjectGithubRepositoryFullName] =
+    useState("");
+  const [
+    newProjectDeleteRemoteBranchAfterPrMerge,
+    setNewProjectDeleteRemoteBranchAfterPrMerge,
+  ] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
   const [editingProjectCategory, setEditingProjectCategory] = useState("");
@@ -1010,6 +1027,24 @@ function App() {
     useState<"accepted_default" | "customized" | "deferred">("accepted_default");
   const [editingProjectWorktreeResourcePolicyJsonText, setEditingProjectWorktreeResourcePolicyJsonText] =
     useState("");
+  const [editingProjectRemoteRequirementEnabled, setEditingProjectRemoteRequirementEnabled] =
+    useState(false);
+  const [
+    editingProjectRemoteRequirementBranchPrefix,
+    setEditingProjectRemoteRequirementBranchPrefix,
+  ] = useState("task");
+  const [
+    editingProjectRemoteRequirementRemoteName,
+    setEditingProjectRemoteRequirementRemoteName,
+  ] = useState("");
+  const [editingProjectGithubPrCreationEnabled, setEditingProjectGithubPrCreationEnabled] =
+    useState(true);
+  const [editingProjectGithubRepositoryFullName, setEditingProjectGithubRepositoryFullName] =
+    useState("");
+  const [
+    editingProjectDeleteRemoteBranchAfterPrMerge,
+    setEditingProjectDeleteRemoteBranchAfterPrMerge,
+  ] = useState(false);
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
   const [selectedTaskScheduleList, setSelectedTaskScheduleList] = useState<TaskSchedule[]>(
     []
@@ -1971,6 +2006,9 @@ function App() {
   const newRequirementProjectCurrentBranchName = newRequirementProjectId
     ? projectCurrentBranchNameMap[newRequirementProjectId] ?? null
     : null;
+  const newRequirementProject = newRequirementProjectId
+    ? projectMapById[newRequirementProjectId] ?? null
+    : null;
   const editRequirementProjectBranchNameList = editRequirementProjectId
     ? projectBranchNameListMap[editRequirementProjectId] ?? []
     : [];
@@ -1984,6 +2022,18 @@ function App() {
   const canDestroySelectedTask = selectedTask
     ? canDestroyTask(selectedTask)
     : false;
+  const isSelectedTaskRemoteBacked = Boolean(
+    selectedTask?.task_branch_name &&
+      selectedTaskProject?.remote_requirement_management_enabled
+  );
+  const canPushSelectedTaskProgress = Boolean(
+    isSelectedTaskRemoteBacked &&
+      selectedTask?.worktree_path &&
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
+      selectedTask.lifecycle_status !== TaskLifecycleStatus.ABANDONED &&
+      !selectedTask.is_codex_task_running
+  );
   const canSendFeedback = selectedTask
     ? selectedTask.lifecycle_status !== TaskLifecycleStatus.CLOSED &&
       selectedTask.lifecycle_status !== TaskLifecycleStatus.DELETED &&
@@ -4141,6 +4191,12 @@ function App() {
         !hasLatestSelfReviewCyclePassed(devLogsByTaskId[targetTask.id] ?? []);
       const completionBaseBranchName =
         targetTask.worktree_base_branch_name || DEFAULT_WORKTREE_BASE_BRANCH_NAME;
+      const isRemotePrHandoff =
+        Boolean(targetTask.task_branch_name) &&
+        Boolean(
+          projectMapById[targetTask.project_id ?? ""]
+            ?.remote_requirement_management_enabled
+        );
       const completionTask = await taskApi.complete(
         targetTask.id,
         completionConfirmation
@@ -4149,7 +4205,9 @@ function App() {
       setSelectedTaskId(completionTask.id);
       setCompletionChecklistModalState(null);
       setSuccessMessage(
-        isManualSelfReviewOverride
+        isRemotePrHandoff
+          ? `已记录完成检查单确认。Koda pushed the task branch and created or reused a GitHub PR: ${completionTask.github_pr_url ?? "PR metadata pending"}.`
+          : isManualSelfReviewOverride
           ? `已记录完成检查单确认与人工接管，Koda 正在执行 Git 收尾：git add .；如有未提交变更则由 AI 基于 staged diff 生成符合规范的 commit message 并提交，若已提交则跳过 commit；随后 rebase ${completionBaseBranchName}、必要时自动修复冲突、合并到 ${completionBaseBranchName}，并清理 worktree。`
           : `已记录完成检查单确认。Koda is finalizing the branch: git add ., generate an AI Conventional Commit message only when a commit is needed, skip commit when already committed, rebase ${completionBaseBranchName}, auto-fix conflicts if needed, merge into ${completionBaseBranchName}, and clean up the worktree.`
       );
@@ -4239,6 +4297,49 @@ function App() {
     }
 
     await openCompletionChecklist(taskItem, "complete");
+  }
+
+  async function handlePushProgress(taskItem: Task): Promise<void> {
+    setActiveMutationName("push_progress");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const pushedTask = await taskApi.pushProgress(taskItem.id);
+      reconcileLocalTaskSnapshot(pushedTask);
+      setSelectedTaskId(pushedTask.id);
+      setSuccessMessage("Progress pushed to the remote task branch.");
+      await loadDashboardData(true);
+    } catch (pushError) {
+      console.error(pushError);
+      setErrorMessage(
+        pushError instanceof Error ? pushError.message : "Failed to push progress."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleSyncPrStatus(taskItem: Task): Promise<void> {
+    setActiveMutationName("sync_pr_status");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const syncedTask = await taskApi.syncPrStatus(taskItem.id);
+      reconcileLocalTaskSnapshot(syncedTask);
+      setSelectedTaskId(syncedTask.id);
+      if (syncedTask.workflow_stage === WorkflowStage.DONE) {
+        setWorkspaceView("completed");
+      }
+      setSuccessMessage("PR status synced.");
+      await loadDashboardData(true);
+    } catch (syncError) {
+      console.error(syncError);
+      setErrorMessage(
+        syncError instanceof Error ? syncError.message : "Failed to sync PR status."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
   }
 
   async function handleDeleteRequirement(taskItem: Task): Promise<void> {
@@ -4733,6 +4834,16 @@ function App() {
         display_name: trimmedName,
         project_category: newProjectCategory.trim() || null,
         repo_path: trimmedPath,
+        remote_requirement_management_enabled: newProjectRemoteRequirementEnabled,
+        remote_requirement_branch_prefix:
+          newProjectRemoteRequirementBranchPrefix.trim() || "task",
+        remote_requirement_remote_name:
+          newProjectRemoteRequirementRemoteName.trim() || null,
+        github_pr_creation_enabled: newProjectGithubPrCreationEnabled,
+        github_repository_full_name:
+          newProjectGithubRepositoryFullName.trim() || null,
+        remote_requirement_delete_branch_after_pr_merge:
+          newProjectDeleteRemoteBranchAfterPrMerge,
         description: newProjectDescription.trim() || null,
         worktree_resource_policy_confirmation:
           newProjectWorktreeResourcePolicyConfirmation,
@@ -4745,6 +4856,12 @@ function App() {
       setNewProjectWorktreeResourcePolicyConfirmation("accepted_default");
       setNewProjectWorktreeResourcePolicyJsonText("");
       setNewProjectWorktreeResourcePreviewedRepoPath(null);
+      setNewProjectRemoteRequirementEnabled(false);
+      setNewProjectRemoteRequirementBranchPrefix("task");
+      setNewProjectRemoteRequirementRemoteName("");
+      setNewProjectGithubPrCreationEnabled(true);
+      setNewProjectGithubRepositoryFullName("");
+      setNewProjectDeleteRemoteBranchAfterPrMerge(false);
       setSuccessMessage(`项目「${trimmedName}」已创建。`);
       await loadProjectList();
       if (isCreatePanelOpen) {
@@ -4774,6 +4891,12 @@ function App() {
     setEditingProjectDescription("");
     setEditingProjectWorktreeResourcePolicyConfirmation("accepted_default");
     setEditingProjectWorktreeResourcePolicyJsonText("");
+    setEditingProjectRemoteRequirementEnabled(false);
+    setEditingProjectRemoteRequirementBranchPrefix("task");
+    setEditingProjectRemoteRequirementRemoteName("");
+    setEditingProjectGithubPrCreationEnabled(true);
+    setEditingProjectGithubRepositoryFullName("");
+    setEditingProjectDeleteRemoteBranchAfterPrMerge(false);
   }
 
   function openProjectEdit(projectItem: Project): void {
@@ -4789,6 +4912,22 @@ function App() {
       projectItem.worktree_resource_policy
         ? JSON.stringify(projectItem.worktree_resource_policy, null, 2)
         : ""
+    );
+    setEditingProjectRemoteRequirementEnabled(
+      projectItem.remote_requirement_management_enabled
+    );
+    setEditingProjectRemoteRequirementBranchPrefix(
+      projectItem.remote_requirement_branch_prefix || "task"
+    );
+    setEditingProjectRemoteRequirementRemoteName(
+      projectItem.remote_requirement_remote_name ?? ""
+    );
+    setEditingProjectGithubPrCreationEnabled(projectItem.github_pr_creation_enabled);
+    setEditingProjectGithubRepositoryFullName(
+      projectItem.github_repository_full_name ?? ""
+    );
+    setEditingProjectDeleteRemoteBranchAfterPrMerge(
+      projectItem.remote_requirement_delete_branch_after_pr_merge
     );
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -4821,6 +4960,17 @@ function App() {
         display_name: trimmedName,
         project_category: editingProjectCategory.trim() || null,
         repo_path: trimmedPath,
+        remote_requirement_management_enabled:
+          editingProjectRemoteRequirementEnabled,
+        remote_requirement_branch_prefix:
+          editingProjectRemoteRequirementBranchPrefix.trim() || "task",
+        remote_requirement_remote_name:
+          editingProjectRemoteRequirementRemoteName.trim() || null,
+        github_pr_creation_enabled: editingProjectGithubPrCreationEnabled,
+        github_repository_full_name:
+          editingProjectGithubRepositoryFullName.trim() || null,
+        remote_requirement_delete_branch_after_pr_merge:
+          editingProjectDeleteRemoteBranchAfterPrMerge,
         description: editingProjectDescription.trim() || null,
         worktree_resource_policy_confirmation:
           editingProjectWorktreeResourcePolicyConfirmation,
@@ -4854,6 +5004,27 @@ function App() {
     } catch (err) {
       console.error(err);
       setErrorMessage(err instanceof Error ? err.message : "删除项目失败。");
+    }
+  }
+
+  async function handleSyncRemoteRequirements(projectItem: Project): Promise<void> {
+    setActiveMutationName("sync_remote_requirements");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const syncResult = await projectApi.syncRemoteRequirements(projectItem.id);
+      setSuccessMessage(syncResult.message);
+      await loadProjectList();
+      await loadDashboardData(true);
+    } catch (syncError) {
+      console.error(syncError);
+      setErrorMessage(
+        syncError instanceof Error
+          ? syncError.message
+          : "同步远程需求分支失败。"
+      );
+    } finally {
+      setActiveMutationName(null);
     }
   }
 
@@ -5344,6 +5515,74 @@ function App() {
                                 void openWorktreeResourceChooser("edit");
                               }}
                             />
+                            <label className="devflow-checkbox-row">
+                              <input
+                                type="checkbox"
+                                checked={editingProjectRemoteRequirementEnabled}
+                                onChange={(changeEvent) =>
+                                  setEditingProjectRemoteRequirementEnabled(
+                                    changeEvent.target.checked
+                                  )
+                                }
+                              />
+                              <span>GitHub-backed requirement branches</span>
+                            </label>
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="Remote name, e.g. origin"
+                              value={editingProjectRemoteRequirementRemoteName}
+                              onChange={(changeEvent) =>
+                                setEditingProjectRemoteRequirementRemoteName(
+                                  changeEvent.target.value
+                                )
+                              }
+                            />
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="Branch prefix, e.g. task"
+                              value={editingProjectRemoteRequirementBranchPrefix}
+                              onChange={(changeEvent) =>
+                                setEditingProjectRemoteRequirementBranchPrefix(
+                                  changeEvent.target.value
+                                )
+                              }
+                            />
+                            <input
+                              className="devflow-input devflow-input--title"
+                              placeholder="GitHub repo, e.g. owner/repo"
+                              value={editingProjectGithubRepositoryFullName}
+                              onChange={(changeEvent) =>
+                                setEditingProjectGithubRepositoryFullName(
+                                  changeEvent.target.value
+                                )
+                              }
+                            />
+                            <label className="devflow-checkbox-row">
+                              <input
+                                type="checkbox"
+                                checked={editingProjectGithubPrCreationEnabled}
+                                onChange={(changeEvent) =>
+                                  setEditingProjectGithubPrCreationEnabled(
+                                    changeEvent.target.checked
+                                  )
+                                }
+                              />
+                              <span>Create PR on Complete</span>
+                            </label>
+                            <label className="devflow-checkbox-row">
+                              <input
+                                type="checkbox"
+                                checked={
+                                  editingProjectDeleteRemoteBranchAfterPrMerge
+                                }
+                                onChange={(changeEvent) =>
+                                  setEditingProjectDeleteRemoteBranchAfterPrMerge(
+                                    changeEvent.target.checked
+                                  )
+                                }
+                              />
+                              <span>Delete remote branch after PR merge</span>
+                            </label>
                           </div>
 
                           <div className="devflow-project-item__actions">
@@ -5402,9 +5641,27 @@ function App() {
                                 {projectHealthState.fingerprint}
                               </span>
                             ) : null}
+                            {projectItem.remote_requirement_management_enabled ? (
+                              <span className="devflow-project-item__fingerprint">
+                                Remote requirements: {projectItem.remote_requirement_remote_name ?? "auto"} / {projectItem.remote_requirement_branch_prefix}
+                              </span>
+                            ) : null}
                           </div>
 
                           <div className="devflow-project-item__actions">
+                            {projectItem.remote_requirement_management_enabled ? (
+                              <button
+                                type="button"
+                                className="devflow-project-item__action"
+                                onClick={() => {
+                                  void handleSyncRemoteRequirements(projectItem);
+                                }}
+                              >
+                                {activeMutationName === "sync_remote_requirements"
+                                  ? "Syncing..."
+                                  : "Sync Remote"}
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               className="devflow-project-item__action"
@@ -5469,6 +5726,62 @@ function App() {
                   void openWorktreeResourceChooser("create");
                 }}
               />
+              <label className="devflow-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={newProjectRemoteRequirementEnabled}
+                  onChange={(changeEvent) =>
+                    setNewProjectRemoteRequirementEnabled(changeEvent.target.checked)
+                  }
+                />
+                <span>GitHub-backed requirement branches</span>
+              </label>
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="Remote name, e.g. origin"
+                value={newProjectRemoteRequirementRemoteName}
+                onChange={(changeEvent) =>
+                  setNewProjectRemoteRequirementRemoteName(changeEvent.target.value)
+                }
+              />
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="Branch prefix, e.g. task"
+                value={newProjectRemoteRequirementBranchPrefix}
+                onChange={(changeEvent) =>
+                  setNewProjectRemoteRequirementBranchPrefix(changeEvent.target.value)
+                }
+              />
+              <input
+                className="devflow-input devflow-input--title"
+                placeholder="GitHub repo, e.g. owner/repo"
+                value={newProjectGithubRepositoryFullName}
+                onChange={(changeEvent) =>
+                  setNewProjectGithubRepositoryFullName(changeEvent.target.value)
+                }
+              />
+              <label className="devflow-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={newProjectGithubPrCreationEnabled}
+                  onChange={(changeEvent) =>
+                    setNewProjectGithubPrCreationEnabled(changeEvent.target.checked)
+                  }
+                />
+                <span>Create PR on Complete</span>
+              </label>
+              <label className="devflow-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={newProjectDeleteRemoteBranchAfterPrMerge}
+                  onChange={(changeEvent) =>
+                    setNewProjectDeleteRemoteBranchAfterPrMerge(
+                      changeEvent.target.checked
+                    )
+                  }
+                />
+                <span>Delete remote branch after PR merge</span>
+              </label>
               {errorMessage ? (
                 <div className="devflow-inline-message devflow-inline-message--error">
                   <RobotIcon className="devflow-icon devflow-icon--tiny" />
@@ -5711,6 +6024,12 @@ function App() {
                       Worktree base branch: create task branches from this local
                       branch instead of assuming `main`.
                     </p>
+                    {newRequirementProject?.remote_requirement_management_enabled ? (
+                      <p className="devflow-create-panel__hint">
+                        Remote collaboration is enabled: creating this card will push
+                        a task branch with a `.koda/requirements` manifest.
+                      </p>
+                    ) : null}
                   </>
                 ) : null}
 
@@ -6182,6 +6501,28 @@ function App() {
                             <p className="devflow-detail__fact-hint">
                               {selectedTask.destroy_reason ||
                                 "该任务已归档到 deleted history。"}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {isSelectedTaskRemoteBacked ? (
+                          <div className="devflow-detail__fact-card devflow-detail__fact-card--sync">
+                            <span className="devflow-detail__fact-label">
+                              Remote branch
+                            </span>
+                            <span className="devflow-detail__fact-value">
+                              {selectedTask.task_branch_name}
+                            </span>
+                            <p className="devflow-detail__fact-hint">
+                              Sync:{" "}
+                              {selectedTask.remote_requirement_sync_status ??
+                                "not pushed"}
+                              {selectedTask.remote_requirement_last_synced_at
+                                ? ` · ${formatDateTime(selectedTask.remote_requirement_last_synced_at)}`
+                                : ""}
+                              {selectedTask.github_pr_url
+                                ? ` · PR #${selectedTask.github_pr_number ?? "?"} ${selectedTask.github_pr_state ?? ""}`
+                                : ""}
                             </p>
                           </div>
                         ) : null}
@@ -6747,16 +7088,46 @@ function App() {
                               </ActionButton>
                             </>
                           ) : canCompleteSelectedTask ? (
-                            <ActionButton
-                              variant="outline"
-                              busy={activeMutationName === "complete"}
-                              onClick={() => {
-                                void handleCompleteRequirement(selectedTask);
-                              }}
-                            >
-                              <ArchiveIcon className="devflow-icon devflow-icon--small" />
-                              <span>Complete</span>
-                            </ActionButton>
+                            <>
+                              {canPushSelectedTaskProgress ? (
+                                <ActionButton
+                                  variant="outline"
+                                  busy={activeMutationName === "push_progress"}
+                                  onClick={() => {
+                                    void handlePushProgress(selectedTask);
+                                  }}
+                                >
+                                  <UploadIcon className="devflow-icon devflow-icon--small" />
+                                  <span>Push Progress</span>
+                                </ActionButton>
+                              ) : null}
+                              <ActionButton
+                                variant="outline"
+                                busy={activeMutationName === "complete"}
+                                onClick={() => {
+                                  void handleCompleteRequirement(selectedTask);
+                                }}
+                              >
+                                <ArchiveIcon className="devflow-icon devflow-icon--small" />
+                                <span>
+                                  {isSelectedTaskRemoteBacked
+                                    ? "Complete / Create PR"
+                                    : "Complete"}
+                                </span>
+                              </ActionButton>
+                              {selectedTask.github_pr_number ? (
+                                <ActionButton
+                                  variant="ghost"
+                                  busy={activeMutationName === "sync_pr_status"}
+                                  onClick={() => {
+                                    void handleSyncPrStatus(selectedTask);
+                                  }}
+                                >
+                                  <RefreshCwIcon className="devflow-icon devflow-icon--small" />
+                                  <span>Sync PR</span>
+                                </ActionButton>
+                              ) : null}
+                            </>
                           ) : null}
                           <ActionButton
                             variant="ghost"
@@ -11681,6 +12052,61 @@ function TerminalIcon({ className }: SVGProps<SVGSVGElement>) {
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function UploadIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M12 16V4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M7 9l5-5 5 5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 16v3h14v-3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RefreshCwIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M20 6v5h-5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 18v-5h5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5.5 9a7 7 0 0111.9-2.5L20 11M4 13l2.6 4.5A7 7 0 0018.5 15"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

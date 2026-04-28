@@ -22,6 +22,8 @@ flowchart LR
     SERVICE --> MEDIA[Media Storage]
     SERVICE --> CODEX[Runner CLI]
     SERVICE --> TOOL[AI Model Utilities]
+    SERVICE --> GIT[Git Remote Branches]
+    SERVICE --> GITHUB[GitHub Pull Requests]
 ```
 
 ## 入口点
@@ -61,6 +63,7 @@ flowchart LR
 ### 服务层
 
 - `TaskService`：任务创建、阶段推进、worktree 创建与环境准备
+- `RemoteRequirementService`：项目级远程需求协作，负责 manifest、远程分支、Push Progress、远程同步与 PR handoff
 - `TaskQaService`：sidecar Q&A 消息持久化、任务上下文组装、模型调用与失败回写
 - `LogService`：命令解析与日志持久化
 - `MediaService`：文件落盘与缩略图
@@ -73,11 +76,17 @@ flowchart LR
 当前 task worktree 的默认根目录是目标仓库父目录下的 `task/`。例如仓库路径是 `/Users/zata/code/my-app` 时，`TaskService.start_task()` 创建的新 worktree 默认路径会是 `/Users/zata/code/task/my-app-wt-12345678`。`worktree_path` 写入任务前，系统还会补齐基础环境准备：默认把仓库内 `.env*`、前端 `node_modules` 和 Python `.venv` 从源仓库软链接到 worktree；如果源仓库缺少 `.venv`，才回退执行 `uv sync --all-extras`。
 对应任务分支默认采用 `task/<task_id[:8]>-<semantic-slug>`：优先尝试 AI 语义命名，失败时回退为标题规则化 slug，若仍为空再回退为 `task/<task_id[:8]>`，并在日志中记录命名来源。
 
+启用项目级远程需求协作后，本地数据库仍是任务执行状态、日志、媒体、runner 状态和 UI 查询的运行存储；GitHub 远程分支变成跨机器协作句柄。创建关联项目任务时，Koda 会先创建本地 `Task`，再使用同一套语义分支命名创建并 push `task/<task_id[:8]>-<semantic-slug>`，分支内写入 UTF-8 JSON manifest：`.koda/requirements/<task_id>.json`。manifest 只记录可跨机器恢复的需求身份、标题、摘要、阶段、PRD 路径、分支和 PR 元数据，不记录本机 `worktree_path`、媒体本地路径、runner 进程状态或完整 DevLog transcript。
+
+远程协作相关逻辑位于 `backend/dsl/remote_requirements/`：domain 层定义 manifest 与错误；infrastructure 层隔离 Git 命令和 GitHub PR REST adapter；service 层编排创建远程分支、Push Progress、远程同步、Complete-as-PR 和 PR 状态同步。`backend/dsl/api/tasks.py` 与 `backend/dsl/api/projects.py` 只做 HTTP 映射。
+
 ### 数据层
 
 - `Project`：本地 Git 仓库目录
+- `Project.remote_requirement_management_enabled` 等字段：项目级远程需求协作开关、remote 名称、分支前缀、GitHub 仓库名和 PR 策略
 - `RunAccount`：开发环境与当前活跃身份
 - `Task`：需求卡片与工作流阶段
+- `Task.task_branch_name`、`remote_requirement_*`、`github_pr_*`：远程任务分支、manifest、同步游标和 PR 状态投影
 - `DevLog`：时间线中的最小记录单元，也是自动化 transcript 的事实源
 - `TaskQaMessage`：任务内独立问答消息，独立于 `DevLog`
 
@@ -137,6 +146,8 @@ flowchart TD
 `changes_requested` 的当前真实含义也随之收窄为“AI 无法自行完成 review / lint 自动闭环，需要人工介入后重新执行或人工收口”，不再表示“第一次 review 发现 blocker”。PRD 生成后的确认仍然必须由用户触发，review 与 lint 闭环通过后也不会自动进入 `pr_preparing`；最终 `Complete` 仍由用户明确点击，并且必须先通过后端 canonical checklist gate。若任务还停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已经进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，用户仍可显式触发 `Complete`，后端会先写 checklist confirmation `DevLog`，再按需记录这次人工接管。
 
 `pr_preparing` 现在也有真实落地：用户点击前端的 `Complete` 后，前端先调用 `/completion-checklist?mode=complete` 并展示后端 canonical checklist。该 checklist 最多 5 项，优先包含或汇总 PRD `Acceptance Checklist`，再补充系统安全确认；前端只负责渲染与回传，后端在 `/complete` 中重新生成 checklist、校验 `checklist_signature` 与全部展示 item id。校验通过后，后端会先把任务推进到 `pr_preparing`，再在该任务的 worktree 中执行确定性的 Git 收尾链路：`git add .`；若 staging 后仍有变更，则调用当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message 并执行 `git commit -m ...`；若 staging 后已经干净，说明用户已经提交过，系统会跳过 commit，随后执行 `git rebase <worktree_base_branch_name>`。前端会立即用 `/complete` 返回的 `pr_preparing` 任务快照更新本地任务列表，并在 open 的 `pr_preparing` 状态继续 dashboard 轮询，即使运行态标记短暂丢失，也会自动拉到最终 `done / CLOSED` 快照。新建/编辑任务时可从绑定项目的本地分支中选择 worktree 基底分支，默认仍为 `main`；真正同步该基底分支之前，系统会先解析它的已配置 remote；若没有显式配置，则先查找实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，避免把 remote 名字硬编码死。若 `git commit` 被 commit hook 自动改写文件并退出非零，Koda 会自动重新 `git add .` 并重试一次 commit；若 rebase / merge 冲突则自动调用当前 runner（如 Codex）修复，然后复用当前持有基底分支的工作区完成 merge。merge 成功后，cleanup 也不再只看 repo-local script 的退出码，而是会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理。合并成功后任务自动进入 `done`；若在合并前失败则回退到 `changes_requested`。详情页会对 worktree-backed 的 `changes_requested` 任务继续暴露 `Complete`，让用户在人工修复实现、自检、lint 或 Git 环境问题后直接收尾，而不是只能回到实现阶段重跑整条自动化。后台 watchdog 现在也会覆盖卡住的 `pr_preparing` 任务：如果阶段停留时间超过阈值，且当前进程内只残留一个“运行中”标记、但连 completion start `DevLog`（`🚀 已收到完成请求...`）都没写出来，watchdog 会先清理这类陈旧运行态，再自动走一次 `resume` 补救，而不是让 UI 永久停在“交付收尾中”。
+
+当项目启用远程需求协作且开启 GitHub PR handoff 时，`Complete` 走另一条收口路径：Koda 不会把任务分支直接 merge 到基底分支，也不会删除任务分支；它会提交当前 worktree 与 manifest、rebase 到配置的基底分支、push 任务分支，然后通过 GitHub adapter 创建或复用 PR。PR 创建成功后，任务进入 `acceptance_in_progress / OPEN`，详情页显示 `Complete / Create PR`、PR 元数据和 `Sync PR`。后续 `POST /api/tasks/{id}/sync-pr-status` 检测到 PR merged 后，才把本地任务推进到 `done / CLOSED`。
 
 对新任务来说，这个 worktree 路径默认位于 `<repo-parent>/task/` 下；旧任务已经存储的 `worktree_path` 会继续按历史绝对路径工作，不会被自动搬迁。任务 worktree 创建是 Koda 自身能力：普通项目不需要提供 `just worktree`、`scripts/git_worktree.sh` 或其他分支名式脚本。只有显式接收 `<target_path> <branch_name> <base_branch>` 的 path-aware script（如 `scripts/new-worktree.sh` / `scripts/create-worktree.sh`）才会作为项目自定义钩子被调用；旧式 branch-only `git_worktree.sh` 会被忽略，避免项目脚本不支持 `--base` 或自行选择路径导致启动失败。对于 path-aware script 和 raw `git worktree add` fallback，Koda 会在创建后统一执行环境 bootstrap，避免返回“目录存在但不能直接编码”的半成品 worktree。
 

@@ -1052,6 +1052,18 @@ class GitWorktreeService:
         default_worktree_path = GitWorktreeService.build_task_worktree_path(
             repo_root_path, task_id
         )
+        local_branch_exists_bool = GitWorktreeService._branch_exists(
+            repo_root_path,
+            resolved_task_branch_name_str,
+        )
+        remote_tracking_branch_name_str = (
+            None
+            if local_branch_exists_bool
+            else GitWorktreeService._resolve_remote_tracking_branch_name(
+                repo_root_path,
+                resolved_task_branch_name_str,
+            )
+        )
 
         path_and_branch_script_candidates = [
             repo_root_path / "scripts" / "new-worktree.sh",
@@ -1068,6 +1080,33 @@ class GitWorktreeService:
             None,
         )
         if path_and_branch_script_path is not None:
+            if local_branch_exists_bool:
+                return WorktreeCreateCommandSpec(
+                    command_argument_list=[
+                        "git",
+                        "worktree",
+                        "add",
+                        str(default_worktree_path),
+                        resolved_task_branch_name_str,
+                    ],
+                    expected_worktree_path=default_worktree_path,
+                    requires_post_create_bootstrap=True,
+                )
+            if remote_tracking_branch_name_str:
+                return WorktreeCreateCommandSpec(
+                    command_argument_list=[
+                        "git",
+                        "worktree",
+                        "add",
+                        "--track",
+                        "-b",
+                        resolved_task_branch_name_str,
+                        str(default_worktree_path),
+                        remote_tracking_branch_name_str,
+                    ],
+                    expected_worktree_path=default_worktree_path,
+                    requires_post_create_bootstrap=True,
+                )
             return WorktreeCreateCommandSpec(
                 command_argument_list=[
                     str(path_and_branch_script_path),
@@ -1079,16 +1118,32 @@ class GitWorktreeService:
                 requires_post_create_bootstrap=True,
             )
 
-        return WorktreeCreateCommandSpec(
-            command_argument_list=[
+        raw_worktree_command_argument_list = [
+            "git",
+            "worktree",
+            "add",
+            str(default_worktree_path),
+        ]
+        if local_branch_exists_bool:
+            raw_worktree_command_argument_list.append(resolved_task_branch_name_str)
+        elif remote_tracking_branch_name_str:
+            raw_worktree_command_argument_list = [
                 "git",
                 "worktree",
                 "add",
-                str(default_worktree_path),
+                "--track",
                 "-b",
                 resolved_task_branch_name_str,
-                base_branch_name_str,
-            ],
+                str(default_worktree_path),
+                remote_tracking_branch_name_str,
+            ]
+        else:
+            raw_worktree_command_argument_list.extend(
+                ["-b", resolved_task_branch_name_str, base_branch_name_str]
+            )
+
+        return WorktreeCreateCommandSpec(
+            command_argument_list=raw_worktree_command_argument_list,
             expected_worktree_path=default_worktree_path,
             requires_post_create_bootstrap=True,
         )
@@ -1260,6 +1315,63 @@ class GitWorktreeService:
             errors="replace",
         )
         return bool((completed_process.stdout or "").strip())
+
+    @staticmethod
+    def _resolve_remote_tracking_branch_name(
+        repo_root_path: Path,
+        branch_name_str: str,
+    ) -> str | None:
+        """Resolve a remote-tracking branch for an imported task branch.
+
+        Args:
+            repo_root_path: Repository root path.
+            branch_name_str: Task branch name without the remote prefix.
+
+        Returns:
+            str | None: Remote-tracking branch such as ``origin/task/abc``.
+        """
+        completed_process = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/remotes",
+            ],
+            cwd=str(repo_root_path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed_process.returncode != 0:
+            return None
+
+        matching_remote_tracking_branch_list = [
+            remote_tracking_branch_name_str
+            for remote_tracking_branch_name_str in (
+                raw_remote_tracking_branch_name_str.strip()
+                for raw_remote_tracking_branch_name_str in (
+                    completed_process.stdout or ""
+                ).splitlines()
+            )
+            if remote_tracking_branch_name_str
+            and not remote_tracking_branch_name_str.endswith("/HEAD")
+            and remote_tracking_branch_name_str.endswith(f"/{branch_name_str}")
+        ]
+        if not matching_remote_tracking_branch_list:
+            return None
+
+        for preferred_remote_name_str in ("origin", "zata"):
+            preferred_remote_tracking_branch_name_str = (
+                f"{preferred_remote_name_str}/{branch_name_str}"
+            )
+            if (
+                preferred_remote_tracking_branch_name_str
+                in matching_remote_tracking_branch_list
+            ):
+                return preferred_remote_tracking_branch_name_str
+
+        return matching_remote_tracking_branch_list[0]
 
     @staticmethod
     def _build_destroy_cleanup_failure_reason(

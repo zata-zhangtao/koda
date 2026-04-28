@@ -46,6 +46,7 @@
         - create_project
         - get_project
         - list_project_branches
+        - sync_project_remote_requirements
         - open_project_in_editor
         - open_project_in_trae
         - delete_project
@@ -75,10 +76,12 @@
         - resume_task
         - complete_task
         - manual_complete_task
+        - push_task_progress
         - cancel_task
         - force_interrupt_task
         - destroy_task
         - restore_task
+        - sync_task_pull_request_status
         - get_task_prd_file
         - open_task_in_editor
         - open_task_in_trae
@@ -204,6 +207,9 @@
 ::: backend.dsl.schemas.task_schema.TaskCardMetadataSchema
     handler: python
 
+::: backend.dsl.schemas.project_schema.RemoteRequirementSyncResponseSchema
+    handler: python
+
 ::: backend.dsl.schemas.task_schedule_schema.TaskScheduleResponseSchema
     handler: python
 
@@ -295,6 +301,26 @@
         - destroy_task
         - restore_task
         - get_active_task
+
+::: backend.dsl.remote_requirements.service.RemoteRequirementService
+    handler: python
+    options:
+      members:
+        - create_remote_branch_for_task
+        - push_progress
+        - update_manifest_after_prd_staging
+        - complete_as_pull_request
+        - sync_pull_request_status
+        - sync_project_remote_requirements
+
+::: backend.dsl.remote_requirements.domain.RemoteRequirementManifest
+    handler: python
+
+::: backend.dsl.remote_requirements.infrastructure.git_remote_requirement_repository.GitRemoteRequirementRepository
+    handler: python
+
+::: backend.dsl.remote_requirements.infrastructure.github_pull_request_adapter.GitHubPullRequestAdapter
+    handler: python
 
 ::: backend.dsl.services.task_notification_service.TaskNotificationService
     handler: python
