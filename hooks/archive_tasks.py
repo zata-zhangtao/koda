@@ -1,7 +1,7 @@
 """Archive task markdown files before commit.
 
-Moves Markdown files from the tasks directory into tasks/archive and stages
-the resulting changes for commit.
+Moves staged Markdown files from the tasks directory into tasks/archive and
+stages the resulting changes for commit. Pending PRD templates are preserved.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ def _repo_root() -> Path:
 
 
 def _staged_task_paths(
-    repo_root: Path, tasks_dir: Path, archive_dir: Path
+    repo_root: Path, tasks_dir: Path, archive_dir: Path, pending_dir: Path
 ) -> list[Path]:
-    """Collect staged markdown files under tasks, excluding the archive directory.
+    """Collect staged markdown files under tasks, excluding archive and pending.
 
     This inspects the git index rather than the working tree so that only
     already staged files are archived.
@@ -31,6 +31,7 @@ def _staged_task_paths(
         repo_root (Path): Repository root used as subprocess cwd.
         tasks_dir (Path): The tasks directory to constrain results.
         archive_dir (Path): The archive directory to exclude.
+        pending_dir (Path): The pending PRD template directory to exclude.
 
     Returns:
         list[Path]: Staged markdown file paths to be archived.
@@ -68,6 +69,8 @@ def _staged_task_paths(
         if not full_path.is_file():
             continue
         if archive_dir in full_path.parents:
+            continue
+        if pending_dir in full_path.parents:
             continue
         if tasks_dir not in full_path.parents and full_path != tasks_dir:
             # Constrain to paths under tasks_dir.
@@ -142,12 +145,13 @@ def main() -> int:
     repo_root = _repo_root()
     tasks_dir = repo_root / "tasks"
     archive_dir = tasks_dir / "archive"
+    pending_dir = tasks_dir / "pending"
 
     if not tasks_dir.exists():
         return 0
 
     try:
-        files = _staged_task_paths(repo_root, tasks_dir, archive_dir)
+        files = _staged_task_paths(repo_root, tasks_dir, archive_dir, pending_dir)
         if not files:
             return 0
         _ensure_archive_dir(archive_dir)
