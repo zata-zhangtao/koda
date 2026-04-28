@@ -356,7 +356,7 @@ Codex 的工作目录选择顺序如下：
 对任务型 worktree 来说，目录创建成功还不算完成。当前实现会在保存 `worktree_path` 前补做以下准备：
 
 - Project 必须先确认 worktree 本地资源策略。`Use defaults` 会从 Git untracked / ignored 状态生成默认规则；Git 已追踪文件由 `git worktree add` 自己检出，不进入资源选择器。`Customize` 会在前端路径树中配置整个文件夹或单个资源的 `Copy` / `Link` / `Skip`；`Skip for now` 会让项目保持 deferred，任务启动前被拦截。
-- 策略确认后，Python materializer 在 bootstrap 前执行资源处理：`.env*`、`*.pem`、`*.key` 默认复制；数据库、上传目录、`node_modules`、`.venv` 等共享 runtime 资源可按策略链接；未知 untracked/ignored 文件默认跳过并显示人工检查提示。
+- 策略确认后，Python materializer 在 bootstrap 前执行资源处理：`.env*`、`*.pem`、`*.key` 默认复制；数据库、上传目录、`node_modules`、`.venv` 等共享 runtime 资源可按策略链接；未知 untracked/ignored 文件默认跳过并显示人工检查提示。若某个策略路径已经由 `git worktree add` 检出为 Git 管理内容，materializer 会跳过该路径，继续处理其未被 Git 管理的子资源；未跟踪目标撞名仍会失败并触发 rollback。
 - 当 Project policy active 时，`scripts/bootstrap_worktree_env.sh` 只执行兼容的依赖安装准备，不再独立决定 `.env*`、`.venv` 或 `node_modules` 的复制/链接。旧的 `WORKTREE_ENV_FILE_STRATEGY`、`WORKTREE_FRONTEND_STRATEGY`、`WORKTREE_PYTHON_ENV_STRATEGY` 只作为历史策略草稿输入，不覆盖已确认策略。
 - 分支命名来源会记录到后端日志（`ai` / `title_fallback` / `legacy_fallback`），便于排查命名回退
 

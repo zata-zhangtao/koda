@@ -263,6 +263,69 @@ def test_materialize_project_worktree_resources_folder_rule_covers_children(
     assert copied_fixture_file_path.is_symlink() is False
 
 
+def test_materialize_project_worktree_resources_skips_git_managed_target(
+    tmp_path: Path,
+) -> None:
+    """Materialization should not collide with paths already checked out by Git."""
+
+    repo_root_path = _create_git_repo(tmp_path / "git-managed-target-repo")
+    tracked_claude_settings_path = repo_root_path / ".claude" / "settings.json"
+    tracked_claude_settings_path.parent.mkdir()
+    tracked_claude_settings_path.write_text('{"permissions": {}}\n', encoding="utf-8")
+    _run_git_command(repo_root_path, ["add", ".claude/settings.json"])
+    _run_git_command(repo_root_path, ["commit", "-m", "track claude settings"])
+
+    local_claude_runtime_path = repo_root_path / ".claude" / "runtime"
+    local_claude_runtime_path.mkdir()
+    (local_claude_runtime_path / "local-dev.env").write_text(
+        "PORT=3000\n",
+        encoding="utf-8",
+    )
+    worktree_root_path = tmp_path / "task-worktree"
+    _run_git_command(
+        repo_root_path,
+        ["worktree", "add", "-b", "task/git-managed-target", str(worktree_root_path)],
+    )
+    policy_schema = ProjectWorktreeResourcePolicySchema(
+        confirmation_status=WorktreeResourcePolicyConfirmation.CUSTOMIZED,
+        rules=[
+            ProjectWorktreeResourceRuleSchema(
+                relative_path=".claude",
+                include=True,
+                materialization=WorktreeResourceMaterialization.LINK,
+                resource_kind="manual-review-directory",
+                git_state=WorktreeResourceGitState.IGNORED,
+                required=False,
+                is_directory=True,
+            ),
+            ProjectWorktreeResourceRuleSchema(
+                relative_path=".claude/runtime",
+                include=True,
+                materialization=WorktreeResourceMaterialization.LINK,
+                resource_kind="manual-review-directory",
+                git_state=WorktreeResourceGitState.IGNORED,
+                required=False,
+                is_directory=True,
+            ),
+        ],
+    )
+
+    materialize_project_worktree_resources(
+        repo_root_path=repo_root_path,
+        worktree_root_path=worktree_root_path,
+        project_policy=policy_schema,
+    )
+
+    worktree_claude_path = worktree_root_path / ".claude"
+    worktree_runtime_path = worktree_claude_path / "runtime"
+    assert worktree_claude_path.is_symlink() is False
+    assert (worktree_claude_path / "settings.json").read_text(
+        encoding="utf-8"
+    ) == '{"permissions": {}}\n'
+    assert worktree_runtime_path.is_symlink() is True
+    assert worktree_runtime_path.resolve() == local_claude_runtime_path.resolve()
+
+
 def test_materialize_project_worktree_resources_folder_rule_keeps_required_checks(
     tmp_path: Path,
 ) -> None:

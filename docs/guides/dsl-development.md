@@ -99,7 +99,7 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 
 任务启动时，`TaskService._ensure_task_worktree_if_needed(...)` 会在 `git worktree add` 前校验 Project 路径、remote 指纹和资源策略 readiness。只有确认后的策略会传入 `GitWorktreeService.create_task_worktree(...)`；缺失、deferred 或无法解析的策略会阻断启动并提示回到 Project 设置确认 Worktree Resources。
 
-`GitWorktreeService` 是唯一的 worktree 创建与准备边界。它先创建 Git worktree，再按 Project policy materialize 本地 runtime 资源，最后以 policy-active 模式运行 `scripts/bootstrap_worktree_env.sh`。materialization 或 bootstrap 失败时必须尝试移除本次创建的 worktree/branch，并把原始失败和 rollback 结果一起暴露给调用方。
+`GitWorktreeService` 是唯一的 worktree 创建与准备边界。它先创建 Git worktree，再按 Project policy materialize 本地 runtime 资源，最后以 policy-active 模式运行 `scripts/bootstrap_worktree_env.sh`。如果策略里的路径已经由 `git worktree add` 检出为 Git 管理内容，materializer 会跳过该规则，避免 `.claude` 这类 tracked + local 混合目录发生重复链接；如果目标只是未跟踪本地文件或目录，仍按冲突处理。materialization 或 bootstrap 失败时必须尝试移除本次创建的 worktree/branch，并把原始失败和 rollback 结果一起暴露给调用方。
 
 ## 当前工作流实现情况
 

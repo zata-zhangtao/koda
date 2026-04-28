@@ -714,6 +714,36 @@ def _should_materialize_policy_rule(
     }
 
 
+def _worktree_target_has_git_managed_content(
+    *,
+    worktree_root_path: Path,
+    relative_path_str: str,
+) -> bool:
+    """Return whether Git already manages the target path in the worktree.
+
+    Args:
+        worktree_root_path: Root path of the task worktree.
+        relative_path_str: Repo-relative path for the materialization target.
+
+    Returns:
+        bool: True when the path itself or one of its descendants is tracked.
+    """
+
+    try:
+        completed_process = subprocess.run(
+            ["git", "-C", str(worktree_root_path), "ls-files", "--", relative_path_str],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.CalledProcessError:
+        return False
+
+    return bool(completed_process.stdout.strip())
+
+
 def _has_materialized_directory_ancestor(
     *,
     relative_path_str: str,
@@ -816,6 +846,11 @@ def materialize_project_worktree_resources(
         )
         if target_path.exists() or target_path.is_symlink():
             if target_path.resolve() == source_path.resolve():
+                continue
+            if _worktree_target_has_git_managed_content(
+                worktree_root_path=worktree_root_path,
+                relative_path_str=policy_rule.relative_path,
+            ):
                 continue
             raise ValueError(
                 f"Cannot materialize {policy_rule.relative_path}: target already exists."
