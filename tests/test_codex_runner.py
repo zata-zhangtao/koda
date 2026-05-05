@@ -354,11 +354,43 @@ def test_build_codex_prompt_requires_user_confirmation_before_commit() -> None:
         task_title="Implement the feature",
         dev_log_text_list=["Need a safe implementation flow."],
         worktree_path_str="/tmp/project-wt-12345678",
+        task_prd_relative_path_str="tasks/20260423-130500-prd-implement-the-feature.md",
+        task_prd_markdown_text=(
+            "# PRD\n\n"
+            "**原始需求标题**：Implement the feature\n"
+            "**需求名称（AI 归纳）**：Implement the feature\n\n"
+            "## Goal\nShip the feature safely.\n"
+        ),
     )
 
     assert "不要默认执行 `git commit`" in implementation_prompt_text
     assert "提交动作必须等待用户确认" in implementation_prompt_text
     assert "git add -A" not in implementation_prompt_text
+    assert "当前任务的 PRD 文件" in implementation_prompt_text
+    assert "先完整阅读这份 PRD" in implementation_prompt_text
+    assert "同步更新这份 PRD 文件" in implementation_prompt_text
+    assert "Ship the feature safely." in implementation_prompt_text
+
+
+def test_build_codex_prompt_allows_better_implementation_with_prd_sync() -> None:
+    """Implementation prompt should allow better approaches while requiring PRD sync."""
+    implementation_prompt_text = codex_runner.build_codex_prompt(
+        task_title="Improve the current approach",
+        dev_log_text_list=["User wants a reliable result."],
+        worktree_path_str="/tmp/project-wt-87654321",
+        task_prd_relative_path_str="tasks/20260423-130500-prd-improve-the-current-approach.md",
+        task_prd_markdown_text=(
+            "# PRD\n\n"
+            "**原始需求标题**：Improve the current approach\n"
+            "**需求名称（AI 归纳）**：Improve the current approach\n\n"
+            "## Scope\nKeep the requirement intent stable.\n"
+        ),
+    )
+
+    assert "可以采用更优方案" in implementation_prompt_text
+    assert "不得擅自扩大或偷换需求范围" in implementation_prompt_text
+    assert "必须同步更新对应 PRD 文件" in implementation_prompt_text
+    assert "若更新了 PRD 需说明更新点" in implementation_prompt_text
 
 
 def test_build_codex_completion_prompt_describes_full_git_sequence() -> None:
@@ -1885,6 +1917,17 @@ def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pa
     original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
     try:
+        tasks_directory_path = tmp_path / "tasks"
+        tasks_directory_path.mkdir()
+        (tasks_directory_path / "20260423-130500-prd-review-automation.md").write_text(
+            (
+                "# PRD\n\n"
+                "**原始需求标题**：Implement review automation\n"
+                "**需求名称（AI 归纳）**：Implement review automation\n\n"
+                "## Goal\nUse the PRD as the execution contract.\n"
+            ),
+            encoding="utf-8",
+        )
         codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
         codex_runner._create_codex_subprocess = fake_create_subprocess_exec
         codex_runner._write_log_to_db = fake_write_log_to_db
@@ -1914,6 +1957,9 @@ def test_run_codex_task_executes_self_review_and_continues_into_lint_stage_on_pa
 
     assert len(recorded_prompt_text_list) == 2
     assert "不要默认执行 `git commit`" in recorded_prompt_text_list[0]
+    assert "当前任务的 PRD 文件" in recorded_prompt_text_list[0]
+    assert "Use the PRD as the execution contract." in recorded_prompt_text_list[0]
+    assert "可以采用更优方案" in recorded_prompt_text_list[0]
     assert "SELF_REVIEW_STATUS: PASS" in recorded_prompt_text_list[1]
     assert "当前是第 1/3 轮 AI 自检" in recorded_prompt_text_list[1]
     assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]
@@ -2231,6 +2277,17 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
     original_codex_log_dir = codex_runner._CODEX_LOG_DIR
 
     try:
+        tasks_directory_path = tmp_path / "tasks"
+        tasks_directory_path.mkdir()
+        (tasks_directory_path / "20260423-130500-prd-review-automation.md").write_text(
+            (
+                "# PRD\n\n"
+                "**原始需求标题**：Implement review automation\n"
+                "**需求名称（AI 归纳）**：Implement review automation\n\n"
+                "## Goal\nKeep targeted fixes aligned with the PRD.\n"
+            ),
+            encoding="utf-8",
+        )
         codex_runner.shutil.which = lambda executable_name_str: "/usr/bin/codex"
         codex_runner._create_codex_subprocess = fake_create_subprocess_exec
         codex_runner._write_log_to_db = fake_write_log_to_db
@@ -2259,6 +2316,7 @@ def test_run_codex_task_retries_review_findings_and_keeps_stage_on_loop_pass(
         codex_runner._user_cancelled_tasks.clear()
 
     assert len(recorded_prompt_text_list) == 4
+    assert "Keep targeted fixes aligned with the PRD." in recorded_prompt_text_list[0]
     assert "只修复最近一轮 review 明确指出的阻塞性问题" in recorded_prompt_text_list[2]
     assert "当前是第 2/3 轮 AI 自检" in recorded_prompt_text_list[3]
     assert recorded_stage_value_list == ["self_review_in_progress", "test_in_progress"]

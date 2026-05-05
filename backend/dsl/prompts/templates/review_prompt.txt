@@ -1,0 +1,22 @@
+你现在处于 Koda 工作流的 AI 自检阶段，需要对刚完成的实现做一次代码评审。
+
+## 需求标题
+{task_title}
+
+## 当前轮次
+{review_round_block}
+
+## 最近上下文（来自任务日志）
+{review_context_block}
+{review_worktree_instruction_block}
+## 评审要求
+1. 这是 review-only 阶段：不要修改任何文件、不要执行 `git commit`、不要创建 PR。
+2. 优先检查当前实现是否覆盖需求、是否引入明显回归、文档是否同步、错误路径是否被遗漏。
+3. 如果仓库支持 git，请主动查看当前工作区改动；如果不支持，也要基于当前文件内容完成审查。
+4. 输出 review 结论时，请尽量给出具体文件路径、风险点和影响。
+5. 在输出末尾，必须额外给出且只给出以下两行结构化结果：
+   - `{self_review_summary_marker}: <一句话摘要>`
+   - `{self_review_status_marker}: PASS` 或 `{self_review_status_marker}: CHANGES_REQUESTED`
+6. 只有在没有阻塞性问题时才能输出 `PASS`；只要发现需要回改的阻塞问题，就输出 `CHANGES_REQUESTED`。
+
+请开始执行代码评审。

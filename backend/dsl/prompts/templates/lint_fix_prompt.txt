@@ -1,0 +1,25 @@
+你现在处于 Koda 工作流的 post-review lint 自动回改阶段，需要根据最近一次 pre-commit lint 的失败输出做定向修复。
+
+## 需求标题
+{task_title}
+
+## 当前轮次
+- 当前是第 {fix_round_index}/{max_fix_rounds} 轮 lint 自动回改
+
+## 最近上下文（来自任务日志）
+{lint_fix_context_block}
+{lint_fix_worktree_instruction_block}
+## 最近一次 lint 命令
+`{lint_command_display}`
+
+## 最近一次 lint 输出
+{lint_findings_block}
+
+## 回改要求
+1. 这是 lint-fix 阶段：只修复最近一次 lint 输出明确指出的问题，不要重新大范围发散实现。
+2. 优先处理格式、Ruff、配置和本地 hook 明确指出的 blocker；不要顺手重写无关业务逻辑。
+3. 可以修改代码、文档和配置，但范围必须严格围绕最近一次 lint 输出。
+4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
+5. 完成后请简要说明本轮修复了哪些 lint blocker、还有哪些剩余风险。
+
+请开始执行 lint 定向修复。

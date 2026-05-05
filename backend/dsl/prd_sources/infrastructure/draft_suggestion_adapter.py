@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 
+from backend.dsl.prompts import render_prompt_template
 from backend.dsl.prd_sources.domain.models import PrdTaskDraftTextSuggestion
 from utils.settings import config
 
@@ -98,25 +99,13 @@ def _build_prd_task_draft_prompt(
     """Build the prompt used to derive task fields from PRD content."""
     trimmed_prd_markdown_text = prd_markdown_text[:_PRD_DRAFT_CONTEXT_MAX_LENGTH]
     source_name_text = source_file_name_str or "pasted-prd.md"
-    return f"""Read the PRD Markdown below and propose task creation fields.
-
-Return only one JSON object with this exact shape:
-{{"task_title":"short user-facing task title","requirement_brief":"concise task description"}}
-
-Rules:
-- task_title must be <= 200 characters.
-- requirement_brief must be <= 1200 characters.
-- Preserve the PRD's concrete intent; do not invent scope.
-- Use the PRD language when practical.
-- Do not write files or run commands.
-
-Source file: {source_name_text}
-
-PRD Markdown:
-```markdown
-{trimmed_prd_markdown_text}
-```
-"""
+    return render_prompt_template(
+        "prd_task_draft_prompt.txt",
+        template_context_dict={
+            "source_file_name": source_name_text,
+            "prd_markdown_text": trimmed_prd_markdown_text,
+        },
+    )
 
 
 def _parse_first_json_object(output_text: str) -> dict[str, object] | None:

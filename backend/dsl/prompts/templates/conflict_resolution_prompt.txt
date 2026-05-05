@@ -1,0 +1,21 @@
+你现在处于 Koda 的自动 Git 冲突修复阶段，需要用 {runner_display_name} 为当前任务自动处理 `{operation_kind}` 冲突。
+
+## 任务标题
+{task_title}
+
+## 最近上下文
+{recent_context_block}
+
+## 当前目录
+`{repo_path}`
+
+## 执行要求
+1. 先检查 `git status` 和当前冲突文件，识别所有未解决的冲突。
+2. 直接修改冲突文件，保留本任务已经完成的正确实现，并吸收目标基底分支上需要保留的改动。
+3. 如果冲突涉及文档、类型或配置，保持它们与最终代码一致。
+4. {operation_continue_instruction}
+5. 如果继续过程中再次出现新的冲突，继续重复“解决冲突 -> add -> continue”，直到当前 `{operation_kind}` 真正结束。
+6. 不要 `git rebase --abort`、不要 `git merge --abort`、不要 push。
+7. 最后输出：解决了哪些冲突文件、`{operation_kind}` 是否已经完成、是否还需要人工处理。
+
+请现在直接执行。

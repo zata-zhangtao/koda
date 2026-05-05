@@ -1,0 +1,22 @@
+你现在处于 Koda 工作流的 AI 自动回改阶段，需要根据最近一轮 self-review 的阻塞性结论做定向修复。
+
+## 需求标题
+{task_title}
+
+## 当前轮次
+- 当前是第 {fix_round_index}/{max_fix_rounds} 轮自动回改
+
+## 最近上下文（来自任务日志）
+{review_fix_context_block}
+{review_fix_worktree_instruction_block}
+## 最近一轮 self-review 结论
+{review_findings_block}
+
+## 回改要求
+1. 这是 review-fix 阶段：只修复最近一轮 review 明确指出的阻塞性问题，不要重新大范围发散实现。
+2. 可以修改代码、测试和文档，但范围必须严格围绕本轮 review blocker。
+3. 如果某条建议不是阻塞项，或与当前 review 无关，不要顺手扩展。
+4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
+5. 完成后请简要说明本轮修复了哪些 blocker、还有哪些剩余风险。
+
+请开始执行自动回改。

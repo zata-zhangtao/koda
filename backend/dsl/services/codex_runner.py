@@ -19,11 +19,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from backend.dsl.prompts import render_prompt_template
 from backend.dsl.services.runners.base import AutomationRunner
 from backend.dsl.services.runners.registry import get_runner_by_kind
 from backend.dsl.services.prd_file_service import (
     build_task_prd_output_path_contract,
     ensure_task_prd_file_contract,
+    find_task_readable_prd_file_path,
     list_all_task_prd_file_paths,
 )
 from utils.database import SessionLocal
@@ -95,6 +97,7 @@ _CONVENTIONAL_COMMIT_MESSAGE_PATTERN = re.compile(
     rf"^({'|'.join(_ALLOWED_CONVENTIONAL_COMMIT_TYPE_TUPLE)})"
     r"(\([a-z0-9._/-]+\))?!?: .{1,100}$"
 )
+_IMPLEMENTATION_PRD_CONTEXT_MAX_LENGTH = 20000
 
 
 def _resolve_active_runner() -> AutomationRunner:
@@ -623,6 +626,40 @@ def _truncate_text_for_runner_prompt(raw_text_str: str, max_length_int: int) -> 
     return raw_text_str[:max_length_int].rstrip() + "\n...（内容过长，已截断）"
 
 
+def _read_task_prd_prompt_context(
+    *,
+    task_id_str: str,
+    work_dir_path: Path,
+) -> tuple[str | None, str | None]:
+    """Read the best available task PRD for implementation prompt context.
+
+    Args:
+        task_id_str: Task UUID string.
+        work_dir_path: Task workspace root.
+
+    Returns:
+        tuple[str | None, str | None]: Repository-relative PRD path and Markdown
+            text, or ``(None, None)`` when no readable PRD is available.
+    """
+    task_prd_file_path = find_task_readable_prd_file_path(work_dir_path, task_id_str)
+    if task_prd_file_path is None:
+        return None, None
+
+    try:
+        task_prd_markdown_text = task_prd_file_path.read_text(encoding="utf-8").strip()
+    except OSError as prd_read_error:
+        logger.warning(
+            "Failed to read task PRD for prompt context: task=%s path=%s error=%s",
+            task_id_str[:8],
+            task_prd_file_path,
+            prd_read_error,
+        )
+        return None, None
+
+    task_prd_relative_path_str = os.path.relpath(task_prd_file_path, work_dir_path)
+    return task_prd_relative_path_str, task_prd_markdown_text
+
+
 def _build_runner_commit_message_prompt(
     *,
     task_title_str: str,
@@ -661,43 +698,29 @@ def _build_runner_commit_message_prompt(
         else "（无额外 commit information）"
     )
     allowed_type_text_str = ", ".join(_ALLOWED_CONVENTIONAL_COMMIT_TYPE_TUPLE)
-    return f"""你现在处于 Koda 的 Git Complete 阶段，需要用 {runner_display_name_str} 为即将执行的 `git commit` 生成符合 Conventional Commits 规范的提交信息。
-
-## 任务标题
-{task_title_str}
-
-## 已解析的任务摘要
-{resolved_commit_information_str}
-
-## 最近上下文
-{recent_context_block_str}
-
-## 当前 worktree
-`{worktree_path}`
-
-## staged 状态
-```text
-{_truncate_text_for_runner_prompt(staged_status_text_str.strip() or "(empty)", 4000)}
-```
-
-## staged 文件
-```text
-{_truncate_text_for_runner_prompt(staged_name_status_text_str.strip() or "(empty)", 4000)}
-```
-
-## staged diff 统计
-```text
-{_truncate_text_for_runner_prompt(staged_diff_stat_text_str.strip() or "(empty)", 4000)}
-```
-
-## 输出要求
-1. 只输出一行，不要 Markdown、不要解释、不要引号、不要正文。
-2. 格式必须是：`COMMIT_MESSAGE: type(scope): subject` 或 `COMMIT_MESSAGE: type: subject`。
-3. `type` 只能从这些值中选择：{allowed_type_text_str}。
-4. subject 使用英文祈使句，描述 staged diff 的实际改动，不要用句号结尾。
-5. `type(scope): subject` 部分必须不超过 100 个字符。
-
-请现在只输出这一行。"""
+    return render_prompt_template(
+        "helpers/commit_message_single_line.txt",
+        template_context_dict={
+            "runner_display_name": runner_display_name_str,
+            "task_title": task_title_str,
+            "resolved_commit_information": resolved_commit_information_str,
+            "recent_context_block": recent_context_block_str,
+            "worktree_path": str(worktree_path),
+            "staged_status_text": _truncate_text_for_runner_prompt(
+                staged_status_text_str.strip() or "(empty)",
+                4000,
+            ),
+            "staged_name_status_text": _truncate_text_for_runner_prompt(
+                staged_name_status_text_str.strip() or "(empty)",
+                4000,
+            ),
+            "staged_diff_stat_text": _truncate_text_for_runner_prompt(
+                staged_diff_stat_text_str.strip() or "(empty)",
+                4000,
+            ),
+            "allowed_type_text": allowed_type_text_str,
+        },
+    )
 
 
 def _extract_runner_commit_message(runner_output_text_str: str) -> str | None:
@@ -1332,27 +1355,17 @@ def _build_runner_conflict_resolution_prompt(
         else "解决完冲突后执行 `git add .`，然后继续 `git merge --continue`；如果该命令不可用，则使用 `git commit --no-edit` 完成 merge。"
     )
 
-    return f"""你现在处于 Koda 的自动 Git 冲突修复阶段，需要用 {runner_display_name_str} 为当前任务自动处理 `{operation_kind_str}` 冲突。
-
-## 任务标题
-{task_title_str}
-
-## 最近上下文
-{recent_context_block_str}
-
-## 当前目录
-`{repo_path}`
-
-## 执行要求
-1. 先检查 `git status` 和当前冲突文件，识别所有未解决的冲突。
-2. 直接修改冲突文件，保留本任务已经完成的正确实现，并吸收目标基底分支上需要保留的改动。
-3. 如果冲突涉及文档、类型或配置，保持它们与最终代码一致。
-4. {operation_continue_instruction_str}
-5. 如果继续过程中再次出现新的冲突，继续重复“解决冲突 -> add -> continue”，直到当前 `{operation_kind_str}` 真正结束。
-6. 不要 `git rebase --abort`、不要 `git merge --abort`、不要 push。
-7. 最后输出：解决了哪些冲突文件、`{operation_kind_str}` 是否已经完成、是否还需要人工处理。
-
-请现在直接执行。"""
+    return render_prompt_template(
+        "conflict_resolution_prompt.txt",
+        template_context_dict={
+            "runner_display_name": runner_display_name_str,
+            "operation_kind": operation_kind_str,
+            "task_title": task_title_str,
+            "recent_context_block": recent_context_block_str,
+            "repo_path": str(repo_path),
+            "operation_continue_instruction": operation_continue_instruction_str,
+        },
+    )
 
 
 def _run_logged_runner_conflict_resolution(
@@ -2147,6 +2160,8 @@ def build_codex_prompt(
     task_title: str,
     dev_log_text_list: list[str],
     worktree_path_str: str | None = None,
+    task_prd_relative_path_str: str | None = None,
+    task_prd_markdown_text: str | None = None,
 ) -> str:
     """根据任务标题和历史日志构建实现阶段 Prompt.
 
@@ -2156,6 +2171,8 @@ def build_codex_prompt(
         task_title: 需求卡片标题
         dev_log_text_list: 该任务下已有日志的 text_content 列表（时间正序）
         worktree_path_str: 预期的 git worktree 绝对路径（可选）
+        task_prd_relative_path_str: 当前任务 PRD 的仓库相对路径（可选）
+        task_prd_markdown_text: 当前任务 PRD 的 Markdown 正文（可选）
 
     Returns:
         str: 完整的 codex Prompt 文本
@@ -2177,25 +2194,48 @@ def build_codex_prompt(
     else:
         worktree_instruction_block_str = ""
 
-    constructed_prompt_text = f"""你是一个高效的 AI 编码助手，正在处理如下需求卡片。
+    normalized_task_prd_markdown_text = (
+        task_prd_markdown_text.strip() if task_prd_markdown_text else ""
+    )
+    if task_prd_relative_path_str and normalized_task_prd_markdown_text:
+        task_prd_block_str = f"""
+## 当前任务 PRD
+当前任务的 PRD 文件：`{task_prd_relative_path_str}`
+- 开始实现前先完整阅读这份 PRD，并默认以它作为实现范围、验收标准和约束条件的主合同
+- 如果仓库中的实际 PRD 文件与历史日志摘要不一致，以这份 PRD 文件为准
+- 如果实际写代码时发现有比 PRD 当前写法更好的实现方式，可以采用更好的方式，但必须保持用户真实意图与范围不被偷换，并在结束前同步更新这份 PRD 文件
 
-## 需求标题
-{task_title}
+```markdown
+{
+            _truncate_text_for_runner_prompt(
+                normalized_task_prd_markdown_text,
+                _IMPLEMENTATION_PRD_CONTEXT_MAX_LENGTH,
+            )
+        }
+```
+"""
+    elif task_prd_relative_path_str:
+        task_prd_block_str = f"""
+## 当前任务 PRD
+当前任务的 PRD 文件：`{task_prd_relative_path_str}`
+- 开始实现前先打开并阅读这份 PRD，再开始编码
+- 如果实际写代码时发现有比 PRD 当前写法更好的实现方式，可以采用更好的方式，但必须保持用户真实意图与范围不被偷换，并在结束前同步更新这份 PRD 文件
+"""
+    else:
+        task_prd_block_str = """
+## 当前任务 PRD
+当前没有直接注入 PRD 正文。请先在当前工作区定位该任务对应的 `tasks/*-prd-*.md` 文件；若存在，先阅读 PRD 再开始实现。
+"""
 
-## 需求上下文（来自历史日志）
-{task_context_block_str}
-{worktree_instruction_block_str}
-## 执行要求
-1. 请仔细阅读需求上下文，理解需要实现的功能范围。
-2. 在当前代码仓库中定位相关文件，根据项目现有代码风格完成实现。
-3. 遵循项目规范：Python 使用 Google Style Docstring，前端使用 TypeScript + React，所有文件读写显式指定 encoding='utf-8'。
-4. 不要默认执行 `git commit`、不要推送分支；提交动作必须等待用户确认。
-5. 完成后简要输出：修改了哪些文件、实现了什么逻辑、需要注意什么。
-6. 如果需求描述不够清晰，请做出合理假设并在输出中说明。
-
-请开始执行。"""
-
-    return constructed_prompt_text
+    return render_prompt_template(
+        "implementation_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "task_context_block": task_context_block_str,
+            "worktree_instruction_block": worktree_instruction_block_str,
+            "task_prd_block": task_prd_block_str,
+        },
+    )
 
 
 def build_codex_prd_prompt(
@@ -2236,40 +2276,16 @@ def build_codex_prd_prompt(
     else:
         prd_worktree_instruction_block_str = ""
 
-    constructed_prd_prompt_text = f"""请为以下需求生成 PRD 文档。
-
-## 原始需求标题
-{task_title}
-
-## 需求背景/上下文
-{prd_context_block_str}
-{prd_worktree_instruction_block_str}
-## PRD 输出合同
-1. 使用 `/prd` skill 生成 PRD，并将原始需求标题和上下文作为输入。
-2. 在 PRD 顶部的元数据区域（位于主要章节之前），必须同时包含以下字段：
-   - `原始需求标题`：保留用户提供的标题，不得省略。
-   - `需求名称（AI 归纳）`：基于任务标题和上下文总结出的规范化需求名称，不得为空。
-3. 不得只保留 `需求名称（AI 归纳）`；`原始需求标题` 必须与 AI 归纳名称同时出现。
-4. 当上下文不足时，`需求名称（AI 归纳）` 必须回退到原始需求标题的规范化版本，输出值不能为空。
-5. 如果上下文中出现 `Attached local files:` 段落，请直接检查这些本地图片/附件/视频文件；若当前环境无法完整解析某类二进制文件，也要在 PRD 中显式吸收其文件名、存在性和可确认信息，而不是忽略。
-6. 如果 PRD 中仍有需要用户确认的决策，必须额外输出固定章节：`## 0. 待确认问题（结构化）`。
-7. 该章节必须包含 fenced `json` code block，顶层对象必须使用键 `pending_questions`。
-8. `pending_questions` 中的每个问题对象至少包含 `id`、`title`、`required`、`recommended_option_key`、`recommendation_reason`、`options`；`options` 中的每个选项至少包含 `key` 和 `label`。
-9. 如果当前需求没有待确认问题，可以省略整个结构化章节；不要伪造空问题。
-10. 输出文件名必须使用语义化的 `<requirement-slug>`，不得使用随机字符串、UUID、纯短 ID 或无语义占位。
-11. `<requirement-slug>` 需要兼容中文输入：可以保留中文或其他自然语言词语，但必须做文件系统安全清洗，并保持可读、可复现。
-12. 如果你选择将中文需求翻译成英文 slug，也必须保持语义稳定，不能退化成随机值。
-13. 如果你最初写成了 `tasks/prd-{task_id_str[:8]}.md`、`tasks/20260423-130500-prd-c3e023d8.md` 之类不满足合同的文件名，结束前必须自行修正。
-14. 其余 PRD 章节继续按 `/prd` skill 的规范完成。
-
-## 文件输出要求
-1. 生成完成后，将完整 PRD 内容保存到文件：`{prd_output_relative_path_str}`
-2. 必须真正写入文件，不只是输出到终端。
-3. 示例：中文需求可以写成 `tasks/20260423-130500-prd-修改-prd-命令.md`；英文需求可以写成 `tasks/20260423-130500-prd-restore-semantic-prd-name.md`。
-4. 写完后输出文件路径。
-"""
-
-    return constructed_prd_prompt_text
+    return render_prompt_template(
+        "prd_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "prd_context_block": prd_context_block_str,
+            "prd_worktree_instruction_block": prd_worktree_instruction_block_str,
+            "task_id_prefix": task_id_str[:8],
+            "prd_output_relative_path": prd_output_relative_path_str,
+        },
+    )
 
 
 def build_codex_review_prompt(
@@ -2312,30 +2328,17 @@ def build_codex_review_prompt(
     else:
         review_round_block_str = f"- 当前是第 {review_round_index_int}/{total_review_round_count_int} 轮 AI 自检"
 
-    constructed_review_prompt_text = f"""你现在处于 Koda 工作流的 AI 自检阶段，需要对刚完成的实现做一次代码评审。
-
-## 需求标题
-{task_title}
-
-## 当前轮次
-{review_round_block_str}
-
-## 最近上下文（来自任务日志）
-{review_context_block_str}
-{review_worktree_instruction_block_str}
-## 评审要求
-1. 这是 review-only 阶段：不要修改任何文件、不要执行 `git commit`、不要创建 PR。
-2. 优先检查当前实现是否覆盖需求、是否引入明显回归、文档是否同步、错误路径是否被遗漏。
-3. 如果仓库支持 git，请主动查看当前工作区改动；如果不支持，也要基于当前文件内容完成审查。
-4. 输出 review 结论时，请尽量给出具体文件路径、风险点和影响。
-5. 在输出末尾，必须额外给出且只给出以下两行结构化结果：
-   - `{_SELF_REVIEW_SUMMARY_MARKER}: <一句话摘要>`
-   - `{_SELF_REVIEW_STATUS_MARKER}: PASS` 或 `{_SELF_REVIEW_STATUS_MARKER}: CHANGES_REQUESTED`
-6. 只有在没有阻塞性问题时才能输出 `PASS`；只要发现需要回改的阻塞问题，就输出 `CHANGES_REQUESTED`。
-
-请开始执行代码评审。"""
-
-    return constructed_review_prompt_text
+    return render_prompt_template(
+        "review_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "review_round_block": review_round_block_str,
+            "review_context_block": review_context_block_str,
+            "review_worktree_instruction_block": review_worktree_instruction_block_str,
+            "self_review_summary_marker": _SELF_REVIEW_SUMMARY_MARKER,
+            "self_review_status_marker": _SELF_REVIEW_STATUS_MARKER,
+        },
+    )
 
 
 def build_codex_review_fix_prompt(
@@ -2381,30 +2384,17 @@ def build_codex_review_fix_prompt(
     else:
         review_fix_worktree_instruction_block_str = ""
 
-    constructed_review_fix_prompt_text = f"""你现在处于 Koda 工作流的 AI 自动回改阶段，需要根据最近一轮 self-review 的阻塞性结论做定向修复。
-
-## 需求标题
-{task_title}
-
-## 当前轮次
-- 当前是第 {fix_round_index_int}/{max_fix_rounds_int} 轮自动回改
-
-## 最近上下文（来自任务日志）
-{review_fix_context_block_str}
-{review_fix_worktree_instruction_block_str}
-## 最近一轮 self-review 结论
-{review_findings_block_str}
-
-## 回改要求
-1. 这是 review-fix 阶段：只修复最近一轮 review 明确指出的阻塞性问题，不要重新大范围发散实现。
-2. 可以修改代码、测试和文档，但范围必须严格围绕本轮 review blocker。
-3. 如果某条建议不是阻塞项，或与当前 review 无关，不要顺手扩展。
-4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
-5. 完成后请简要说明本轮修复了哪些 blocker、还有哪些剩余风险。
-
-请开始执行自动回改。"""
-
-    return constructed_review_fix_prompt_text
+    return render_prompt_template(
+        "review_fix_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "fix_round_index": str(fix_round_index_int),
+            "max_fix_rounds": str(max_fix_rounds_int),
+            "review_fix_context_block": review_fix_context_block_str,
+            "review_fix_worktree_instruction_block": review_fix_worktree_instruction_block_str,
+            "review_findings_block": review_findings_block_str,
+        },
+    )
 
 
 def build_codex_lint_fix_prompt(
@@ -2446,33 +2436,18 @@ def build_codex_lint_fix_prompt(
         lint_fix_worktree_instruction_block_str = ""
 
     lint_command_display_str = shlex.join(_POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST)
-    constructed_lint_fix_prompt_text = f"""你现在处于 Koda 工作流的 post-review lint 自动回改阶段，需要根据最近一次 pre-commit lint 的失败输出做定向修复。
-
-## 需求标题
-{task_title}
-
-## 当前轮次
-- 当前是第 {fix_round_index_int}/{max_fix_rounds_int} 轮 lint 自动回改
-
-## 最近上下文（来自任务日志）
-{lint_fix_context_block_str}
-{lint_fix_worktree_instruction_block_str}
-## 最近一次 lint 命令
-`{lint_command_display_str}`
-
-## 最近一次 lint 输出
-{lint_findings_block_str}
-
-## 回改要求
-1. 这是 lint-fix 阶段：只修复最近一次 lint 输出明确指出的问题，不要重新大范围发散实现。
-2. 优先处理格式、Ruff、配置和本地 hook 明确指出的 blocker；不要顺手重写无关业务逻辑。
-3. 可以修改代码、文档和配置，但范围必须严格围绕最近一次 lint 输出。
-4. 不要执行 `git commit`、`git rebase`、`git merge`，不要创建 PR。
-5. 完成后请简要说明本轮修复了哪些 lint blocker、还有哪些剩余风险。
-
-请开始执行 lint 定向修复。"""
-
-    return constructed_lint_fix_prompt_text
+    return render_prompt_template(
+        "lint_fix_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "fix_round_index": str(fix_round_index_int),
+            "max_fix_rounds": str(max_fix_rounds_int),
+            "lint_fix_context_block": lint_fix_context_block_str,
+            "lint_fix_worktree_instruction_block": lint_fix_worktree_instruction_block_str,
+            "lint_command_display": lint_command_display_str,
+            "lint_findings_block": lint_findings_block_str,
+        },
+    )
 
 
 def build_codex_completion_prompt(
@@ -2502,32 +2477,15 @@ def build_codex_completion_prompt(
         empty_context_text_str="（暂无额外上下文，请根据需求标题和当前工作区改动完成收尾）",
     )
 
-    constructed_completion_prompt_text = f"""你现在处于 Koda 工作流的完成阶段，需要在任务对应的 git worktree 中完成最终 Git 收尾动作。
-
-## 需求标题
-{task_title}
-
-## 最近上下文（来自任务日志）
-{completion_context_block_str}
-
-## Git Worktree 说明
-当前工作目录就是任务对应的 git worktree：`{worktree_path_str}`
-- `git add .`、必要时 `git commit`、`git rebase {base_branch_name_str}` 在当前 worktree 中执行
-- merge 会复用当前持有 `{base_branch_name_str}` 分支的工作区；只有找不到该工作区时才会尝试 `git checkout {base_branch_name_str}`
-- 不要创建新 worktree、不要 push
-
-## 执行要求
-1. 先查看当前 `git status`，确认本次任务的工作区状态。
-2. 严格按顺序执行：`git add .`；若 staging 后仍有变更，则由当前 AI runner 基于 staged diff 生成 Conventional Commit 格式的 message 后执行 `git commit -m "<ai generated conventional commit>"`；若 staging 后工作区已经干净，说明用户已经提交过，跳过 `git commit`。
-3. 继续执行 `git rebase {base_branch_name_str}`，然后在承载 `{base_branch_name_str}` 的工作区执行 `git merge <task branch>`。
-4. 如果 `git rebase {base_branch_name_str}` 发生冲突，自动调用 Codex 修复冲突并继续 rebase；如果 merge 发生冲突，也要自动调用 Codex 修复后继续。
-5. 如果缺少 `{base_branch_name_str}`、Codex 也无法修好冲突、或 merge 最终失败，停止继续操作，并明确输出失败原因。
-6. merge 成功后，需要清理 task worktree 与本地任务分支；不要 push。
-7. 最后简要输出：提交结果、rebase 结果、merge 结果、是否还需要人工处理。
-
-请开始执行。"""
-
-    return constructed_completion_prompt_text
+    return render_prompt_template(
+        "completion_prompt.txt",
+        template_context_dict={
+            "task_title": task_title,
+            "completion_context_block": completion_context_block_str,
+            "worktree_path": worktree_path_str,
+            "base_branch_name": base_branch_name_str,
+        },
+    )
 
 
 def _write_log_to_db(
@@ -4185,10 +4143,19 @@ async def run_codex_task(
     register_task_background_activity(task_id_str)
     try:
         active_runner_kind_str = get_active_runner_kind()
+        (
+            task_prd_relative_path_str,
+            task_prd_markdown_text,
+        ) = _read_task_prd_prompt_context(
+            task_id_str=task_id_str,
+            work_dir_path=work_dir_path,
+        )
         implementation_prompt_text_str = build_codex_prompt(
             task_title=task_title_str,
             dev_log_text_list=dev_log_text_list,
             worktree_path_str=worktree_path_str,
+            task_prd_relative_path_str=task_prd_relative_path_str,
+            task_prd_markdown_text=task_prd_markdown_text,
         )
 
         logger.info(

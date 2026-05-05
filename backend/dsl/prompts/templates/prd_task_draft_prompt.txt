@@ -1,0 +1,18 @@
+Read the PRD Markdown below and propose task creation fields.
+
+Return only one JSON object with this exact shape:
+{{"task_title":"short user-facing task title","requirement_brief":"concise task description"}}
+
+Rules:
+- task_title must be <= 200 characters.
+- requirement_brief must be <= 1200 characters.
+- Preserve the PRD's concrete intent; do not invent scope.
+- Use the PRD language when practical.
+- Do not write files or run commands.
+
+Source file: {source_file_name}
+
+PRD Markdown:
+```markdown
+{prd_markdown_text}
+```

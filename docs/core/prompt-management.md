@@ -2,17 +2,25 @@
 
 ## 总览
 
-当前仓库里的 Prompt 还没有独立成模板文件，而是直接写在 Python 代码里。这是一个典型的“先把自动化跑通，再逐步沉淀治理”的状态。
+当前仓库里的长 Prompt 文案已经从服务编排代码中抽离出来，放在 `backend/dsl/prompts/templates/`；Python builder 负责准备上下文、执行截断、选择条件分支，再把变量渲染进模板。
 
-如果你要修改 AI 行为，第一落点不是 `prompts/` 目录，而是 `backend/dsl/services/codex_runner.py`（执行器无关主编排）与 `backend/dsl/services/runners/`（CLI 适配层）。
+这里说的“长 Prompt 文案”主要指主流程的人类可读 Prompt。像提交信息生成这类只要求输出单行结构化结果的 helper prompt，也可以放在 prompt 层，但建议单独放在 `backend/dsl/prompts/templates/helpers/`，不要和主流程模板混在同一级目录。
+
+如果你要修改 AI 行为，通常有两个落点：
+
+- `backend/dsl/prompts/templates/`：修改 Prompt 文案结构
+- `backend/dsl/services/codex_runner.py` 与 `backend/dsl/prd_sources/infrastructure/draft_suggestion_adapter.py`：修改上下文来源、截断逻辑、条件分支和调用编排
 
 ## Prompt 位置
 
 | 位置 | 用途 | 触发时机 |
 | --- | --- | --- |
-| `build_codex_prompt` | 代码实现 Prompt | 点击“开始执行”后 |
-| `build_codex_completion_prompt` | 完成阶段说明文本（非执行入口） | 点击“Complete”后 |
-| `build_codex_prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
+| `backend/dsl/prompts/templates/implementation_prompt.txt` + `build_codex_prompt` | 代码实现 Prompt | 点击“开始执行”后 |
+| `backend/dsl/prompts/templates/completion_prompt.txt` + `build_codex_completion_prompt` | 完成阶段说明文本（非执行入口） | 点击“Complete”后 |
+| `backend/dsl/prompts/templates/prd_prompt.txt` + `build_codex_prd_prompt` | PRD 生成 Prompt | 点击“开始任务”后 |
+| `backend/dsl/prompts/templates/review_prompt.txt` + `build_codex_review_prompt` | 自检 Prompt | 实现完成后 |
+| `backend/dsl/prompts/templates/review_fix_prompt.txt` + `build_codex_review_fix_prompt` | 自动回改 Prompt | 自检发现 blocker 后 |
+| `backend/dsl/prompts/templates/lint_fix_prompt.txt` + `build_codex_lint_fix_prompt` | Lint 定向修复 Prompt | post-review lint 失败后 |
 
 ## Prompt 输入来源
 
@@ -23,8 +31,17 @@
 - `task_title`
 - 最近最多 10 条 `DevLog.text_content`
 - 可选的 `worktree_path`
+- 当前任务已落盘 PRD 的仓库相对路径（若存在）
+- 当前任务已落盘 PRD 的 Markdown 正文（若存在，超长时会截断后注入）
 
 这些输入决定了 Codex 是否能理解当前需求上下文。
+
+当前实现 Prompt 还会显式要求：
+
+- 开始编码前先阅读当前任务 PRD，并默认以 PRD 作为实现范围、验收标准和约束条件的主合同
+- 如果 PRD 与历史日志摘要不一致，以当前任务 PRD 文件为准
+- 如果实际编码时发现明显更优于 PRD 当前写法的实现方式，可以采用更优方案，但不得偷换需求范围
+- 一旦采用了更优方案，必须同步更新任务 PRD，使 PRD 与最终实现保持一致
 
 ### PRD 生成 Prompt
 
@@ -96,14 +113,16 @@
 
 ## 推荐变更流程
 
-1. 修改 `backend/dsl/services/codex_runner.py`
-2. 为 Prompt 合同补充或更新单元测试
-3. 重新启动或重新触发对应任务
-4. 观察 `/tmp/koda-<task短ID>.log`
-5. 检查 `DevLog` 时间线是否仍然完整
-6. 如果改的是 PRD Prompt，检查 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md` 是否按预期生成，且顶部包含 `原始需求标题`、`需求名称（AI 归纳）` 和结构化待确认问题块（如适用）
-7. 如果故意让模型先写出旧的 task-id 前缀文件名或随机后缀文件名，确认后端日志中出现自动修正记录
-8. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
+1. 优先判断是改“文案”还是改“逻辑”
+2. 文案改动优先修改 `backend/dsl/prompts/templates/*.txt`
+3. 逻辑改动修改 `backend/dsl/services/codex_runner.py` 或 `backend/dsl/prd_sources/infrastructure/draft_suggestion_adapter.py`
+4. 为 Prompt 合同补充或更新单元测试
+5. 重新启动或重新触发对应任务
+6. 观察 `/tmp/koda-<task短ID>.log`
+7. 检查 `DevLog` 时间线是否仍然完整
+8. 如果改的是 PRD Prompt，检查 `tasks/YYYYMMDD-HHMMSS-prd-<requirement-slug>.md` 是否按预期生成，且顶部包含 `原始需求标题`、`需求名称（AI 归纳）` 和结构化待确认问题块（如适用）
+9. 如果故意让模型先写出旧的 task-id 前缀文件名或随机后缀文件名，确认后端日志中出现自动修正记录
+10. 更新本文档与[Codex 自动化](../guides/codex-cli-automation.md)
 
 ## 当前缺口
 

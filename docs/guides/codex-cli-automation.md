@@ -120,6 +120,8 @@
 
 ## Prompt 来源
 
+当前长 Prompt 文案存放在 `backend/dsl/prompts/templates/`，运行时仍由 Python builder 负责准备上下文、截断长文本，并渲染最终 Prompt。
+
 ### PRD Prompt
 
 由 `build_codex_prd_prompt` 构造，输入包括：
@@ -152,9 +154,15 @@
 - 任务标题
 - 最近最多 10 条历史日志
 - 可选的 worktree 路径
+- 当前任务 PRD 的仓库相对路径（若存在）
+- 当前任务 PRD 的 Markdown 正文（若存在，超长时会截断）
 
 当前 Prompt 会显式要求：
 
+- 开始实现前先阅读当前任务 PRD，并默认以 PRD 作为主合同
+- 当 PRD 与历史日志摘要冲突时，以当前任务 PRD 文件为准
+- 如果实际编码时发现更优于 PRD 当前写法的方案，可以采用更优方案，但不得擅自扩大或偷换需求范围
+- 一旦采用更优方案，必须同步更新对应 PRD 文件
 - 在现有代码风格内修改
 - Python 保持 Google Style Docstring
 - 文件读写显式使用 `encoding="utf-8"`

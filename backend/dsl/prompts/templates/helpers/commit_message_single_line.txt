@@ -1,0 +1,37 @@
+你现在处于 Koda 的 Git Complete 阶段，需要用 {runner_display_name} 为即将执行的 `git commit` 生成符合 Conventional Commits 规范的提交信息。
+
+## 任务标题
+{task_title}
+
+## 已解析的任务摘要
+{resolved_commit_information}
+
+## 最近上下文
+{recent_context_block}
+
+## 当前 worktree
+`{worktree_path}`
+
+## staged 状态
+```text
+{staged_status_text}
+```
+
+## staged 文件
+```text
+{staged_name_status_text}
+```
+
+## staged diff 统计
+```text
+{staged_diff_stat_text}
+```
+
+## 输出要求
+1. 只输出一行，不要 Markdown、不要解释、不要引号、不要正文。
+2. 格式必须是：`COMMIT_MESSAGE: type(scope): subject` 或 `COMMIT_MESSAGE: type: subject`。
+3. `type` 只能从这些值中选择：{allowed_type_text}。
+4. subject 使用英文祈使句，描述 staged diff 的实际改动，不要用句号结尾。
+5. `type(scope): subject` 部分必须不超过 100 个字符。
+
+请现在只输出这一行。
