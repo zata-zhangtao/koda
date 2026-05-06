@@ -1,0 +1,50 @@
+You are inspecting a task worktree in read-only mode to decide whether Koda can run a single-process local HTTP preview inside Docker.
+
+Current worktree label: {worktree_name}
+
+Current deterministic inference:
+{deterministic_summary}
+
+You must inspect the repository read-only and output exactly one JSON object with no markdown fences and no commentary.
+
+Decision goal:
+- Return `applicable` only if you can infer one likely-correct long-running HTTP preview entrypoint.
+- Return `not_applicable` if the repository clearly has no single local HTTP preview target.
+- Return `uncertain` if the repository might be previewable but evidence is still insufficient.
+
+Runtime assumptions:
+- `runtime_kind=node` or `runtime_kind=static` runs in `node:20-alpine` with `sh`, `node`, `npm`, and `npx`.
+- `runtime_kind=python` runs in `python:3.12-slim` with `sh`, `python`, and `pip`.
+- Do not rely on `uv`, `poetry`, `docker`, `sudo`, `git`, SSH, shell redirection, pipes, background operators, or other tools not guaranteed above.
+
+Command constraints:
+- `dependency_commands` may contain only commands that start with one of:
+  - `npm install`
+  - `npm ci`
+  - `pnpm install`
+  - `yarn install`
+  - `pip install`
+- `start_command` must launch exactly one long-running HTTP server that binds `0.0.0.0` on `internal_port`.
+- Use a relative `working_directory` inside the worktree.
+- `healthcheck_path` and `preview_path` must start with `/`.
+
+Output schema:
+{{
+  "schema_version": 1,
+  "applicability": "applicable" | "not_applicable" | "uncertain",
+  "applicability_reason": "short explanation",
+  "runtime_kind": "node" | "python" | "static" | "unknown",
+  "working_directory": "relative/path/or/.",
+  "dependency_commands": ["allowed command"],
+  "start_command": "safe long-running command",
+  "internal_port": 3000,
+  "healthcheck_path": "/",
+  "preview_path": "/",
+  "readiness_timeout_seconds": 90,
+  "notes": "optional short note"
+}}
+
+Additional rules:
+- For `not_applicable`, omit commands, working directory, ports, and paths.
+- For `uncertain`, prefer omitting commands and ports unless they are directly justified by repository evidence.
+- Prefer `not_applicable` or `uncertain` over guessing.

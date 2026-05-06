@@ -4,7 +4,7 @@
  * finalization semantics.
  */
 
-import type { Task } from "../types/index.ts";
+import type { PreviewSandboxStatus, Task } from "../types/index.ts";
 
 const CLOSED_TASK_LIFECYCLE_STATUS = "CLOSED";
 const DELETED_TASK_LIFECYCLE_STATUS = "DELETED";
@@ -19,7 +19,15 @@ export interface CanCompleteTaskParams {
   taskItem: Task;
   taskStage: string | null;
   taskBranchHealth: Task["branch_health"];
+  previewSandboxStatus?: PreviewSandboxStatus | null;
 }
+
+const BLOCKING_PREVIEW_FAILURE_KIND_SET = new Set([
+  "dependency_error",
+  "environment_error",
+  "sandbox_error",
+  "unknown",
+]);
 
 /**
  * Return whether the dashboard should show a Complete action.
@@ -29,7 +37,7 @@ export interface CanCompleteTaskParams {
  * `changes_requested` task.
  */
 export function canCompleteTask(params: CanCompleteTaskParams): boolean {
-  const { taskBranchHealth, taskItem, taskStage } = params;
+  const { previewSandboxStatus, taskBranchHealth, taskItem, taskStage } = params;
 
   if (
     taskItem.lifecycle_status === CLOSED_TASK_LIFECYCLE_STATUS ||
@@ -41,6 +49,15 @@ export function canCompleteTask(params: CanCompleteTaskParams): boolean {
 
   if (taskBranchHealth?.manual_completion_candidate) {
     return true;
+  }
+
+  if (
+    previewSandboxStatus?.status === "needs_human_action" &&
+    !previewSandboxStatus.bypass_confirmed &&
+    previewSandboxStatus.failure_kind !== null &&
+    BLOCKING_PREVIEW_FAILURE_KIND_SET.has(previewSandboxStatus.failure_kind)
+  ) {
+    return false;
   }
 
   if (!taskItem.worktree_path) {

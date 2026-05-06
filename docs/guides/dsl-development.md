@@ -121,24 +121,27 @@ Project 面板维护 `worktree_resource_policy_json`。新建 Project 前必须�
 10. 自检通过后，系统会自动推进到 `test_in_progress`，并执行 `uv run pre-commit run --all-files`
 11. 若 lint 在自动重跑后仍失败，系统会继续进入有上限的 `lint -> AI lint-fix -> lint` 闭环
 12. 只有当 review / lint 自动闭环最终失败时，任务才会回退到 `changes_requested`
-13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，等待用户点击 `Complete`；普通 `Complete` 只对已有 `worktree_path` 的任务展示，点击后会先拉取最多 5 项的 canonical completion checklist，用户逐项勾选全部展示项后才会提交 `/complete`
-14. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
-15. 若任务仍停留在 `prd_generating` / `implementation_in_progress` / `self_review_in_progress` / `test_in_progress` / `pr_preparing`，但实时 runner 标记已经丢失，详情页会额外暴露 `Force Interrupt`；后端会清理运行态、回退到 `changes_requested`，并写入一条“人工强制接管”的 `DevLog` 审计日志
-16. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，人工也可以点击 `Complete`；该动作同样必须先完成 checklist 确认，后端随后写入 checklist confirmation 与人工接管 `DevLog`
-17. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
-18. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户打开 `mode=manual_complete` 的同一类 canonical checklist
-19. 用户勾选所有展示项并点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端验证 checklist 签名与全部 item id，写入 checklist confirmation 与“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
-20. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
-21. `pr_preparing` 会先执行 `git add .`；如果 staging 后没有变更，Koda 会把它视为“用户已经提交过”，跳过 `git commit` 并继续 rebase/merge；如果 staging 后仍有变更，则先由当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message，再执行 `git commit`
-22. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
-23. 对 worktree-backed 的 `changes_requested` 任务，前端会恢复普通 `Complete` CTA；用户修复实现、自检、lint 或 Git 环境问题后可以直接重试收尾，而不必回到 `execute` 重跑实现链
-24. `pr_preparing` 在同步任务的 worktree 基底分支时会优先解析该分支配置的 remote；如果没有显式配置，则回退到仓库唯一 remote，再回退到 `origin` / `zata`，避免因 remote 名称与仓库实际配置不一致而误报
-25. merge 成功后的 cleanup 不会只看 repo-local cleanup script 的退出码；系统还会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理
-26. 对启用远程需求协作的项目，创建任务会创建并 push 远程任务分支，并写入 `.koda/requirements/<task_id>.json`；后续启动任务时复用 `Task.task_branch_name`，不再重新生成第二个分支名
-27. 远程任务详情可执行 `Push Progress`，该动作提交并推送当前任务分支和 manifest，但不创建 PR，也不改变真实 workflow stage
-28. 远程 PR 模式下的 `Complete` 不执行本地 merge/cleanup；它提交、rebase、push 任务分支，创建或复用 GitHub PR，并把任务停在 `acceptance_in_progress`。PR 创建优先使用 token-based REST；未配置 token 时会使用 `gh pr list/create/view`，前提是本机已执行 `gh auth login`
-29. `Sync Remote` 会 fetch 项目 remote，读取匹配分支下的 manifest，并把缺失的本地卡片 materialize 回当前数据库
-30. `Sync PR` 会读取 GitHub PR 状态；PR merged 后本地任务才会进入 `done / CLOSED`。该状态读取同样支持 token REST 或 authenticated `gh` CLI
+13. 当 lint 闭环通过且后台自动化空闲后，任务会停留在 `test_in_progress`，并 best-effort 自动尝试启动 preview sandbox；普通 `Complete` 只对已有 `worktree_path` 的任务展示，点击后会先拉取最多 5 项的 canonical completion checklist，用户逐项勾选全部展示项后才会提交 `/complete`
+14. preview sandbox 能力集中在 `backend/dsl/preview_sandboxes/`：当前 use case 会先基于 worktree 做 deterministic profile inference；若结果是 deterministic `uncertain`，且当前 `KODA_AUTOMATION_RUNNER=codex`，再通过只读 Codex CLI 生成严格 JSON fallback profile，并通过 Docker runtime 提供 `GET/POST /api/tasks/{task_id}/preview-sandbox*` 接口；AI failure classifier 和 preview code-fix loop 仍未接入
+15. 当前 deterministic inference 规则是：存在 `frontend/package.json` 时推断为前端 HTTP preview；只存在 `pyproject.toml` 时先标记为 deterministic `uncertain` 并尝试 AI read-only fallback；其他情况标记为 `not_applicable`
+16. preview runtime 是 machine-local/in-memory 状态，不写入 `tasks` 主表；持久化部分只保存 `TaskArtifactType.PREVIEW_PROFILE` 工件和 preview lifecycle `DevLog`
+17. 若用户在运行中点击 `Cancel`，系统会把任务回退到 `changes_requested`，并通过统一通知服务发送“手动中断”邮件
+18. 若任务仍停留在 `prd_generating` / `implementation_in_progress` / `self_review_in_progress` / `test_in_progress` / `pr_preparing`，但实时 runner 标记已经丢失，详情页会额外暴露 `Force Interrupt`；后端会清理运行态、回退到 `changes_requested`，并写入一条“人工强制接管”的 `DevLog` 审计日志
+19. 若任务仍停留在 `self_review_in_progress` 且最近一轮 review 尚未出现通过标记，或任务已进入 `changes_requested` 但用户已在 worktree 中完成修复，只要后台自动化已经空闲，人工也可以点击 `Complete`；该动作同样必须先完成 checklist 确认。若 preview 当前属于非代码失败，还需先重试 preview 或确认 bypass
+20. 对于关联 Git 项目的未关闭任务，后端现在会额外返回只读 `branch_health` 派生状态；它会先按 `task/{task_id[:8]}` 前缀探测本地任务分支，兼容 `task/{task_id[:8]}-<semantic-slug>` 这种真实 worktree 分支名，并在命中时返回解析到的实际分支名
+21. 只有任务已经创建过 `worktree_path`、确实进入过 worktree-backed Git 流程时，`branch_health.manual_completion_candidate=true` 才会把卡片/详情头部展示为“缺失分支待确认”，并要求用户打开 `mode=manual_complete` 的同一类 canonical checklist
+22. 用户勾选所有展示项并点击“确认 Complete”后，前端会调用 `POST /api/tasks/{task_id}/manual-complete`；后端验证 checklist 签名与全部 item id，写入 checklist confirmation 与“检测到分支缺失后由用户人工确认完成”的 `DevLog`，并直接把任务收敛到 `workflow_stage=done`、`lifecycle_status=CLOSED`
+23. 后台 stuck-task watchdog 现在也会扫描 `pr_preparing`；若任务在该阶段停留超过阈值，且当前只残留陈旧的进程内运行标记、但尚未写出 completion start `DevLog`，watchdog 会清理这个假运行态并自动触发一次 `resume_task`，避免前端长期看不到 `Complete`/恢复入口
+24. `pr_preparing` 会先执行 `git add .`；如果 staging 后没有变更，Koda 会把它视为“用户已经提交过”，跳过 `git commit` 并继续 rebase/merge；如果 staging 后仍有变更，则先由当前 AI runner 基于 staged diff 生成符合 Conventional Commits 的 message，再执行 `git commit`
+25. `pr_preparing` 的 `git commit` 若被 commit hook 自动改写文件并返回非零，Koda 会在同一 worktree 中自动补做一次 `git add .` 并重试一次 `git commit`；若重试后仍失败，任务才会回退到 `changes_requested`
+26. 对 worktree-backed 的 `changes_requested` 任务，前端会恢复普通 `Complete` CTA；用户修复实现、自检、lint 或 Git 环境问题后可以直接重试收尾，而不必回到 `execute` 重跑实现链
+27. `pr_preparing` 在同步任务的 worktree 基底分支时会优先解析该分支配置的 remote；如果没有显式配置，则回退到仓库唯一 remote，再回退到 `origin` / `zata`，避免因 remote 名称与仓库实际配置不一致而误报
+28. merge 成功后的 cleanup 不会只看 repo-local cleanup script 的退出码；系统还会继续核验 worktree / branch 是否真的消失，并在必要时回退到 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理
+29. 对启用远程需求协作的项目，创建任务会创建并 push 远程任务分支，并写入 `.koda/requirements/<task_id>.json`；后续启动任务时复用 `Task.task_branch_name`，不再重新生成第二个分支名
+30. 远程任务详情可执行 `Push Progress`，该动作提交并推送当前任务分支和 manifest，但不创建 PR，也不改变真实 workflow stage
+31. 远程 PR 模式下的 `Complete` 不执行本地 merge/cleanup；它提交、rebase、push 任务分支，创建或复用 GitHub PR，并把任务停在 `acceptance_in_progress`。PR 创建优先使用 token-based REST；未配置 token 时会使用 `gh pr list/create/view`，前提是本机已执行 `gh auth login`
+32. `Sync Remote` 会 fetch 项目 remote，读取匹配分支下的 manifest，并把缺失的本地卡片 materialize 回当前数据库
+33. `Sync PR` 会读取 GitHub PR 状态；PR merged 后本地任务才会进入 `done / CLOSED`。该状态读取同样支持 token REST 或 authenticated `gh` CLI
 
 ### 调度能力（新增）
 

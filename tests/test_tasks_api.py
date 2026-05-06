@@ -44,6 +44,8 @@ from backend.dsl.models.enums import DevLogStateTag, TaskLifecycleStatus, Workfl
 from backend.dsl.models.project import Project
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
+from backend.dsl.preview_sandboxes.application.use_cases import PreviewSandboxUseCase
+from backend.dsl.preview_sandboxes.domain.models import PreviewFailureKind
 from backend.dsl.schemas.task_schema import (
     TaskCompletionConfirmationSchema,
     TaskDestroySchema,
@@ -1520,6 +1522,103 @@ def test_complete_task_rejects_missing_checklist_confirmation(
 
     assert raised_error.value.status_code == 422
     assert "confirmation payload is required" in str(raised_error.value.detail)
+
+
+def test_complete_task_blocks_when_preview_requires_retry_or_bypass(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete should return 409 for unresolved non-code preview failures."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-preview-blocked"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Preview blocked completion",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    PreviewSandboxUseCase(db_session).record_failure(
+        task_obj.id,
+        PreviewFailureKind.ENVIRONMENT_ERROR,
+        "DATABASE_URL is missing.",
+    )
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    with pytest.raises(HTTPException) as raised_error:
+        complete_task(
+            task_obj.id,
+            BackgroundTasks(),
+            db_session,
+            _build_completion_confirmation(db_session, task_obj.id),
+        )
+
+    assert raised_error.value.status_code == 409
+    assert "Retry preview or confirm preview bypass" in str(raised_error.value.detail)
+
+
+def test_complete_task_allows_bypass_after_preview_failure(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete should proceed after the user explicitly bypasses preview."""
+    run_account_obj = RunAccount(
+        account_display_name="Tester",
+        user_name="tester",
+        environment_os="Linux",
+        git_branch_name=None,
+        is_active=True,
+    )
+    db_session.add(run_account_obj)
+    db_session.commit()
+
+    worktree_path = tmp_path / "repo-wt-preview-bypassed"
+    worktree_path.mkdir()
+    task_obj = Task(
+        run_account_id=run_account_obj.id,
+        task_title="Preview bypassed completion",
+        lifecycle_status=TaskLifecycleStatus.OPEN,
+        workflow_stage=WorkflowStage.TEST_IN_PROGRESS,
+        worktree_path=str(worktree_path),
+    )
+    db_session.add(task_obj)
+    db_session.commit()
+
+    preview_use_case = PreviewSandboxUseCase(db_session)
+    preview_use_case.record_failure(
+        task_obj.id,
+        PreviewFailureKind.ENVIRONMENT_ERROR,
+        "DATABASE_URL is missing.",
+    )
+    preview_use_case.confirm_bypass(task_obj.id)
+    monkeypatch.setattr(tasks_api, "is_codex_task_running", lambda task_id: False)
+
+    background_tasks = BackgroundTasks()
+    returned_task = complete_task(
+        task_obj.id,
+        background_tasks,
+        db_session,
+        _build_completion_confirmation(db_session, task_obj.id),
+    )
+
+    assert returned_task.workflow_stage == WorkflowStage.PR_PREPARING
+    assert returned_task.is_codex_task_running is True
+    assert len(background_tasks.tasks) == 1
 
 
 def test_completion_checklist_http_contract_rejects_missing_and_stale_confirmation(

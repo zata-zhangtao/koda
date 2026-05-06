@@ -182,6 +182,7 @@ class Config:
         SCHEDULER_ENABLE (bool): 是否启用任务调度器
         SCHEDULER_POLL_INTERVAL_SECONDS (int): 调度轮询间隔（秒）
         SCHEDULER_MAX_DISPATCH_PER_TICK (int): 每轮最多派发条数
+        KODA_PREVIEW_ENABLED (bool): 是否启用任务 Docker preview sandbox
     """
 
     # 目录配置
@@ -194,6 +195,10 @@ class Config:
     APP_NAME: ClassVar[str] = os.getenv("APP_NAME", "app")
     APP_TIMEZONE: ClassVar[str] = _load_app_timezone_name()
     KODA_AUTOMATION_RUNNER: ClassVar[str] = _load_automation_runner_kind()
+    KODA_PREVIEW_ENABLED: ClassVar[bool] = _load_bool_env(
+        "KODA_PREVIEW_ENABLED",
+        True,
+    )
 
     # 数据库配置
     DATABASE_URL: ClassVar[str] = os.getenv(

@@ -974,6 +974,27 @@ img {
   line-height: 1.55;
 }
 
+.devflow-detail__fact-link {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  color: var(--devflow-blue);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.devflow-detail__fact-link:hover {
+  text-decoration: underline;
+}
+
+.devflow-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .devflow-detail__description-shell {
   width: 100%;
 }

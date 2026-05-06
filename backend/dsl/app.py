@@ -17,6 +17,9 @@ from backend.dsl.prd_sources.api import (
     router as prd_sources_router,
     taskless_router as taskless_prd_sources_router,
 )
+from backend.dsl.preview_sandboxes.api import (
+    router as preview_sandboxes_router,
+)
 from backend.dsl.api import (
     app_config_router,
     chronicle_router,
@@ -215,6 +218,7 @@ def create_application() -> FastAPI:
     application.include_router(run_accounts_router)
     application.include_router(projects_router)
     application.include_router(tasks_router)
+    application.include_router(preview_sandboxes_router)
     application.include_router(taskless_prd_sources_router)
     application.include_router(prd_sources_router)
     application.include_router(task_qa_router)

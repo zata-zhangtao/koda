@@ -100,6 +100,114 @@ _CONVENTIONAL_COMMIT_MESSAGE_PATTERN = re.compile(
 _IMPLEMENTATION_PRD_CONTEXT_MAX_LENGTH = 20000
 
 
+def _attempt_preview_sandbox_after_lint_pass(
+    task_id_str: str,
+    run_account_id_str: str,
+) -> None:
+    """Best-effort preview sandbox auto-start after lint passes.
+
+    Args:
+        task_id_str: Task UUID string.
+        run_account_id_str: Run account UUID string.
+    """
+    from backend.dsl.preview_sandboxes.application.use_cases import (
+        PreviewSandboxUseCase,
+    )
+    from backend.dsl.preview_sandboxes.domain.models import PreviewStatus
+
+    db_session = SessionLocal()
+    try:
+        preview_status_snapshot = PreviewSandboxUseCase(db_session).start(task_id_str)
+    except Exception as preview_error:
+        logger.exception(
+            "Preview sandbox auto-start raised unexpectedly for task %s...",
+            task_id_str[:8],
+        )
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "⚠️ post-review lint 已通过，但自动启动 Preview sandbox 时发生异常："
+                f"{preview_error}"
+            ),
+            "BUG",
+        )
+        return
+    finally:
+        db_session.close()
+
+    if preview_status_snapshot.status == PreviewStatus.RUNNING:
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "🌐 post-review lint 已通过，Preview sandbox 已自动启动："
+                f"{preview_status_snapshot.preview_url or 'preview URL pending'}"
+            ),
+            "FIXED",
+        )
+        return
+
+    if preview_status_snapshot.status == PreviewStatus.NOT_APPLICABLE:
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "ℹ️ post-review lint 已通过。当前任务被判定为 preview not applicable，"
+                "无需阻塞 Complete。"
+            ),
+            "OPTIMIZATION",
+        )
+        return
+
+    if preview_status_snapshot.status == PreviewStatus.UNCERTAIN:
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "ℹ️ post-review lint 已通过，但系统仍未能确认可执行的 HTTP preview 入口。"
+                "如需预览，请在补充明确入口后重新 Start Preview，或确认 bypass。"
+            ),
+            "OPTIMIZATION",
+        )
+        return
+
+    if preview_status_snapshot.status == PreviewStatus.DISABLED:
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "ℹ️ post-review lint 已通过。Preview sandbox 自动化当前已禁用"
+                "（KODA_PREVIEW_ENABLED=false）。"
+            ),
+            "OPTIMIZATION",
+        )
+        return
+
+    if preview_status_snapshot.status == PreviewStatus.NEEDS_HUMAN_ACTION:
+        _write_log_to_db(
+            task_id_str,
+            run_account_id_str,
+            (
+                "⚠️ post-review lint 已通过，但 Preview sandbox 自动启动失败："
+                f"{preview_status_snapshot.failure_summary or 'unknown failure'}\n"
+                "用户可在详情页重试、诊断或确认 bypass，然后再 Complete。"
+            ),
+            "BUG",
+        )
+        return
+
+    _write_log_to_db(
+        task_id_str,
+        run_account_id_str,
+        (
+            "ℹ️ post-review lint 已通过，但 Preview sandbox 当前状态为："
+            f"{preview_status_snapshot.status.value}。"
+        ),
+        "OPTIMIZATION",
+    )
+
+
 def _resolve_active_runner() -> AutomationRunner:
     """Resolve the currently configured automation runner.
 
@@ -3868,6 +3976,11 @@ async def run_post_review_lint(
             "FIXED",
         )
         lint_context_log_list.append(lint_pass_log_text)
+        await asyncio.to_thread(
+            _attempt_preview_sandbox_after_lint_pass,
+            task_id_str,
+            run_account_id_str,
+        )
         return PostReviewLintExecutionResult(
             passed=True,
             context_log_text_list=lint_context_log_list,
@@ -3983,6 +4096,11 @@ async def run_post_review_lint(
                 "FIXED",
             )
             lint_context_log_list.append(lint_pass_log_text)
+            await asyncio.to_thread(
+                _attempt_preview_sandbox_after_lint_pass,
+                task_id_str,
+                run_account_id_str,
+            )
             return PostReviewLintExecutionResult(
                 passed=True,
                 context_log_text_list=lint_context_log_list,

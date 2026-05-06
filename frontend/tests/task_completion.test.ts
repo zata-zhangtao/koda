@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import type { Task } from "../src/types/index.ts";
+import type { PreviewSandboxStatus, Task } from "../src/types/index.ts";
 import { canCompleteTask } from "../src/utils/task_completion.ts";
 
 function buildTask(overrides: Partial<Task> = {}): Task {
@@ -28,6 +28,27 @@ function buildTask(overrides: Partial<Task> = {}): Task {
     log_count: 0,
     is_codex_task_running: false,
     branch_health: null,
+    ...overrides,
+  };
+}
+
+function buildPreviewSandboxStatus(
+  overrides: Partial<PreviewSandboxStatus> = {}
+): PreviewSandboxStatus {
+  return {
+    task_id: "task-1",
+    status: "not_started",
+    applicability: null,
+    preview_url: null,
+    profile_summary: null,
+    failure_kind: null,
+    failure_summary: null,
+    bypass_confirmed: false,
+    log_tail: null,
+    container_id: null,
+    host_port: null,
+    internal_port: null,
+    started_at: null,
     ...overrides,
   };
 }
@@ -109,6 +130,60 @@ assert.equal(
   }),
   false,
   "archived tasks should not expose Complete"
+);
+
+assert.equal(
+  canCompleteTask({
+    taskItem: buildTask({
+      worktree_path: "/tmp/koda-task-worktree",
+      workflow_stage: "test_in_progress" as Task["workflow_stage"],
+    }),
+    taskStage: "test_in_progress",
+    taskBranchHealth: null,
+    previewSandboxStatus: buildPreviewSandboxStatus({
+      status: "needs_human_action",
+      failure_kind: "sandbox_error",
+      failure_summary: "Docker daemon unavailable",
+    }),
+  }),
+  false,
+  "non-code preview failures without bypass should block Complete"
+);
+
+assert.equal(
+  canCompleteTask({
+    taskItem: buildTask({
+      worktree_path: "/tmp/koda-task-worktree",
+      workflow_stage: "test_in_progress" as Task["workflow_stage"],
+    }),
+    taskStage: "test_in_progress",
+    taskBranchHealth: null,
+    previewSandboxStatus: buildPreviewSandboxStatus({
+      status: "needs_human_action",
+      failure_kind: "sandbox_error",
+      failure_summary: "Docker daemon unavailable",
+      bypass_confirmed: true,
+    }),
+  }),
+  true,
+  "preview bypass should restore Complete availability"
+);
+
+assert.equal(
+  canCompleteTask({
+    taskItem: buildTask({
+      worktree_path: "/tmp/koda-task-worktree",
+      workflow_stage: "test_in_progress" as Task["workflow_stage"],
+    }),
+    taskStage: "test_in_progress",
+    taskBranchHealth: null,
+    previewSandboxStatus: buildPreviewSandboxStatus({
+      status: "runtime_state_lost",
+      failure_kind: null,
+    }),
+  }),
+  true,
+  "runtime-state-lost without a blocking failure should still allow Complete"
 );
 
 console.log("task_completion.test.ts: PASS");

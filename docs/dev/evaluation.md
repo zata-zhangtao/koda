@@ -53,9 +53,12 @@
 15. 若 self-review 闭环通过，确认任务自动推进到 `test_in_progress`，并开始写入 pre-commit lint 日志
 16. 让第一次 pre-commit 执行故意触发 auto-fix hook，确认时间线出现“首次 lint -> 自动重跑 -> lint 通过/失败”的顺序
 17. 若 lint 在自动重跑后仍失败，确认时间线出现“lint -> AI lint-fix -> lint”的顺序，而不是立刻进入 `changes_requested`
-18. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress` 并等待用户点击 `Complete`
-19. 点击 `Complete` 后，确认前端先展示最多 5 项 completion checklist；未勾选全部展示项时最终提交按钮禁用，勾选后才会发送 `/complete` 且请求体包含 `checklist_mode`、`checklist_signature`、`confirmed_checklist_item_ids`
-20. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
+18. 若 lint 闭环最终通过，确认任务停留在 `test_in_progress`，并自动出现 preview sandbox 状态拉取；若 worktree 下存在 `frontend/package.json`，应看到自动启动后的 `running` 或失败后的 `needs_human_action`
+19. 对只有 `pyproject.toml` 的任务，确认 preview 会先进入 deterministic `uncertain` 推断，并在 `KODA_AUTOMATION_RUNNER=codex` 时尝试 AI read-only fallback；若 fallback 仍失败则状态保持 `uncertain`；对没有明确 HTTP 入口的任务，确认 preview 状态为 `not_applicable`
+20. 当 preview 失败且 failure kind 属于 `dependency_error`、`environment_error`、`sandbox_error` 或 `unknown` 时，确认详情页 `Complete` 按钮禁用，并提示先 retry / diagnose / bypass；直接调用 `/complete` 应返回 409
+21. 点击 `Confirm Bypass` 后再次确认 `Complete`，确认前端恢复 checklist 入口，后端 `/complete` 不再因 preview gate 拦截
+22. 点击 `Complete` 后，确认前端先展示最多 5 项 completion checklist；未勾选全部展示项时最终提交按钮禁用，勾选后才会发送 `/complete` 且请求体包含 `checklist_mode`、`checklist_signature`、`confirmed_checklist_item_ids`
+23. 人工刷新任务列表或详情时，确认前端以 `is_codex_task_running` 判断是否仍在执行；idle 的 `test_in_progress` 任务在 preview 不阻断时应显示 `Complete`，但 open 的 `pr_preparing` 会继续触发 dashboard 轮询，直到任务列表自动观察到最终 `done / CLOSED` 快照
 21. 修改 PRD acceptance checklist 或用旧 signature 重放 `/complete`，确认后端返回 refresh-required 冲突；漏传任一展示 item id 时返回 422
 22. 若 review 或 lint 连续 blocker 直到超出自动回改上限，确认任务才进入 `changes_requested`，且日志/通知明确写明“需要人工介入”
 23. 在桌面宽屏下点击左侧需求卡片区的折叠按钮，确认左列变为窄栏，显示恢复按钮和当前视图卡片数，详情区获得更多横向空间；再次点击恢复后，项目筛选、选中任务和已打开的创建面板草稿保持不变，且不会触发任务列表重新加载

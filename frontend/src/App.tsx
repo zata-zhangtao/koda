@@ -124,6 +124,7 @@ import {
   type TaskCompletionChecklistResponse,
   type TaskDisplayStageKey,
   type PendingPrdFile,
+  type PreviewSandboxStatus,
   type PrdTaskDraftSuggestion,
   type PrdPendingQuestion,
   type PrdPendingQuestionAnswerSelectionMap,
@@ -266,6 +267,11 @@ type MutationName =
   | "open_editor"
   | "open_trae"
   | "open_terminal"
+  | "preview_start"
+  | "preview_restart"
+  | "preview_stop"
+  | "preview_bypass"
+  | "preview_diagnose"
   | "sync_remote_requirements"
   | "cancel"
   | "force_interrupt"
@@ -973,6 +979,10 @@ function App() {
   const [activeMutationName, setActiveMutationName] = useState<MutationName>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [selectedTaskPreviewStatus, setSelectedTaskPreviewStatus] =
+    useState<PreviewSandboxStatus | null>(null);
+  const [isSelectedTaskPreviewStatusLoading, setIsSelectedTaskPreviewStatusLoading] =
+    useState(false);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [
     prdPendingQuestionAnswerSelectionMapByTaskId,
@@ -2102,9 +2112,80 @@ function App() {
         taskItem: selectedTask,
         taskStage: selectedTaskStage,
         taskBranchHealth: selectedTaskBranchHealth,
+        previewSandboxStatus: selectedTaskPreviewStatus,
       }) &&
       !selectedTask.is_codex_task_running
     : false;
+  const selectedTaskPreviewBlocksComplete =
+    selectedTaskPreviewStatus?.status === "needs_human_action" &&
+    !selectedTaskPreviewStatus.bypass_confirmed &&
+    (selectedTaskPreviewStatus.failure_kind === "dependency_error" ||
+      selectedTaskPreviewStatus.failure_kind === "environment_error" ||
+      selectedTaskPreviewStatus.failure_kind === "sandbox_error" ||
+      selectedTaskPreviewStatus.failure_kind === "unknown");
+  const canOpenSelectedTaskPreview = Boolean(
+    selectedTaskPreviewStatus?.status === "running" &&
+      selectedTaskPreviewStatus.preview_url
+  );
+  const canStartSelectedTaskPreview = Boolean(
+    selectedTaskPreviewStatus === null ||
+      selectedTaskPreviewStatus.status === "not_started" ||
+      selectedTaskPreviewStatus.status === "uncertain" ||
+      selectedTaskPreviewStatus.status === "needs_human_action" ||
+      selectedTaskPreviewStatus.status === "stopped" ||
+      selectedTaskPreviewStatus.status === "runtime_state_lost"
+  );
+  const canRestartSelectedTaskPreview = Boolean(
+    selectedTaskPreviewStatus?.status === "running" ||
+      selectedTaskPreviewStatus?.status === "needs_human_action" ||
+      selectedTaskPreviewStatus?.status === "runtime_state_lost" ||
+      selectedTaskPreviewStatus?.status === "stopped"
+  );
+  const canStopSelectedTaskPreview = Boolean(
+    selectedTaskPreviewStatus?.status === "running" ||
+      selectedTaskPreviewStatus?.status === "runtime_state_lost"
+  );
+  const canDiagnoseSelectedTaskPreview = Boolean(
+    selectedTaskPreviewStatus?.status === "needs_human_action" ||
+      selectedTaskPreviewStatus?.status === "running" ||
+      selectedTaskPreviewStatus?.status === "runtime_state_lost"
+  );
+
+  useEffect(() => {
+    if (!selectedTask?.worktree_path) {
+      setSelectedTaskPreviewStatus(null);
+      setIsSelectedTaskPreviewStatusLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsSelectedTaskPreviewStatusLoading(true);
+    void taskApi
+      .getPreviewSandbox(selectedTask.id)
+      .then((previewStatus) => {
+        if (isCancelled) {
+          return;
+        }
+        setSelectedTaskPreviewStatus(previewStatus);
+      })
+      .catch((previewStatusError) => {
+        console.error(previewStatusError);
+        if (isCancelled) {
+          return;
+        }
+        setSelectedTaskPreviewStatus(null);
+      })
+      .finally(() => {
+        if (isCancelled) {
+          return;
+        }
+        setIsSelectedTaskPreviewStatusLoading(false);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedTask?.id, selectedTask?.worktree_path]);
   const selectedTaskScheduleNameMap = useMemo(() => {
     return selectedTaskScheduleList.reduce<Record<string, string>>(
       (scheduleNameMap, taskScheduleItem) => {
@@ -3852,6 +3933,122 @@ function App() {
     } finally {
       setActiveMutationName(null);
     }
+  }
+
+  async function handleStartPreviewSandbox(taskItem: Task): Promise<void> {
+    setActiveMutationName("preview_start");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const previewStatus = await taskApi.startPreviewSandbox(taskItem.id);
+      setSelectedTaskPreviewStatus(previewStatus);
+      if (previewStatus.status === "running") {
+        setSuccessMessage("Preview sandbox is running.");
+      } else if (previewStatus.status === "not_applicable") {
+        setSuccessMessage("Preview is not applicable for this task.");
+      } else if (previewStatus.status === "uncertain") {
+        setSuccessMessage(
+          "Preview entrypoint is still uncertain for this task."
+        );
+      } else if (previewStatus.status === "disabled") {
+        setSuccessMessage("Preview sandbox is disabled by configuration.");
+      } else {
+        setSuccessMessage(`Preview status: ${previewStatus.status}.`);
+      }
+    } catch (previewStartError) {
+      console.error(previewStartError);
+      setErrorMessage(
+        previewStartError instanceof Error
+          ? previewStartError.message
+          : "Failed to start preview sandbox."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleRestartPreviewSandbox(taskItem: Task): Promise<void> {
+    setActiveMutationName("preview_restart");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const previewStatus = await taskApi.restartPreviewSandbox(taskItem.id);
+      setSelectedTaskPreviewStatus(previewStatus);
+      setSuccessMessage("Preview sandbox restarted.");
+    } catch (previewRestartError) {
+      console.error(previewRestartError);
+      setErrorMessage(
+        previewRestartError instanceof Error
+          ? previewRestartError.message
+          : "Failed to restart preview sandbox."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleStopPreviewSandbox(taskItem: Task): Promise<void> {
+    setActiveMutationName("preview_stop");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const previewStatus = await taskApi.stopPreviewSandbox(taskItem.id);
+      setSelectedTaskPreviewStatus(previewStatus);
+      setSuccessMessage("Preview sandbox stopped.");
+    } catch (previewStopError) {
+      console.error(previewStopError);
+      setErrorMessage(
+        previewStopError instanceof Error
+          ? previewStopError.message
+          : "Failed to stop preview sandbox."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleDiagnosePreviewSandbox(taskItem: Task): Promise<void> {
+    setActiveMutationName("preview_diagnose");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const previewStatus = await taskApi.diagnosePreviewSandbox(taskItem.id);
+      setSelectedTaskPreviewStatus(previewStatus);
+      setSuccessMessage("Preview diagnosis refreshed.");
+    } catch (previewDiagnoseError) {
+      console.error(previewDiagnoseError);
+      setErrorMessage(
+        previewDiagnoseError instanceof Error
+          ? previewDiagnoseError.message
+          : "Failed to diagnose preview sandbox."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  async function handleConfirmPreviewSandboxBypass(taskItem: Task): Promise<void> {
+    setActiveMutationName("preview_bypass");
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const previewStatus = await taskApi.confirmPreviewSandboxBypass(taskItem.id);
+      setSelectedTaskPreviewStatus(previewStatus);
+      setSuccessMessage("Preview bypass confirmed.");
+    } catch (previewBypassError) {
+      console.error(previewBypassError);
+      setErrorMessage(
+        previewBypassError instanceof Error
+          ? previewBypassError.message
+          : "Failed to confirm preview bypass."
+      );
+    } finally {
+      setActiveMutationName(null);
+    }
+  }
+
+  function handleOpenPreviewUrl(previewUrl: string): void {
+    window.open(previewUrl, "_blank", "noopener,noreferrer");
   }
 
   async function handleCancelTask(taskItem: Task): Promise<void> {
@@ -6614,6 +6811,106 @@ function App() {
                         ) : null}
 
                       </div>
+
+                      {selectedTask.worktree_path ? (
+                        <div className="devflow-detail__fact-card devflow-detail__fact-card--sync">
+                          <span className="devflow-detail__fact-label">
+                            Preview Sandbox
+                          </span>
+                          <span className="devflow-detail__fact-value">
+                            {isSelectedTaskPreviewStatusLoading
+                              ? "Loading..."
+                              : selectedTaskPreviewStatus?.status ?? "not_started"}
+                          </span>
+                          <p className="devflow-detail__fact-hint">
+                            {selectedTaskPreviewStatus?.preview_url ??
+                              selectedTaskPreviewStatus?.failure_summary ??
+                              selectedTaskPreviewStatus?.profile_summary ??
+                              "Generate a task-local preview before Complete when applicable."}
+                          </p>
+                          {canOpenSelectedTaskPreview &&
+                          selectedTaskPreviewStatus?.preview_url ? (
+                            <a
+                              className="devflow-detail__fact-link"
+                              href={selectedTaskPreviewStatus.preview_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(clickEvent) => {
+                                clickEvent.preventDefault();
+                                handleOpenPreviewUrl(
+                                  selectedTaskPreviewStatus.preview_url ?? ""
+                                );
+                              }}
+                            >
+                              Open Preview
+                            </a>
+                          ) : null}
+                          {selectedTaskPreviewBlocksComplete ? (
+                            <p className="devflow-detail__fact-hint">
+                              Complete is blocked until this preview failure is
+                              retried or bypassed.
+                            </p>
+                          ) : null}
+                          <div className="devflow-inline-actions">
+                            <ActionButton
+                              variant="outline"
+                              busy={activeMutationName === "preview_start"}
+                              disabled={!canStartSelectedTaskPreview}
+                              onClick={() => {
+                                void handleStartPreviewSandbox(selectedTask);
+                              }}
+                            >
+                              <RocketIcon className="devflow-icon devflow-icon--small" />
+                              <span>Start Preview</span>
+                            </ActionButton>
+                            <ActionButton
+                              variant="outline"
+                              busy={activeMutationName === "preview_restart"}
+                              disabled={!canRestartSelectedTaskPreview}
+                              onClick={() => {
+                                void handleRestartPreviewSandbox(selectedTask);
+                              }}
+                            >
+                              <RefreshCwIcon className="devflow-icon devflow-icon--small" />
+                              <span>Restart</span>
+                            </ActionButton>
+                            <ActionButton
+                              variant="outline"
+                              busy={activeMutationName === "preview_stop"}
+                              disabled={!canStopSelectedTaskPreview}
+                              onClick={() => {
+                                void handleStopPreviewSandbox(selectedTask);
+                              }}
+                            >
+                              <ArchiveIcon className="devflow-icon devflow-icon--small" />
+                              <span>Stop</span>
+                            </ActionButton>
+                            <ActionButton
+                              variant="ghost"
+                              busy={activeMutationName === "preview_diagnose"}
+                              disabled={!canDiagnoseSelectedTaskPreview}
+                              onClick={() => {
+                                void handleDiagnosePreviewSandbox(selectedTask);
+                              }}
+                            >
+                              <AlertTriangleIcon className="devflow-icon devflow-icon--small" />
+                              <span>Diagnose</span>
+                            </ActionButton>
+                            {selectedTaskPreviewStatus?.status === "needs_human_action" ? (
+                              <ActionButton
+                                variant="ghost"
+                                busy={activeMutationName === "preview_bypass"}
+                                onClick={() => {
+                                  void handleConfirmPreviewSandboxBypass(selectedTask);
+                                }}
+                              >
+                                <CheckCircleIcon className="devflow-icon devflow-icon--small" />
+                                <span>Confirm Bypass</span>
+                              </ActionButton>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     {(selectedTaskStage === WorkflowStage.BACKLOG ||
@@ -7187,13 +7484,19 @@ function App() {
                                   <span>Push Progress</span>
                                 </ActionButton>
                               ) : null}
-                              <ActionButton
-                                variant="outline"
-                                busy={activeMutationName === "complete"}
-                                onClick={() => {
-                                  void handleCompleteRequirement(selectedTask);
-                                }}
-                              >
+                            <ActionButton
+                              variant="outline"
+                              busy={activeMutationName === "complete"}
+                              disabled={selectedTaskPreviewBlocksComplete}
+                              title={
+                                selectedTaskPreviewBlocksComplete
+                                  ? "Resolve, retry, or bypass the preview sandbox failure before Complete."
+                                  : undefined
+                              }
+                              onClick={() => {
+                                void handleCompleteRequirement(selectedTask);
+                              }}
+                            >
                                 <ArchiveIcon className="devflow-icon devflow-icon--small" />
                                 <span>
                                   {isSelectedTaskRemoteBacked

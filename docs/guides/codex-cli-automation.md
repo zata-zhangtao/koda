@@ -64,8 +64,13 @@
 9. 若 review 闭环在额度内通过，任务自动推进到 `test_in_progress`，并开始执行 `uv run pre-commit run --all-files`
 10. 若 pre-commit 首次执行返回非零，系统会自动重跑一次，吸收 auto-fix hook 的常见改写场景
 11. 若 lint 在自动重跑后仍失败，系统会在同一个 worktree 中进入有上限的 `lint -> AI lint-fix -> lint` 闭环
-12. 若 lint 闭环在额度内通过，任务保持在 `test_in_progress`，等待用户点击 `Complete`
-13. 只有当 review / lint 自动闭环次数耗尽、输出持续无效，或相关阶段执行失败时，任务才回退到 `changes_requested`
+12. 若 lint 闭环在额度内通过，任务保持在 `test_in_progress`，并会 best-effort 自动尝试启动 task preview sandbox；无论 preview 自动尝试结果如何，lint 通过结论本身不会被回滚
+13. 当前 preview sandbox 采用 deterministic profile + Docker runtime，并在 deterministic `uncertain` 场景下补一个 Codex read-only fallback：若 worktree 下存在 `frontend/package.json`，系统会推断为前端 HTTP preview，使用 `npm install` + `npm run dev -- --host 0.0.0.0 --port 5173`；若只检测到 `pyproject.toml`，系统会先标记为 deterministic `uncertain`，再尝试生成严格 JSON fallback profile；若 fallback 仍不能确认，则保持 `uncertain` 并等待手动 Start / bypass；否则标记为 `not_applicable`
+14. 任务详情页会调用 `/api/tasks/{task_id}/preview-sandbox`，展示 `not_started`、`running`、`needs_human_action`、`stopped`、`runtime_state_lost`、`not_applicable`、`uncertain` 等状态，并提供 `Start Preview`、`Restart`、`Stop`、`Diagnose` 与 `Confirm Bypass`
+15. 当 preview 失败且最新 failure kind 属于 `dependency_error`、`environment_error`、`sandbox_error` 或 `unknown`，且用户尚未确认 bypass 时，前端会禁用 `Complete`，后端 `/complete` 也会返回 409；用户需先重试 preview、诊断或确认 bypass
+16. 当前 `Diagnose` 还是保守实现：如果没有更明确证据，只会把最近一次失败记为 `unknown`，它还不是 AI 分类器
+17. 当前 Docker runtime 使用固定基础镜像（`node:20-alpine` / `python:3.12-slim`），仅挂载 task worktree，并把容器内端口映射到 `127.0.0.1:31000-31999` 范围内的空闲端口；backend 重启后不会做完整 Docker reconciliation，前端会把这类状态展示为 `runtime_state_lost`
+18. 只有当 review / lint 自动闭环次数耗尽、输出持续无效，或相关阶段执行失败时，任务才回退到 `changes_requested`
 
 ### 完成收尾链路
 
@@ -80,7 +85,8 @@
 9. 后端会优先解析任务基底分支已配置的 remote；若无显式配置，则先选择实际存在 `<remote>/<worktree_base_branch_name>` remote-tracking ref 的 remote，再回退到仓库唯一 remote / `origin` / `zata`，并在当前持有该基底分支的工作区完成远程同步与 `git merge <task branch>`
 10. merge 成功后继续清理 task worktree 与本地任务分支；repo-local cleanup script 即使返回非零，后端也会继续核验 worktree / branch 的真实状态，并尝试 `git worktree remove --force`、`git worktree prune` 与 orphan 目录清理作为 fallback
 11. 若收尾成功，任务自动推进到 `done`；若在合并到任务基底分支前失败，任务回退到 `changes_requested`
-12. 若这次失败属于 Git 收尾阶段本身（例如承载任务基底分支的工作区不干净），用户修复外部 Git 状态后，可以再次打开 checklist 并点击 `Complete` 重试收尾，而不必重跑整条实现链
+12. 若 preview sandbox 已经尝试过且当前属于非代码失败，`Complete` 前必须先在详情页处理 preview：重试、诊断，或点击 `Confirm Bypass`
+13. 若这次失败属于 Git 收尾阶段本身（例如承载任务基底分支的工作区不干净），用户修复外部 Git 状态后，可以再次打开 checklist 并点击 `Complete` 重试收尾，而不必重跑整条实现链
 
 ### 远程 PR Handoff
 

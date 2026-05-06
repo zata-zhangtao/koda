@@ -252,6 +252,70 @@ export interface Task {
   branch_health: TaskBranchHealth | null;
 }
 
+export type PreviewApplicability =
+  | "applicable"
+  | "not_applicable"
+  | "uncertain";
+
+export type PreviewStatus =
+  | "disabled"
+  | "not_started"
+  | "generating_profile"
+  | "not_applicable"
+  | "uncertain"
+  | "starting"
+  | "running"
+  | "failed"
+  | "needs_human_action"
+  | "stopped"
+  | "runtime_state_lost";
+
+export type PreviewFailureKind =
+  | "code_error"
+  | "dependency_error"
+  | "environment_error"
+  | "sandbox_error"
+  | "unknown";
+
+export type PreviewRuntimeKind = "node" | "python" | "static" | "unknown";
+
+export interface PreviewProfileFingerprint {
+  git_head: string | null;
+  dirty_diff_hash: string | null;
+}
+
+export interface PreviewProfile {
+  schema_version: number;
+  applicability: PreviewApplicability;
+  applicability_reason: string;
+  profile_fingerprint: PreviewProfileFingerprint;
+  runtime_kind: PreviewRuntimeKind;
+  working_directory: string | null;
+  dependency_commands: string[];
+  start_command: string | null;
+  internal_port: number | null;
+  healthcheck_path: string | null;
+  preview_path: string | null;
+  readiness_timeout_seconds: number;
+  notes: string | null;
+}
+
+export interface PreviewSandboxStatus {
+  task_id: string;
+  status: PreviewStatus;
+  applicability: PreviewApplicability | null;
+  preview_url: string | null;
+  profile_summary: string | null;
+  failure_kind: PreviewFailureKind | null;
+  failure_summary: string | null;
+  bypass_confirmed: boolean;
+  log_tail: string | null;
+  container_id: string | null;
+  host_port: number | null;
+  internal_port: number | null;
+  started_at: string | null;
+}
+
 /** Completion checklist mode */
 export type TaskCompletionChecklistMode = "complete" | "manual_complete";
 

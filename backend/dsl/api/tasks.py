@@ -80,6 +80,8 @@ from backend.dsl.remote_requirements.domain import (
     RemoteRequirementError,
 )
 from backend.dsl.remote_requirements.service import RemoteRequirementService
+from backend.dsl.preview_sandboxes.application.use_cases import PreviewSandboxUseCase
+from backend.dsl.preview_sandboxes.domain.errors import PreviewCompletionBlockedError
 from utils.database import get_db
 from utils.logger import logger
 from utils.settings import config
@@ -2888,6 +2890,14 @@ def complete_task(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Task has no worktree_path. Complete is only available for worktree-backed tasks.",
         )
+
+    try:
+        PreviewSandboxUseCase(db_session).assert_complete_allowed(task_id)
+    except PreviewCompletionBlockedError as preview_blocked_error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(preview_blocked_error),
+        ) from preview_blocked_error
 
     TaskCompletionChecklistService.create_confirmation_audit_log(
         db_session=db_session,

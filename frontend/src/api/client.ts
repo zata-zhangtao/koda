@@ -15,6 +15,8 @@ import type {
   ProjectTimelineSummary,
   ProjectTimelineTaskDetail,
   Project,
+  PreviewProfile,
+  PreviewSandboxStatus,
   ProjectBranchList,
   ProjectWorktreeResourcePolicy,
   WorktreeResourceCandidateList,
@@ -530,6 +532,41 @@ export const taskApi = {
   /** 打开终端实时查看 codex 输出 */
   openTerminal: (id: string) =>
     fetchApi<{ log_file: string }>(`/tasks/${id}/open-terminal`, {
+      method: "POST",
+    }),
+
+  /** 获取任务 preview sandbox 状态 */
+  getPreviewSandbox: (id: string) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox`),
+
+  /** 启动或复用任务 preview sandbox */
+  startPreviewSandbox: (id: string, previewProfile?: PreviewProfile) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox/start`, {
+      method: "POST",
+      body: JSON.stringify(previewProfile ?? null),
+    }),
+
+  /** 重启任务 preview sandbox */
+  restartPreviewSandbox: (id: string) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox/restart`, {
+      method: "POST",
+    }),
+
+  /** 停止任务 preview sandbox */
+  stopPreviewSandbox: (id: string) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox/stop`, {
+      method: "POST",
+    }),
+
+  /** 重新诊断任务 preview sandbox */
+  diagnosePreviewSandbox: (id: string) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox/diagnose`, {
+      method: "POST",
+    }),
+
+  /** 确认跳过 preview sandbox */
+  confirmPreviewSandboxBypass: (id: string) =>
+    fetchApi<PreviewSandboxStatus>(`/tasks/${id}/preview-sandbox/confirm-bypass`, {
       method: "POST",
     }),
 

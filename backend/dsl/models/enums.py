@@ -48,10 +48,12 @@ class TaskArtifactType(str, Enum):
     Attributes:
         PRD: PRD 文档快照
         PLANNING_WITH_FILES: Planning with files 快照
+        PREVIEW_PROFILE: Preview sandbox profile 快照
     """
 
     PRD = "PRD"
     PLANNING_WITH_FILES = "PLANNING_WITH_FILES"
+    PREVIEW_PROFILE = "PREVIEW_PROFILE"
 
 
 class WorkflowStage(str, Enum):

@@ -275,6 +275,29 @@ function createFetchHarness(
         return responseOverride(fetchCall, requestUrl);
       }
 
+      if (
+        requestMethod === "GET" &&
+        requestUrl.pathname.startsWith("/api/tasks/") &&
+        requestUrl.pathname.endsWith("/preview-sandbox")
+      ) {
+        const taskIdText = requestUrl.pathname.split("/")[3];
+        return buildJsonResponse({
+          task_id: taskIdText,
+          status: "not_started",
+          applicability: null,
+          preview_url: null,
+          profile_summary: null,
+          failure_kind: null,
+          failure_summary: null,
+          bypass_confirmed: false,
+          log_tail: null,
+          container_id: null,
+          host_port: null,
+          internal_port: null,
+          started_at: null,
+        });
+      }
+
       const mutationResponse = mutationResponseByRequestKey[requestKey];
       if (mutationResponse) {
         hasObservedMutation = true;
@@ -792,6 +815,98 @@ try {
     );
   }, "stale checklist refreshes modal");
   await cleanupDashboardScenario(staleChecklistScenario.root);
+
+  const initialPreviewTask = buildTaskSnapshot("task-preview-running", {
+    task_title: "Preview running task",
+    workflow_stage: "test_in_progress",
+    worktree_path: "/tmp/task-preview-running",
+  });
+  const previewScenario = await renderDashboardScenario(
+    App,
+    [initialPreviewTask],
+    {},
+    {
+      "GET /api/tasks/task-preview-running/preview-sandbox": () =>
+        buildJsonResponse({
+          task_id: "task-preview-running",
+          status: "running",
+          applicability: "applicable",
+          preview_url: "http://127.0.0.1:35173/",
+          profile_summary: "Applicability: `applicable`",
+          failure_kind: null,
+          failure_summary: null,
+          bypass_confirmed: false,
+          log_tail: "runtime-started",
+          container_id: "container-123",
+          host_port: 35173,
+          internal_port: 5173,
+          started_at: null,
+        }),
+    }
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      previewScenario.containerElement.textContent ?? "",
+      /Preview Sandbox/
+    );
+    assert.match(
+      previewScenario.containerElement.textContent ?? "",
+      /Open Preview/
+    );
+    assert.equal(
+      getButtonByText(previewScenario.jsdomWindow.document, "Start Preview")
+        ?.disabled,
+      true
+    );
+    assert.equal(
+      getButtonByText(previewScenario.jsdomWindow.document, "Restart")?.disabled,
+      false
+    );
+    assert.equal(
+      getButtonByText(previewScenario.jsdomWindow.document, "Stop")?.disabled,
+      false
+    );
+  }, "preview running panel actions");
+  await cleanupDashboardScenario(previewScenario.root);
+
+  const initialUncertainPreviewTask = buildTaskSnapshot("task-preview-uncertain", {
+    task_title: "Preview uncertain task",
+    workflow_stage: "test_in_progress",
+    worktree_path: "/tmp/task-preview-uncertain",
+  });
+  const uncertainPreviewScenario = await renderDashboardScenario(
+    App,
+    [initialUncertainPreviewTask],
+    {},
+    {
+      "GET /api/tasks/task-preview-uncertain/preview-sandbox": () =>
+        buildJsonResponse({
+          task_id: "task-preview-uncertain",
+          status: "uncertain",
+          applicability: "uncertain",
+          preview_url: null,
+          profile_summary: "Applicability: `uncertain`",
+          failure_kind: null,
+          failure_summary: null,
+          bypass_confirmed: false,
+          log_tail: null,
+          container_id: null,
+          host_port: null,
+          internal_port: null,
+          started_at: null,
+        }),
+    }
+  );
+  await waitForAssertion(() => {
+    assert.equal(
+      getButtonByText(
+        uncertainPreviewScenario.jsdomWindow.document,
+        "Start Preview"
+      )?.disabled,
+      false
+    );
+  }, "preview uncertain panel enables start");
+  await cleanupDashboardScenario(uncertainPreviewScenario.root);
 
   const initialManualCompleteTask = buildTaskSnapshot("task-manual-complete", {
     task_title: "Manual Complete refresh task",

@@ -16,6 +16,10 @@ from backend.dsl.models.dev_log import DevLog
 from backend.dsl.models.enums import TaskLifecycleStatus, WorkflowStage
 from backend.dsl.models.run_account import RunAccount
 from backend.dsl.models.task import Task
+from backend.dsl.preview_sandboxes.domain.models import (
+    PreviewStatus,
+    PreviewStatusSnapshot,
+)
 from backend.dsl.services import codex_runner, email_service
 from backend.dsl.services.git_worktree_service import WorktreeDestroyResult
 from backend.dsl.services.runners.claude_cli_runner import CLAUDE_CLI_RUNNER
@@ -2743,8 +2747,142 @@ def test_run_post_review_lint_moves_to_changes_requested_after_lint_fix_exhauste
         "开始第 2/2 轮 AI lint 定向修复" in log_text
         for log_text, _ in recorded_log_entry_list
     )
+
+
+def test_run_post_review_lint_attempts_preview_after_pass(
+    tmp_path: Path,
+) -> None:
+    """Lint pass should trigger a best-effort preview auto-start attempt."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+    recorded_preview_attempt_list: list[tuple[str, str]] = []
+    lint_process_queue = [
+        build_completed_process(
+            command_argument_list=codex_runner._POST_REVIEW_LINT_COMMAND_ARGUMENT_LIST,
+            return_code_int=0,
+            stdout_text="All pre-commit checks passed",
+        ),
+    ]
+
+    def fake_write_log_to_db(
+        task_id_str: str,
+        run_account_id_str: str,
+        text_content_str: str,
+        state_tag_value: str = "OPTIMIZATION",
+    ) -> None:
+        recorded_log_entry_list.append((text_content_str, state_tag_value))
+
+    def fake_run_logged_command(
+        *,
+        task_id_str: str,
+        run_account_id_str: str,
+        task_log_path: Path,
+        command_argument_list: list[str],
+        cwd_path: Path,
+        command_log_label_str: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return lint_process_queue.pop(0)
+
+    def fake_attempt_preview_sandbox_after_lint_pass(
+        task_id_str: str,
+        run_account_id_str: str,
+    ) -> None:
+        recorded_preview_attempt_list.append((task_id_str, run_account_id_str))
+
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_run_logged_command = codex_runner._run_logged_command
+    original_attempt_preview = codex_runner._attempt_preview_sandbox_after_lint_pass
+    original_codex_log_dir = codex_runner._CODEX_LOG_DIR
+
+    try:
+        codex_runner._write_log_to_db = fake_write_log_to_db
+        codex_runner._run_logged_command = fake_run_logged_command
+        codex_runner._attempt_preview_sandbox_after_lint_pass = (
+            fake_attempt_preview_sandbox_after_lint_pass
+        )
+        codex_runner._CODEX_LOG_DIR = tmp_path
+
+        lint_result = asyncio.run(
+            codex_runner.run_post_review_lint(
+                task_id_str="12345678-preview-pass",
+                run_account_id_str="run-account-preview",
+                task_title_str="Trigger preview after lint pass",
+                dev_log_text_list=["Self review already passed."],
+                work_dir_path=tmp_path,
+                worktree_path_str=str(tmp_path / "repo-wt-12345678"),
+            )
+        )
+    finally:
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner._run_logged_command = original_run_logged_command
+        codex_runner._attempt_preview_sandbox_after_lint_pass = original_attempt_preview
+        codex_runner._CODEX_LOG_DIR = original_codex_log_dir
+
+    assert lint_result.passed is True
+    assert recorded_preview_attempt_list == [
+        ("12345678-preview-pass", "run-account-preview")
+    ]
     assert any(
-        "已用尽 2 轮 AI lint 定向修复次数" in log_text
+        "post-review lint 闭环完成" in log_text
+        for log_text, _ in recorded_log_entry_list
+    )
+
+
+def test_attempt_preview_sandbox_after_lint_pass_logs_running_status() -> None:
+    """Successful preview auto-start should emit a visible runtime log."""
+    recorded_log_entry_list: list[tuple[str, str]] = []
+
+    class FakePreviewUseCase:
+        def __init__(self, _db_session: object) -> None:
+            pass
+
+        def start(self, task_id_str: str) -> PreviewStatusSnapshot:
+            assert task_id_str == "task-preview-running"
+            return PreviewStatusSnapshot(
+                task_id=task_id_str,
+                status=PreviewStatus.RUNNING,
+                preview_url="http://127.0.0.1:35173/",
+            )
+
+    original_preview_use_case = __import__(
+        "backend.dsl.preview_sandboxes.application.use_cases",
+        fromlist=["PreviewSandboxUseCase"],
+    ).PreviewSandboxUseCase
+    original_write_log_to_db = codex_runner._write_log_to_db
+    original_session_local = codex_runner.SessionLocal
+
+    try:
+        import backend.dsl.preview_sandboxes.application.use_cases as preview_use_cases
+
+        preview_use_cases.PreviewSandboxUseCase = FakePreviewUseCase
+        codex_runner._write_log_to_db = lambda *args, **kwargs: (
+            recorded_log_entry_list.append(  # type: ignore[assignment]
+                (
+                    args[2],
+                    args[3]
+                    if len(args) > 3
+                    else kwargs.get("state_tag_value", "OPTIMIZATION"),
+                )
+            )
+        )
+        codex_runner.SessionLocal = lambda: type(
+            "_FakeSession",
+            (),
+            {"close": lambda self: None},
+        )()
+
+        codex_runner._attempt_preview_sandbox_after_lint_pass(
+            "task-preview-running",
+            "run-account-preview",
+        )
+    finally:
+        import backend.dsl.preview_sandboxes.application.use_cases as preview_use_cases
+
+        preview_use_cases.PreviewSandboxUseCase = original_preview_use_case
+        codex_runner._write_log_to_db = original_write_log_to_db
+        codex_runner.SessionLocal = original_session_local
+
+    assert any(
+        "Preview sandbox 已自动启动" in log_text
         for log_text, _ in recorded_log_entry_list
     )
 
