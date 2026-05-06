@@ -3976,9 +3976,10 @@ function App() {
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    const canRegeneratePrdFromRequirementEdit =
+      selectedTask.workflow_stage === WorkflowStage.PRD_WAITING_CONFIRMATION;
     const shouldAttemptPrdRegeneration =
-      selectedTask.workflow_stage !== WorkflowStage.BACKLOG &&
-      !selectedTask.is_codex_task_running;
+      canRegeneratePrdFromRequirementEdit && !selectedTask.is_codex_task_running;
     let didPersistRequirementChange = false;
 
     try {
@@ -4028,9 +4029,15 @@ function App() {
         setSelectedTaskId(regeneratedTask.id);
         nextSuccessMessage =
           "Requirement changes were saved. Koda is regenerating the PRD.";
-      } else if (selectedTask.workflow_stage !== WorkflowStage.BACKLOG) {
+      } else if (
+        canRegeneratePrdFromRequirementEdit &&
+        selectedTask.is_codex_task_running
+      ) {
         nextSuccessMessage =
           "Requirement changes were saved. Cancel the running automation if you want to regenerate the PRD now.";
+      } else if (selectedTask.workflow_stage !== WorkflowStage.BACKLOG) {
+        nextSuccessMessage =
+          "Requirement changes were saved. Existing execution stage was kept.";
       }
 
       setWorkspaceView("active");

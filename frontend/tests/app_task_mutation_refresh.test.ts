@@ -896,6 +896,75 @@ try {
   }, "request-changes handler local refresh");
   await cleanupDashboardScenario(requestChangesScenario.root);
 
+  const initialEditRequirementTask = buildTaskSnapshot("task-edit-requirement", {
+    task_title: "Edit requirement without PRD regeneration",
+    workflow_stage: "implementation_in_progress",
+    worktree_path: "/tmp/task-edit-requirement",
+    requirement_brief: "Original implementation-stage requirement.",
+  });
+  const updatedEditRequirementTask = {
+    ...initialEditRequirementTask,
+    requirement_brief: "Refined implementation-stage requirement.",
+  };
+  const editRequirementScenario = await renderDashboardScenario(
+    App,
+    [initialEditRequirementTask],
+    {
+      "PATCH /api/tasks/task-edit-requirement": updatedEditRequirementTask,
+    }
+  );
+  await clickButton(
+    editRequirementScenario.jsdomWindow,
+    findButtonByText(
+      editRequirementScenario.jsdomWindow.document,
+      "Edit Requirement"
+    )
+  );
+  const editRequirementTextarea =
+    editRequirementScenario.jsdomWindow.document.querySelector<HTMLTextAreaElement>(
+      "textarea[placeholder='Updated requirement summary']"
+    );
+  assert.ok(
+    editRequirementTextarea,
+    "Expected requirement revision textarea to exist."
+  );
+  await updateTextareaValue(
+    editRequirementScenario.jsdomWindow,
+    editRequirementTextarea,
+    "Refined implementation-stage requirement."
+  );
+  await clickButton(
+    editRequirementScenario.jsdomWindow,
+    findButtonByText(editRequirementScenario.jsdomWindow.document, "Append Change")
+  );
+  await waitForAssertion(() => {
+    assert.match(
+      editRequirementScenario.containerElement.textContent ?? "",
+      /Refined implementation-stage requirement\./
+    );
+    const requirementPatchCall =
+      editRequirementScenario.fetchHarness.observedCallList.find(
+        (fetchCall) =>
+          fetchCall.method === "PATCH" &&
+          fetchCall.pathname === "/api/tasks/task-edit-requirement"
+      );
+    assert.ok(requirementPatchCall);
+    assert.equal(
+      JSON.parse(requirementPatchCall.bodyText ?? "{}").requirement_brief,
+      "Refined implementation-stage requirement."
+    );
+    assert.equal(
+      editRequirementScenario.fetchHarness.observedCallList.some(
+        (fetchCall) =>
+          fetchCall.method === "POST" &&
+          fetchCall.pathname ===
+            "/api/tasks/task-edit-requirement/regenerate-prd"
+      ),
+      false
+    );
+  }, "implementation-stage requirement edit does not regenerate PRD");
+  await cleanupDashboardScenario(editRequirementScenario.root);
+
   const initialDestroyTask = buildTaskSnapshot("task-destroy", {
     task_title: "Destroy refresh task",
     workflow_stage: "test_in_progress",
