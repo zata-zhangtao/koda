@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -621,8 +622,10 @@ class TaskService:
             Task: 新创建的任务对象
 
         Raises:
-            ValueError: 当关联的 Project 不存在时
+            ValueError: 当关联的 Project 不存在时，或 worktree_path 无效时
         """
+        from backend.dsl.services.git_worktree_service import GitWorktreeService
+
         normalized_project_id: str | None = None
         linked_project_obj: "Project | None" = None
         normalized_worktree_base_branch_name_str = (
@@ -630,6 +633,40 @@ class TaskService:
                 task_create_schema.worktree_base_branch_name
             )
         )
+
+        # Resolve worktree path and task branch name from schema or current directory
+        resolved_worktree_path_str: str | None = task_create_schema.worktree_path
+        resolved_task_branch_name_str: str | None = task_create_schema.task_branch_name
+
+        # If worktree_path is provided, validate it is a real git working tree
+        if resolved_worktree_path_str:
+            worktree_path_obj = Path(resolved_worktree_path_str).expanduser().resolve()
+            resolved_worktree_path_str = str(worktree_path_obj)
+
+            if not worktree_path_obj.exists():
+                raise ValueError(
+                    f"worktree_path does not exist: {resolved_worktree_path_str}"
+                )
+
+            if not GitWorktreeService.resolve_git_working_tree_path(worktree_path_obj):
+                raise ValueError(
+                    f"worktree_path is not a valid Git working tree: "
+                    f"{resolved_worktree_path_str}"
+                )
+
+            # Derive task_branch_name from the worktree if not provided
+            if not resolved_task_branch_name_str:
+                detected_branch_name = (
+                    GitWorktreeService.get_worktree_current_branch_name(
+                        worktree_path_obj
+                    )
+                )
+                if detected_branch_name:
+                    resolved_task_branch_name_str = detected_branch_name
+                else:
+                    detected_branch_name = os.path.basename(worktree_path_obj)
+                    resolved_task_branch_name_str = detected_branch_name
+
         if task_create_schema.project_id:
             from backend.dsl.services.project_service import ProjectService
 
@@ -642,10 +679,28 @@ class TaskService:
                     f"Project with id {task_create_schema.project_id} not found"
                 )
             normalized_project_id = linked_project_obj.id
-            TaskService._validate_worktree_base_branch_exists(
-                repo_path_obj=Path(linked_project_obj.repo_path),
-                branch_name_str=normalized_worktree_base_branch_name_str,
-            )
+
+            # When using existing worktree, skip base branch existence validation
+            if not resolved_worktree_path_str:
+                TaskService._validate_worktree_base_branch_exists(
+                    repo_path_obj=Path(linked_project_obj.repo_path),
+                    branch_name_str=normalized_worktree_base_branch_name_str,
+                )
+            else:
+                # Verify the worktree belongs to the linked project's repo
+                worktree_repo_root = GitWorktreeService.resolve_git_working_tree_path(
+                    Path(resolved_worktree_path_str)
+                )
+                project_repo_path = Path(linked_project_obj.repo_path).resolve()
+                if (
+                    worktree_repo_root is not None
+                    and worktree_repo_root != project_repo_path
+                ):
+                    logger.warning(
+                        f"worktree {resolved_worktree_path_str} repo root "
+                        f"({worktree_repo_root}) differs from project repo "
+                        f"({project_repo_path})"
+                    )
 
         new_task = Task(
             run_account_id=run_account_id,
@@ -659,6 +714,8 @@ class TaskService:
             auto_confirm_prd_and_execute=(
                 task_create_schema.auto_confirm_prd_and_execute
             ),
+            worktree_path=resolved_worktree_path_str,
+            task_branch_name=resolved_task_branch_name_str,
         )
 
         db_session.add(new_task)
@@ -683,7 +740,10 @@ class TaskService:
                     db_session.refresh(new_task)
                     raise
 
-        logger.info(f"Created Task: {new_task.id[:8]}... - {new_task.task_title}")
+        logger.info(
+            f"Created Task: {new_task.id[:8]}... - {new_task.task_title} "
+            f"(worktree: {resolved_worktree_path_str or 'none'})"
+        )
         return new_task
 
     @staticmethod

@@ -239,6 +239,8 @@ export const taskApi = {
     worktree_base_branch_name?: string;
     requirement_brief?: string | null;
     auto_confirm_prd_and_execute?: boolean;
+    worktree_path?: string | null;
+    task_branch_name?: string | null;
   }) =>
     fetchApi<Task>("/tasks", {
       method: "POST",

@@ -205,6 +205,44 @@ class GitWorktreeService:
         return Path(resolved_working_tree_path_str).resolve()
 
     @staticmethod
+    def get_worktree_current_branch_name(worktree_path: Path) -> str | None:
+        """Get the currently checked-out branch name of a git worktree.
+
+        Args:
+            worktree_path: Path to the git working tree
+
+        Returns:
+            str | None: Current branch name, or None if not on a branch (detached HEAD)
+                or if the path is not a valid git working tree
+        """
+        if not worktree_path.exists():
+            return None
+
+        try:
+            completed_process = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(worktree_path),
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+        resolved_branch_name_str = completed_process.stdout.strip()
+        if not resolved_branch_name_str or resolved_branch_name_str == "HEAD":
+            return None
+        return resolved_branch_name_str
+
+    @staticmethod
     def check_local_branch_exists(
         git_working_tree_path: Path,
         branch_name_str: str,

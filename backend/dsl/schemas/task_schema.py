@@ -23,6 +23,8 @@ class TaskCreateSchema(BaseModel):
         worktree_base_branch_name: 创建任务 worktree 与完成合并时使用的基底分支
         requirement_brief: 需求描述文本（可选）
         auto_confirm_prd_and_execute: PRD 生成后是否自动确认并直接进入执行
+        worktree_path: 基于已有 git worktree 创建任务时传入的 worktree 绝对路径（可选）
+        task_branch_name: 基于已有 worktree 创建时，该 worktree 当前检出的真实分支名（可选）
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
@@ -39,6 +41,14 @@ class TaskCreateSchema(BaseModel):
     auto_confirm_prd_and_execute: bool = Field(
         default=False,
         description="PRD 生成后是否自动确认并直接进入执行",
+    )
+    worktree_path: str | None = Field(
+        default=None,
+        description="基于已有 git worktree 创建时，该 worktree 的绝对路径",
+    )
+    task_branch_name: str | None = Field(
+        default=None,
+        description="基于已有 worktree 创建时，该 worktree 当前检出的真实分支名",
     )
 
     @field_validator("worktree_base_branch_name")

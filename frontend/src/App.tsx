@@ -940,6 +940,8 @@ function App() {
     isAutoConfirmPrdAndExecuteEnabled,
     setIsAutoConfirmPrdAndExecuteEnabled,
   ] = useState(false);
+  const [isUseExistingWorktree, setIsUseExistingWorktree] = useState(false);
+  const [existingWorktreePath, setExistingWorktreePath] = useState("");
   const [selectedTaskPrdSourceMode, setSelectedTaskPrdSourceMode] =
     useState<PrdSourceMode>("ai_generate");
   const [pendingPrdFileList, setPendingPrdFileList] = useState<PendingPrdFile[]>([]);
@@ -1108,6 +1110,8 @@ function App() {
     setNewRequirementProjectId(nextProjectId);
     setNewRequirementWorktreeBaseBranchName(DEFAULT_WORKTREE_BASE_BRANCH_NAME);
     setIsAutoConfirmPrdAndExecuteEnabled(false);
+    setIsUseExistingWorktree(false);
+    setExistingWorktreePath("");
   }
 
   function resetSelectedTaskPrdSourceDraft(taskIdToClear?: string | null): void {
@@ -3226,6 +3230,12 @@ function App() {
                   worktree_base_branch_name: newRequirementWorktreeBaseBranchName,
                   requirement_brief: nextRequirementBrief,
                   auto_confirm_prd_and_execute: isAutoConfirmPrdAndExecuteEnabled,
+                  worktree_path: isUseExistingWorktree && existingWorktreePath.trim()
+                    ? existingWorktreePath.trim()
+                    : null,
+                  task_branch_name: isUseExistingWorktree && existingWorktreePath.trim()
+                    ? newRequirementWorktreeBaseBranchName
+                    : null,
                 });
 
       if (
@@ -6573,6 +6583,36 @@ function App() {
                   />
                   <span>PRD 就绪后自动确认并直接开始执行</span>
                 </label>
+
+                <label className="devflow-create-panel__auto-execute">
+                  <input
+                    type="checkbox"
+                    checked={isUseExistingWorktree}
+                    disabled={activeMutationName === "create"}
+                    onChange={(changeEvent) =>
+                      setIsUseExistingWorktree(changeEvent.target.checked)
+                    }
+                  />
+                  <span>基于已有 git worktree 创建</span>
+                </label>
+                {isUseExistingWorktree ? (
+                  <div style={{ marginTop: "6px" }}>
+                    <input
+                      className="devflow-input"
+                      type="text"
+                      placeholder="例如：/Users/zata/code/feature-xxx"
+                      value={existingWorktreePath}
+                      disabled={activeMutationName === "create"}
+                      onChange={(changeEvent) =>
+                        setExistingWorktreePath(changeEvent.target.value)
+                      }
+                      style={{ width: "100%" }}
+                    />
+                    <p className="devflow-create-panel__hint">
+                      输入现有 git worktree 的绝对路径。创建后系统不会为此任务新建 worktree。
+                    </p>
+                  </div>
+                ) : null}
 
                 {errorMessage ? (
                   <div className="devflow-inline-message devflow-inline-message--error">
