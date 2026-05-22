@@ -1,3 +1,8 @@
+
+⚠️ 重要提示：本项目已停止维护并归档。
+所有后续开发和维护已迁移至新仓库 👉 [点击这里查看新项目 (keda）](https://github.com/zata-zhangtao/keda)。
+请大家移步新仓库提交 Issue 和 PR，感谢支持！
+
 # Koda / DevStream Log 工作台
 
 Koda 是一个围绕需求卡片、开发日志、PRD 和 Codex 自动化执行构建的开发工作台。这个仓库同时包含 FastAPI 后端、React 前端、MkDocs 文档站点，以及 `ai_agent/` 中可复用的模型配置工具。
